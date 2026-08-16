@@ -1,5 +1,112 @@
 const runtimeTags = document.querySelectorAll(".tag-click");
 
+const splitterStorageKey = "opcTagManager.mainPanelRatio";
+const minimumPanelWidth = 350;
+const workspace = document.querySelector(".workspace");
+const treePanel = document.querySelector(".tree-panel");
+const detailsPanel = document.querySelector(".details-panel");
+const mainPanelSplitter = document.getElementById("main-panel-splitter");
+let mainPanelRatio = readSavedPanelRatio();
+let resizeFrame = null;
+
+function readSavedPanelRatio() {
+    try {
+        const saved = Number.parseFloat(localStorage.getItem(splitterStorageKey));
+        return Number.isFinite(saved) && saved > 0 && saved < 1 ? saved : 0.5;
+    } catch (_error) {
+        return 0.5;
+    }
+}
+
+function savePanelRatio() {
+    try {
+        localStorage.setItem(splitterStorageKey, String(mainPanelRatio));
+    } catch (_error) {
+        // Storage may be unavailable in privacy-restricted browser contexts.
+    }
+}
+
+function splitterSpace() {
+    const style = getComputedStyle(mainPanelSplitter);
+    return (
+        mainPanelSplitter.getBoundingClientRect().width +
+        Number.parseFloat(style.marginLeft || "0") +
+        Number.parseFloat(style.marginRight || "0")
+    );
+}
+
+function applyMainPanelRatio() {
+    const available = Math.max(0, workspace.clientWidth - splitterSpace());
+    const effectiveMinimum = Math.min(minimumPanelWidth, available / 2);
+    const desiredLeft = available * mainPanelRatio;
+    const leftWidth = Math.max(
+        effectiveMinimum,
+        Math.min(desiredLeft, available - effectiveMinimum),
+    );
+    const rightWidth = Math.max(0, available - leftWidth);
+
+    treePanel.style.flex = `0 0 ${leftWidth}px`;
+    detailsPanel.style.flex = `0 0 ${rightWidth}px`;
+    mainPanelSplitter.setAttribute("aria-valuenow", String(Math.round(mainPanelRatio * 100)));
+}
+
+function ratioFromPointer(clientX) {
+    const workspaceRect = workspace.getBoundingClientRect();
+    const splitterRect = mainPanelSplitter.getBoundingClientRect();
+    const style = getComputedStyle(mainPanelSplitter);
+    const available = Math.max(1, workspace.clientWidth - splitterSpace());
+    const pointerOffset =
+        Number.parseFloat(style.marginLeft || "0") + splitterRect.width / 2;
+    const requestedLeft = clientX - workspaceRect.left - pointerOffset;
+    const effectiveMinimum = Math.min(minimumPanelWidth, available / 2);
+    const clampedLeft = Math.max(
+        effectiveMinimum,
+        Math.min(requestedLeft, available - effectiveMinimum),
+    );
+    return clampedLeft / available;
+}
+
+mainPanelSplitter.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    mainPanelSplitter.classList.add("dragging");
+    document.body.style.userSelect = "none";
+
+    const onPointerMove = (moveEvent) => {
+        mainPanelRatio = ratioFromPointer(moveEvent.clientX);
+        applyMainPanelRatio();
+    };
+    const onPointerUp = () => {
+        mainPanelSplitter.classList.remove("dragging");
+        document.body.style.userSelect = "";
+        document.removeEventListener("pointermove", onPointerMove);
+        document.removeEventListener("pointerup", onPointerUp);
+        savePanelRatio();
+    };
+
+    document.addEventListener("pointermove", onPointerMove);
+    document.addEventListener("pointerup", onPointerUp);
+    event.preventDefault();
+});
+
+mainPanelSplitter.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    mainPanelRatio += event.key === "ArrowLeft" ? -0.02 : 0.02;
+    mainPanelRatio = Math.max(0.05, Math.min(0.95, mainPanelRatio));
+    applyMainPanelRatio();
+    savePanelRatio();
+    event.preventDefault();
+});
+
+window.addEventListener("resize", () => {
+    if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
+    resizeFrame = requestAnimationFrame(() => {
+        resizeFrame = null;
+        applyMainPanelRatio();
+    });
+});
+
+applyMainPanelRatio();
+
 runtimeTags.forEach((tag) => {
     tag.addEventListener("click", () => {
         runtimeTags.forEach((item) => item.classList.remove("selected-tag"));
@@ -14,9 +121,17 @@ let kepwareLoaded = false;
 let loadedCounts = { channels: 0, devices: 0, tag_groups: 0, tags: 0 };
 const kepwareWriteEnabled =
     document.getElementById("kepware-tree-view").dataset.writeEnabled === "true";
+const kepwareTreeView = document.getElementById("kepware-tree-view");
+const configuredTagDefaults = {
+    dataType: Number.parseInt(kepwareTreeView.dataset.defaultDataType, 10),
+    scanRate: Number.parseInt(kepwareTreeView.dataset.defaultScanRate, 10),
+    access: Number.parseInt(kepwareTreeView.dataset.defaultAccess, 10),
+};
 let selectedDestinationNode = null;
 let selectedDestinationDetails = null;
 let selectedDestinationChildren = null;
+let selectedTemplateCandidate = null;
+let templateSourcePath = "";
 
 viewTabs.forEach((tab) => {
     tab.addEventListener("click", () => {
@@ -75,16 +190,18 @@ async function loadKepwareChannels(refresh = false) {
 function renderKepwareRoot(nodes) {
     const list = document.createElement("ul");
     list.className = "tree kepware-tree";
-    nodes.forEach((node) => list.appendChild(createKepwareNode(node)));
+    nodes.forEach((node) => list.appendChild(createKepwareNode(node, null, null)));
     document.getElementById("kepware-tree").replaceChildren(list);
 }
 
-function createKepwareNode(node) {
+function createKepwareNode(node, parentDetails, parentChildren) {
     const item = document.createElement("li");
     const button = document.createElement("button");
     button.type = "button";
     button.className = "kepware-object";
     button.textContent = node.name;
+    button.kepwareParentDetails = parentDetails;
+    button.kepwareParentChildren = parentChildren;
     button.addEventListener("click", () => selectKepwareObject(button, node));
 
     const type = document.createElement("span");
@@ -134,7 +251,9 @@ async function loadKepwareChildren(details, container, node) {
         }
 
         const fragment = document.createDocumentFragment();
-        data.nodes.forEach((child) => fragment.appendChild(createKepwareNode(child)));
+        data.nodes.forEach((child) => {
+            fragment.appendChild(createKepwareNode(child, details, container));
+        });
         container.replaceChildren(fragment);
         details.dataset.loaded = "true";
         if (!wasLoaded) addLoadedCounts(data.nodes);
@@ -205,16 +324,29 @@ function selectKepwareObject(button, node) {
     displayKepwareObject(node);
 
     if (node.object_type === "Device" || node.object_type === "Tag Group") {
-        selectedDestinationNode = node;
-        selectedDestinationDetails = button.kepwareDetails;
-        selectedDestinationChildren = button.kepwareChildren;
-        document.getElementById("add-kepware-tag-panel").classList.remove("hidden");
-        document.getElementById("add-tag-destination").textContent =
-            `Destination: ${destinationPath(node)}`;
-        document.getElementById("create-tag-preview").classList.add("hidden");
-        document.getElementById("create-tag-result").classList.add("hidden");
+        prepareAddTagPanel(
+            node,
+            button.kepwareDetails,
+            button.kepwareChildren,
+            null,
+        );
+        selectedTemplateCandidate = null;
+        document.getElementById("use-tag-template").classList.add("hidden");
+    } else if (node.object_type === "Tag") {
+        resetCreateTagPanel();
+        selectedTemplateCandidate = {
+            node,
+            parentDetails: button.kepwareParentDetails,
+            parentChildren: button.kepwareParentChildren,
+        };
+        document.getElementById("use-tag-template").classList.toggle(
+            "hidden",
+            !kepwareWriteEnabled,
+        );
     } else {
         resetCreateTagPanel();
+        selectedTemplateCandidate = null;
+        document.getElementById("use-tag-template").classList.add("hidden");
     }
 }
 
@@ -249,7 +381,57 @@ function resetCreateTagPanel() {
     document.getElementById("add-kepware-tag-panel").classList.add("hidden");
     document.getElementById("add-kepware-tag-form").reset();
     document.getElementById("create-tag-preview").classList.add("hidden");
+    document.getElementById("tag-template-source").classList.add("hidden");
+    templateSourcePath = "";
+    selectedTemplateCandidate = null;
+    document.getElementById("use-tag-template").classList.add("hidden");
 }
+
+function prepareAddTagPanel(node, details, children, templateTag) {
+    selectedDestinationNode = node;
+    selectedDestinationDetails = details;
+    selectedDestinationChildren = children;
+    document.getElementById("add-kepware-tag-panel").classList.remove("hidden");
+    document.getElementById("add-tag-destination").textContent =
+        `Destination: ${destinationPath(node)}`;
+    document.getElementById("add-kepware-tag-form").reset();
+    document.getElementById("new-tag-name").value = "";
+    document.getElementById("new-tag-address").value = "";
+    document.getElementById("new-tag-data-type").value =
+        templateTag?.tag_details?.data_type ?? configuredTagDefaults.dataType;
+    document.getElementById("new-tag-scan-rate").value =
+        templateTag?.tag_details?.scan_rate ?? configuredTagDefaults.scanRate;
+    document.getElementById("new-tag-access").value =
+        templateTag?.tag_details?.access ?? configuredTagDefaults.access;
+    document.getElementById("new-tag-description").value =
+        templateTag?.properties?.["common.ALLTYPES_DESCRIPTION"] ?? "";
+    templateSourcePath = templateTag?.full_path || "";
+    const source = document.getElementById("tag-template-source");
+    source.textContent = templateSourcePath
+        ? `Template source: ${templateSourcePath}`
+        : "Using visible configured defaults";
+    source.classList.remove("hidden");
+    document.getElementById("create-tag-preview").classList.add("hidden");
+    document.getElementById("create-tag-result").classList.add("hidden");
+}
+
+document.getElementById("use-tag-template").addEventListener("click", () => {
+    if (!selectedTemplateCandidate || !kepwareWriteEnabled) return;
+    const source = selectedTemplateCandidate.node;
+    const groups = source.context.group_path || [];
+    const destination = {
+        object_type: groups.length ? "Tag Group" : "Device",
+        name: groups.length ? groups[groups.length - 1] : source.context.device,
+        full_path: [source.context.channel, source.context.device, ...groups].join("."),
+        context: source.context,
+    };
+    prepareAddTagPanel(
+        destination,
+        selectedTemplateCandidate.parentDetails,
+        selectedTemplateCandidate.parentChildren,
+        source,
+    );
+});
 
 document.getElementById("add-kepware-tag-form").addEventListener("submit", (event) => {
     event.preventDefault();
@@ -257,10 +439,19 @@ document.getElementById("add-kepware-tag-form").addEventListener("submit", (even
 
     const name = document.getElementById("new-tag-name").value.trim();
     const address = document.getElementById("new-tag-address").value.trim();
+    const dataType = Number(document.getElementById("new-tag-data-type").value);
+    const scanRate = Number(document.getElementById("new-tag-scan-rate").value);
+    const access = Number(document.getElementById("new-tag-access").value);
     const description = document.getElementById("new-tag-description").value.trim();
     const result = document.getElementById("create-tag-result");
-    if (!name || !address) {
-        result.textContent = "Tag Name and Address are required.";
+    if (
+        !name ||
+        !address ||
+        !Number.isInteger(dataType) ||
+        !Number.isInteger(scanRate) ||
+        !Number.isInteger(access)
+    ) {
+        result.textContent = "Tag Name, Address, Data Type, Scan Rate, and Access are required.";
         result.className = "create-result error-message";
         return;
     }
@@ -269,8 +460,13 @@ document.getElementById("add-kepware-tag-form").addEventListener("submit", (even
     document.getElementById("preview-destination").textContent = destination;
     document.getElementById("preview-tag-name").textContent = name;
     document.getElementById("preview-address").textContent = address;
+    document.getElementById("preview-data-type").textContent = String(dataType);
+    document.getElementById("preview-scan-rate").textContent = String(scanRate);
+    document.getElementById("preview-access").textContent = String(access);
     document.getElementById("preview-description").textContent = description || "(not provided)";
     document.getElementById("preview-full-path").textContent = `${destination}/${name}`;
+    document.getElementById("preview-template-source").textContent =
+        templateSourcePath || "(none — configured defaults shown above)";
     document.getElementById("create-tag-preview").classList.remove("hidden");
     result.classList.add("hidden");
 });
@@ -291,6 +487,9 @@ document.getElementById("confirm-create-tag").addEventListener("click", async ()
         group_path: selectedDestinationNode.context.group_path || [],
         tag_name: document.getElementById("new-tag-name").value.trim(),
         address: document.getElementById("new-tag-address").value.trim(),
+        data_type: Number(document.getElementById("new-tag-data-type").value),
+        scan_rate: Number(document.getElementById("new-tag-scan-rate").value),
+        access: Number(document.getElementById("new-tag-access").value),
         description: document.getElementById("new-tag-description").value.trim(),
     };
 
@@ -307,7 +506,7 @@ document.getElementById("confirm-create-tag").addEventListener("click", async ()
             return;
         }
 
-        result.textContent = `Created ${data.tag.full_path}`;
+        result.textContent = creationResultMessage(data);
         result.className = "create-result success-message";
         document.getElementById("create-tag-preview").classList.add("hidden");
         displayKepwareObject(data.tag);
@@ -325,6 +524,16 @@ document.getElementById("confirm-create-tag").addEventListener("click", async ()
         confirm.disabled = false;
     }
 });
+
+function creationResultMessage(data) {
+    if (!data.differences || !data.differences.length) {
+        return `Created ${data.tag.full_path}. Returned properties match the request.`;
+    }
+    const differences = data.differences.map((difference) => {
+        return `${difference.property}: requested ${JSON.stringify(difference.requested)}, returned ${JSON.stringify(difference.actual)}`;
+    });
+    return `Created ${data.tag.full_path}. Differences: ${differences.join("; ")}`;
+}
 
 function setTagProperty(id, value) {
     const detail = document.getElementById(id);

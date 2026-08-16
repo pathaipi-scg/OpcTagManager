@@ -32,9 +32,11 @@ input {
 
 .workspace {
     display: flex;
-    gap: 8px;
+    gap: 0;
     height: calc(100vh - 140px);
     min-height: 120px;
+    min-width: 0;
+    overflow: hidden;
 }
 
 .panel {
@@ -47,12 +49,30 @@ input {
 }
 
 .tree-panel {
-    flex: 1 1 65%;
+    flex: 1 1 50%;
+    min-width: 0;
 }
 
 .details-panel {
-    flex: 0 1 35%;
-    min-width: 280px;
+    flex: 1 1 50%;
+    min-width: 0;
+}
+
+.main-panel-splitter {
+    flex: 0 0 6px;
+    margin: 0 6px;
+    border-radius: 3px;
+    background: #555;
+    cursor: col-resize;
+    touch-action: none;
+    transition: background-color 0.12s;
+}
+
+.main-panel-splitter:hover,
+.main-panel-splitter.dragging,
+.main-panel-splitter:focus-visible {
+    outline: none;
+    background: #0e639c;
 }
 
 .tree {
@@ -331,6 +351,18 @@ input {
 
 .create-result {
     padding: 10px;
+}
+
+.template-source {
+    margin: 0 0 12px;
+    padding: 8px 10px;
+    border-left: 3px solid var(--accent);
+    color: var(--text-muted);
+    overflow-wrap: anywhere;
+}
+
+#use-tag-template {
+    margin-top: 12px;
 }
 
 .success-message {

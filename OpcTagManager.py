@@ -22,6 +22,9 @@ from config.config import (
     KEPWARE_CONFIG_API_VERIFY_SSL,
     KEPWARE_CONFIG_CACHE_TTL_SEC,
     KEPWARE_CONFIG_WRITE_ENABLED,
+    KEPWARE_TAG_DEFAULT_ACCESS,
+    KEPWARE_TAG_DEFAULT_DATA_TYPE,
+    KEPWARE_TAG_DEFAULT_SCAN_RATE_MS,
     LOG_LEVEL,
     PRODUCTION_LINE,
     SQL_DB,
@@ -64,6 +67,9 @@ class CreateKepwareTagRequest(BaseModel):
     group_path: list[str] = Field(default_factory=list)
     tag_name: str
     address: str
+    data_type: int
+    scan_rate: int
+    access: int
     description: str = ""
 
 
@@ -125,6 +131,9 @@ def home(request: Request):
             "request": request,
             "tree": build_tree(tags),
             "kepware_write_enabled": KEPWARE_CONFIG_WRITE_ENABLED,
+            "kepware_tag_default_data_type": KEPWARE_TAG_DEFAULT_DATA_TYPE,
+            "kepware_tag_default_scan_rate": KEPWARE_TAG_DEFAULT_SCAN_RATE_MS,
+            "kepware_tag_default_access": KEPWARE_TAG_DEFAULT_ACCESS,
         },
     )
 
@@ -209,6 +218,9 @@ def create_kepware_tag(payload: CreateKepwareTagRequest):
             group_path=payload.group_path,
             tag_name=payload.tag_name,
             address=payload.address,
+            data_type=payload.data_type,
+            scan_rate=payload.scan_rate,
+            access=payload.access,
             description=payload.description,
         )
         return {"success": True, **result}

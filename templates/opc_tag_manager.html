@@ -56,6 +56,9 @@
             id="kepware-tree-view"
             class="tree-view hidden"
             data-write-enabled="{{ 'true' if kepware_write_enabled else 'false' }}"
+            data-default-data-type="{{ kepware_tag_default_data_type }}"
+            data-default-scan-rate="{{ kepware_tag_default_scan_rate }}"
+            data-default-access="{{ kepware_tag_default_access }}"
         >
             <div class="kepware-heading">
                 <h2>Kepware Configuration Tree</h2>
@@ -76,6 +79,15 @@
             <div id="kepware-tree" aria-live="polite"></div>
         </div>
     </section>
+
+    <div
+        id="main-panel-splitter"
+        class="main-panel-splitter"
+        role="separator"
+        aria-label="Resize tree and details panels"
+        aria-orientation="vertical"
+        tabindex="0"
+    ></div>
 
     <section class="panel details-panel" aria-label="Selected object details">
         <div id="runtime-details-view" class="details-view">
@@ -114,11 +126,15 @@
                     <summary>Raw Kepware Properties</summary>
                     <pre id="kepware-raw-properties"></pre>
                 </details>
+                <button type="button" id="use-tag-template" class="refresh-button hidden">
+                    Create Like This
+                </button>
             </div>
 
             <section id="add-kepware-tag-panel" class="add-tag-panel hidden">
                 <h3>Add Kepware Tag</h3>
                 <p id="add-tag-destination" class="destination-path"></p>
+                <p id="tag-template-source" class="template-source hidden"></p>
                 {% if not kepware_write_enabled %}
                     <p class="write-disabled-message">Write Disabled</p>
                 {% endif %}
@@ -131,6 +147,18 @@
                     <div class="field-group">
                         <label for="new-tag-address">Address *</label>
                         <input id="new-tag-address" type="text" required {{ 'disabled' if not kepware_write_enabled else '' }}>
+                    </div>
+                    <div class="field-group">
+                        <label for="new-tag-data-type">Data Type</label>
+                        <input id="new-tag-data-type" type="number" required {{ 'disabled' if not kepware_write_enabled else '' }}>
+                    </div>
+                    <div class="field-group">
+                        <label for="new-tag-scan-rate">Scan Rate (ms)</label>
+                        <input id="new-tag-scan-rate" type="number" required {{ 'disabled' if not kepware_write_enabled else '' }}>
+                    </div>
+                    <div class="field-group">
+                        <label for="new-tag-access">Access</label>
+                        <input id="new-tag-access" type="number" required {{ 'disabled' if not kepware_write_enabled else '' }}>
                     </div>
                     <div class="field-group">
                         <label for="new-tag-description">Description</label>
@@ -147,8 +175,12 @@
                         <dt>Destination</dt><dd id="preview-destination"></dd>
                         <dt>Tag Name</dt><dd id="preview-tag-name"></dd>
                         <dt>Address</dt><dd id="preview-address"></dd>
+                        <dt>Data Type</dt><dd id="preview-data-type"></dd>
+                        <dt>Scan Rate (ms)</dt><dd id="preview-scan-rate"></dd>
+                        <dt>Access</dt><dd id="preview-access"></dd>
                         <dt>Description</dt><dd id="preview-description"></dd>
                         <dt>Full resulting path</dt><dd id="preview-full-path"></dd>
+                        <dt>Template source</dt><dd id="preview-template-source"></dd>
                     </dl>
                     <div class="preview-actions">
                         <button type="button" id="cancel-create-tag">Cancel</button>

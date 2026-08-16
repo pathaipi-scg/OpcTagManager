@@ -350,7 +350,19 @@ class KepwareConfigApi:
         children = []
         for properties in tags:
             name = self._name(properties, "Tag")
-            children.append(self._node("Tag", name, f"{full_path}.{name}", properties))
+            children.append(
+                self._node(
+                    "Tag",
+                    name,
+                    f"{full_path}.{name}",
+                    properties,
+                    {
+                        "channel": channel,
+                        "device": device,
+                        "group_path": list(parent_groups),
+                    },
+                )
+            )
         for properties in groups:
             name = self._name(properties, "Tag Group")
             group_path = [*parent_groups, name]
@@ -376,6 +388,9 @@ class KepwareConfigApi:
         group_path: list[str],
         tag_name: str,
         address: str,
+        data_type: int,
+        scan_rate: int,
+        access: int,
         description: str = "",
     ) -> dict[str, Any]:
         name = tag_name.strip()
@@ -443,6 +458,9 @@ class KepwareConfigApi:
                 payload = {
                     "common.ALLTYPES_NAME": name,
                     "servermain.TAG_ADDRESS": tag_address,
+                    "servermain.TAG_DATA_TYPE": data_type,
+                    "servermain.TAG_SCAN_RATE_MILLISECONDS": scan_rate,
+                    "servermain.TAG_READ_WRITE_ACCESS": access,
                 }
                 if tag_description:
                     payload["common.ALLTYPES_DESCRIPTION"] = tag_description
@@ -455,11 +473,40 @@ class KepwareConfigApi:
                         "The Tag was submitted, but Kepware returned an unexpected verification response."
                     )
                 returned_name = self._name(created, "Tag")
-                returned_address = _property_value(created, "TAG_ADDRESS")
-                if returned_name.casefold() != name.casefold() or returned_address != tag_address:
+                if returned_name.casefold() != name.casefold():
                     raise KepwareConfigError(
-                        "Kepware created a Tag, but its returned name or address did not match the request."
+                        "Kepware created a Tag, but its returned name did not match the request."
                     )
+
+                requested_properties = {
+                    "servermain.TAG_ADDRESS": tag_address,
+                    "servermain.TAG_DATA_TYPE": data_type,
+                    "servermain.TAG_SCAN_RATE_MILLISECONDS": scan_rate,
+                    "servermain.TAG_READ_WRITE_ACCESS": access,
+                    "common.ALLTYPES_DESCRIPTION": tag_description,
+                }
+                actual_properties = {
+                    "servermain.TAG_ADDRESS": _property_value(created, "TAG_ADDRESS"),
+                    "servermain.TAG_DATA_TYPE": _property_value(created, "TAG_DATA_TYPE"),
+                    "servermain.TAG_SCAN_RATE_MILLISECONDS": _property_value(
+                        created, "TAG_SCAN_RATE_MILLISECONDS"
+                    ),
+                    "servermain.TAG_READ_WRITE_ACCESS": _property_value(
+                        created, "TAG_READ_WRITE_ACCESS"
+                    ),
+                    "common.ALLTYPES_DESCRIPTION": created.get(
+                        "common.ALLTYPES_DESCRIPTION", ""
+                    ),
+                }
+                differences = [
+                    {
+                        "property": property_name,
+                        "requested": requested_value,
+                        "actual": actual_properties[property_name],
+                    }
+                    for property_name, requested_value in requested_properties.items()
+                    if actual_properties[property_name] != requested_value
+                ]
 
                 node = self._node(
                     "Tag",
@@ -478,6 +525,8 @@ class KepwareConfigApi:
                     "destination_path": destination_path,
                     "endpoint": tags_path,
                     "tag": node,
+                    "requested_properties": requested_properties,
+                    "differences": differences,
                 }
             except KepwareConfigError as exc:
                 logger.warning(
