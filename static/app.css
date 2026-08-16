@@ -33,7 +33,7 @@ input {
 .workspace {
     display: flex;
     gap: 8px;
-    height: calc(100vh - 98px);
+    height: calc(100vh - 140px);
     min-height: 120px;
 }
 
@@ -46,7 +46,7 @@ input {
     background: #252526;
 }
 
-.opc-panel {
+.tree-panel {
     flex: 1 1 65%;
 }
 
@@ -130,4 +130,132 @@ input {
     border-left: 3px solid #0e639c;
     background: #2d2d30;
     color: #b8b8b8;
+}
+
+.hidden {
+    display: none !important;
+}
+
+.view-tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 8px;
+    border-bottom: 1px solid #444;
+}
+
+.view-tab {
+    padding: 8px 14px;
+    border: 1px solid #444;
+    border-bottom: 0;
+    border-radius: 5px 5px 0 0;
+    background: #2d2d30;
+    color: #aaa;
+    cursor: pointer;
+}
+
+.view-tab.active {
+    background: #0e639c;
+    color: white;
+}
+
+.kepware-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.connection-status {
+    padding: 5px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.connection-status.pending {
+    background: #444;
+}
+
+.connection-status.connected {
+    background: #166534;
+    color: #dcfce7;
+}
+
+.connection-status.disconnected {
+    background: #7f1d1d;
+    color: #fee2e2;
+}
+
+.error-message {
+    padding: 10px;
+    border-left: 3px solid #dc2626;
+    background: #3f2525;
+    color: #fecaca;
+}
+
+.tree-counts {
+    color: #aaa;
+    font-size: 12px;
+}
+
+.kepware-object {
+    padding: 1px 3px;
+    border: 1px solid transparent;
+    border-radius: 2px;
+    background: transparent;
+    color: #d4d4d4;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.kepware-object:hover {
+    color: #4fc3f7;
+}
+
+.kepware-object.selected-object {
+    border-color: #3b82f6;
+    background: #1d4ed8;
+    color: white;
+}
+
+.object-type-label {
+    margin-left: 4px;
+    color: #888;
+    font-size: 11px;
+}
+
+.object-properties {
+    display: grid;
+    grid-template-columns: minmax(110px, auto) 1fr;
+    gap: 8px 12px;
+}
+
+.object-properties dt {
+    color: #aaa;
+    font-weight: bold;
+}
+
+.object-properties dd {
+    min-width: 0;
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+.raw-properties {
+    margin-top: 20px;
+}
+
+.raw-properties summary {
+    cursor: pointer;
+    font-weight: bold;
+}
+
+.raw-properties pre {
+    overflow: auto;
+    padding: 10px;
+    border: 1px solid #444;
+    background: #1e1e1e;
+    color: #d4d4d4;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
 }

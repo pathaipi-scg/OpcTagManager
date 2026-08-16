@@ -12,9 +12,18 @@
 
 The following are intentionally outside Phase 2:
 
-- Kepware Configuration API integration
 - Add, edit, or delete Kepware tags
 - Excel import
 - KM/Vault tag integration
 - Image or document upload
 - Troubleshooting knowledge fields
+
+## Phase 3 read-only Kepware integration
+
+- [x] Keep the SQL/TagMaster OPC Runtime Tree separate and unchanged.
+- [x] Add a direct Kepware Configuration API tree.
+- [x] Support device tags and recursively nested tag groups.
+- [x] Add read-only Kepware object details and raw properties.
+- [x] Handle an unavailable Kepware API without affecting `GET /`.
+- [x] Use only deployment configuration loaded from `config/.env`.
+- [x] Keep all Kepware Configuration API operations read-only.

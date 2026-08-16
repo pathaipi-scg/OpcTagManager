@@ -2,16 +2,26 @@
 
 ## Current baseline
 
-OpcTagManager is a FastAPI application for browsing OPC/Kepware tags stored in the existing SQL tag data source.
+OpcTagManager is a FastAPI application with two separate read-only tag views.
 
-The Phase 2 baseline provides:
+### OPC Runtime Tree
 
 - A nested OPC Tag Tree built from active `TagMaster` records.
 - Existing production-line and `SERVER/SYSTEM` filtering.
 - Native folder expand/collapse behavior.
 - Read-only tag selection showing the tag path and Tag ID.
 - The existing OPC tree refresh workflow.
-- A placeholder panel for future tag configuration.
+
+This is the runtime-discovered view backed by SQL and `TagMaster`.
+
+### Kepware Configuration Tree
+
+- Direct read-only access to Kepware Configuration API v1.
+- Separate Channel, Device, Tag Group, nested Tag Group, and Tag hierarchy.
+- Read-only selected-object details and redacted raw properties.
+- Graceful unavailable/authentication/SSL/timeout/malformed-response handling.
+
+Phase 3 is strictly read-only. It does not send Kepware POST, PUT, PATCH, or DELETE requests.
 
 Alarm mapping, audio playback, alarm CRUD, and alarm refresh behavior are not part of OpcTagManager.
 
@@ -27,11 +37,16 @@ Alarm mapping, audio playback, alarm CRUD, and alarm refresh behavior are not pa
 
 - `OpcTagManager.py`
 - `config/config.py`
+- `services/kepware_config_api.py`
 - `templates/base.html`
 - `templates/opc_tag_manager.html`
 - `static/app.css`
 - `static/app.js`
 
+## Deployment configuration
+
+All deployment-specific configuration is loaded from `config/.env` through `config/config.py`. The tracked `config/.env.example` contains safe placeholders.
+
 ## Deferred work
 
-Kepware Configuration API integration and tag-management features are intentionally deferred to a later phase.
+Kepware write operations, tag editing, imports, and KM Tag Knowledge integration are intentionally deferred to a later phase.

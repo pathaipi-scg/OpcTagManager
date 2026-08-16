@@ -30,36 +30,79 @@
 <header class="header-bar">
     <h1>OpcTagManager</h1>
 
-    <form method="post" action="/refresh">
+    <form method="post" action="/refresh" id="refresh-form">
         <button type="submit" class="refresh-button">Refresh OPC Tree</button>
     </form>
 </header>
 
-<main class="workspace">
-    <section class="panel opc-panel" aria-labelledby="opc-tree-title">
-        <h2 id="opc-tree-title">OPC Tag Tree</h2>
+<nav class="view-tabs" aria-label="Tag tree source">
+    <button type="button" class="view-tab active" data-view="runtime">OPC Runtime</button>
+    <button type="button" class="view-tab" data-view="kepware">Kepware Configuration</button>
+</nav>
 
-        {% if tree %}
-            {{ render_tree(tree) }}
-        {% else %}
-            <p>No tag data found.</p>
-        {% endif %}
+<main class="workspace">
+    <section class="panel tree-panel" aria-label="Tag tree">
+        <div id="runtime-tree-view" class="tree-view">
+            <h2>OPC Runtime Tree</h2>
+
+            {% if tree %}
+                {{ render_tree(tree) }}
+            {% else %}
+                <p>No tag data found.</p>
+            {% endif %}
+        </div>
+
+        <div id="kepware-tree-view" class="tree-view hidden">
+            <div class="kepware-heading">
+                <h2>Kepware Configuration Tree</h2>
+                <span id="kepware-status" class="connection-status pending">
+                    Kepware Configuration API — Checking…
+                </span>
+            </div>
+            <p id="kepware-error" class="error-message hidden"></p>
+            <p id="kepware-counts" class="tree-counts hidden"></p>
+            <div id="kepware-tree" aria-live="polite"></div>
+        </div>
     </section>
 
-    <section class="panel details-panel" aria-labelledby="tag-details-title">
-        <h2 id="tag-details-title">Tag Details</h2>
+    <section class="panel details-panel" aria-label="Selected object details">
+        <div id="runtime-details-view" class="details-view">
+            <h2>Tag Details</h2>
 
-        <div class="field-group">
-            <label for="selected-tag-path">Selected Tag Path</label>
-            <input id="selected-tag-path" type="text" readonly value="No tag selected">
+            <div class="field-group">
+                <label for="selected-tag-path">Selected Tag Path</label>
+                <input id="selected-tag-path" type="text" readonly value="No tag selected">
+            </div>
+
+            <div class="field-group">
+                <label for="selected-tag-id">Tag ID</label>
+                <input id="selected-tag-id" type="text" readonly value="">
+            </div>
+
+            <p class="placeholder-message">Tag configuration will be added in a later phase.</p>
         </div>
 
-        <div class="field-group">
-            <label for="selected-tag-id">Tag ID</label>
-            <input id="selected-tag-id" type="text" readonly value="">
-        </div>
+        <div id="kepware-details-view" class="details-view hidden">
+            <h2>Selected Kepware Object</h2>
+            <p id="kepware-no-selection">Select an object in the Kepware Configuration Tree.</p>
 
-        <p class="placeholder-message">Tag configuration will be added in the next phase.</p>
+            <div id="kepware-object-details" class="hidden">
+                <dl class="object-properties">
+                    <dt>Object Type</dt><dd id="kepware-object-type"></dd>
+                    <dt>Name</dt><dd id="kepware-object-name"></dd>
+                    <dt>Full Kepware Path</dt><dd id="kepware-object-path"></dd>
+                    <dt class="tag-property">Address</dt><dd class="tag-property" id="kepware-tag-address"></dd>
+                    <dt class="tag-property">Data Type</dt><dd class="tag-property" id="kepware-tag-data-type"></dd>
+                    <dt class="tag-property">Description</dt><dd class="tag-property" id="kepware-tag-description"></dd>
+                    <dt class="tag-property">Access</dt><dd class="tag-property" id="kepware-tag-access"></dd>
+                </dl>
+
+                <details class="raw-properties">
+                    <summary>Raw Kepware Properties</summary>
+                    <pre id="kepware-raw-properties"></pre>
+                </details>
+            </div>
+        </div>
     </section>
 </main>
 {% endblock %}
