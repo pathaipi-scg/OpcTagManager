@@ -12,6 +12,11 @@ runtimeTags.forEach((tag) => {
 const viewTabs = document.querySelectorAll(".view-tab");
 let kepwareLoaded = false;
 let loadedCounts = { channels: 0, devices: 0, tag_groups: 0, tags: 0 };
+const kepwareWriteEnabled =
+    document.getElementById("kepware-tree-view").dataset.writeEnabled === "true";
+let selectedDestinationNode = null;
+let selectedDestinationDetails = null;
+let selectedDestinationChildren = null;
 
 viewTabs.forEach((tab) => {
     tab.addEventListener("click", () => {
@@ -38,7 +43,7 @@ async function loadKepwareChannels(refresh = false) {
     const status = document.getElementById("kepware-status");
     const error = document.getElementById("kepware-error");
     const button = document.getElementById("refresh-kepware");
-    status.textContent = "Kepware Configuration API — Loading…";
+    status.textContent = "Kepware API: Loading…";
     status.className = "connection-status pending";
     button.disabled = true;
 
@@ -53,12 +58,13 @@ async function loadKepwareChannels(refresh = false) {
             return;
         }
 
-        status.textContent = "Kepware Configuration API — Connected";
+        status.textContent = "Kepware API: Connected";
         status.className = "connection-status connected";
         error.classList.add("hidden");
         loadedCounts = { channels: data.nodes.length, devices: 0, tag_groups: 0, tags: 0 };
         updateLoadedCounts();
         renderKepwareRoot(data.nodes);
+        resetCreateTagPanel();
     } catch (_error) {
         showKepwareError("Unable to load Kepware Channels. You can retry.");
     } finally {
@@ -98,6 +104,8 @@ function createKepwareNode(node) {
     const children = document.createElement("ul");
     children.className = "tree";
     details.appendChild(children);
+    button.kepwareDetails = details;
+    button.kepwareChildren = children;
     details.addEventListener("toggle", () => {
         if (details.open && details.dataset.loaded !== "true" && details.dataset.loading !== "true") {
             loadKepwareChildren(details, children, node);
@@ -108,6 +116,7 @@ function createKepwareNode(node) {
 }
 
 async function loadKepwareChildren(details, container, node) {
+    const wasLoaded = details.dataset.loaded === "true";
     details.dataset.loading = "true";
     const loading = document.createElement("li");
     loading.className = "loading-node";
@@ -128,9 +137,9 @@ async function loadKepwareChildren(details, container, node) {
         data.nodes.forEach((child) => fragment.appendChild(createKepwareNode(child)));
         container.replaceChildren(fragment);
         details.dataset.loaded = "true";
-        addLoadedCounts(data.nodes);
+        if (!wasLoaded) addLoadedCounts(data.nodes);
         document.getElementById("kepware-error").classList.add("hidden");
-        document.getElementById("kepware-status").textContent = "Kepware Configuration API — Connected";
+        document.getElementById("kepware-status").textContent = "Kepware API: Connected";
         document.getElementById("kepware-status").className = "connection-status connected";
     } catch (_error) {
         showKepwareError("This Kepware node is temporarily unavailable. Collapse and expand it to retry.");
@@ -159,7 +168,7 @@ function kepwareChildrenUrl(node) {
 function showKepwareError(message) {
     const status = document.getElementById("kepware-status");
     const error = document.getElementById("kepware-error");
-    status.textContent = "Kepware Configuration API — Temporarily Unavailable";
+    status.textContent = "Kepware API: Temporarily Unavailable";
     status.className = "connection-status disconnected";
     error.textContent = message || "Kepware Configuration API is unavailable.";
     error.classList.remove("hidden");
@@ -193,6 +202,23 @@ function selectKepwareObject(button, node) {
         item.classList.remove("selected-object");
     });
     button.classList.add("selected-object");
+    displayKepwareObject(node);
+
+    if (node.object_type === "Device" || node.object_type === "Tag Group") {
+        selectedDestinationNode = node;
+        selectedDestinationDetails = button.kepwareDetails;
+        selectedDestinationChildren = button.kepwareChildren;
+        document.getElementById("add-kepware-tag-panel").classList.remove("hidden");
+        document.getElementById("add-tag-destination").textContent =
+            `Destination: ${destinationPath(node)}`;
+        document.getElementById("create-tag-preview").classList.add("hidden");
+        document.getElementById("create-tag-result").classList.add("hidden");
+    } else {
+        resetCreateTagPanel();
+    }
+}
+
+function displayKepwareObject(node) {
     document.getElementById("kepware-no-selection").classList.add("hidden");
     document.getElementById("kepware-object-details").classList.remove("hidden");
     document.getElementById("kepware-object-type").textContent = node.object_type;
@@ -207,6 +233,98 @@ function selectKepwareObject(button, node) {
     setTagProperty("kepware-tag-description", tagDetails.description);
     setTagProperty("kepware-tag-access", tagDetails.access);
 }
+
+function destinationPath(node) {
+    return [
+        node.context.channel,
+        node.context.device,
+        ...(node.context.group_path || []),
+    ].join("/");
+}
+
+function resetCreateTagPanel() {
+    selectedDestinationNode = null;
+    selectedDestinationDetails = null;
+    selectedDestinationChildren = null;
+    document.getElementById("add-kepware-tag-panel").classList.add("hidden");
+    document.getElementById("add-kepware-tag-form").reset();
+    document.getElementById("create-tag-preview").classList.add("hidden");
+}
+
+document.getElementById("add-kepware-tag-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (!kepwareWriteEnabled || !selectedDestinationNode) return;
+
+    const name = document.getElementById("new-tag-name").value.trim();
+    const address = document.getElementById("new-tag-address").value.trim();
+    const description = document.getElementById("new-tag-description").value.trim();
+    const result = document.getElementById("create-tag-result");
+    if (!name || !address) {
+        result.textContent = "Tag Name and Address are required.";
+        result.className = "create-result error-message";
+        return;
+    }
+
+    const destination = destinationPath(selectedDestinationNode);
+    document.getElementById("preview-destination").textContent = destination;
+    document.getElementById("preview-tag-name").textContent = name;
+    document.getElementById("preview-address").textContent = address;
+    document.getElementById("preview-description").textContent = description || "(not provided)";
+    document.getElementById("preview-full-path").textContent = `${destination}/${name}`;
+    document.getElementById("create-tag-preview").classList.remove("hidden");
+    result.classList.add("hidden");
+});
+
+document.getElementById("cancel-create-tag").addEventListener("click", () => {
+    document.getElementById("create-tag-preview").classList.add("hidden");
+});
+
+document.getElementById("confirm-create-tag").addEventListener("click", async () => {
+    if (!kepwareWriteEnabled || !selectedDestinationNode) return;
+    const confirm = document.getElementById("confirm-create-tag");
+    const result = document.getElementById("create-tag-result");
+    confirm.disabled = true;
+
+    const payload = {
+        channel: selectedDestinationNode.context.channel,
+        device: selectedDestinationNode.context.device,
+        group_path: selectedDestinationNode.context.group_path || [],
+        tag_name: document.getElementById("new-tag-name").value.trim(),
+        address: document.getElementById("new-tag-address").value.trim(),
+        description: document.getElementById("new-tag-description").value.trim(),
+    };
+
+    try {
+        const response = await fetch("/api/kepware/tags", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
+        const data = await response.json();
+        if (!data.success) {
+            result.textContent = data.error || "Kepware Tag creation failed.";
+            result.className = "create-result error-message";
+            return;
+        }
+
+        result.textContent = `Created ${data.tag.full_path}`;
+        result.className = "create-result success-message";
+        document.getElementById("create-tag-preview").classList.add("hidden");
+        displayKepwareObject(data.tag);
+        if (selectedDestinationDetails && selectedDestinationChildren) {
+            await loadKepwareChildren(
+                selectedDestinationDetails,
+                selectedDestinationChildren,
+                selectedDestinationNode,
+            );
+        }
+    } catch (_error) {
+        result.textContent = "Unable to submit the Tag creation request. Click Create Tag to retry.";
+        result.className = "create-result error-message";
+    } finally {
+        confirm.disabled = false;
+    }
+});
 
 function setTagProperty(id, value) {
     const detail = document.getElementById(id);

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
+import json
+import logging
 from threading import Lock
 from time import monotonic
 from typing import Any
@@ -11,6 +14,11 @@ from requests.auth import HTTPBasicAuth
 
 
 NAME_PROPERTY = "common.ALLTYPES_NAME"
+logger = logging.getLogger("opctagmanager.kepware")
+
+
+def _audit_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
 SENSITIVE_KEY_PARTS = (
     "password",
     "passwd",
@@ -36,6 +44,7 @@ class KepwareConfigSettings:
     verify_ssl: bool
     timeout: int
     cache_ttl_sec: int
+    write_enabled: bool
 
     @property
     def base_url(self) -> str:
@@ -77,6 +86,7 @@ class KepwareConfigApi:
         self.session.verify = settings.verify_ssl
         self._cache: dict[str, tuple[float, Any]] = {}
         self._cache_lock = Lock()
+        self._write_lock = Lock()
         self._request_count = 0
 
     @property
@@ -91,11 +101,16 @@ class KepwareConfigApi:
         with self._cache_lock:
             self._cache.clear()
 
-    def _get(self, path: str, allow_not_found: bool = False) -> Any:
+    def _get(
+        self,
+        path: str,
+        allow_not_found: bool = False,
+        use_cache: bool = True,
+    ) -> Any:
         now = monotonic()
         with self._cache_lock:
             cached = self._cache.get(path)
-            if cached and cached[0] > now:
+            if use_cache and cached and cached[0] > now:
                 return cached[1]
 
             try:
@@ -145,6 +160,61 @@ class KepwareConfigApi:
 
             self._cache[path] = (now + self.settings.cache_ttl_sec, data)
             return data
+
+    def _invalidate_paths(self, *paths: str) -> None:
+        with self._cache_lock:
+            for path in paths:
+                self._cache.pop(path, None)
+
+    @staticmethod
+    def _safe_response_detail(response: requests.Response) -> str:
+        try:
+            detail = _redact_sensitive(response.json())
+            return json.dumps(detail, ensure_ascii=False)[:1000]
+        except ValueError:
+            return "No structured validation details were returned."
+
+    def _post_tag(self, path: str, payload: dict[str, Any]) -> None:
+        try:
+            self._request_count += 1
+            response = self.session.post(
+                f"{self.base_url}{path}",
+                json=payload,
+                timeout=self.settings.timeout,
+            )
+        except requests.exceptions.Timeout as exc:
+            raise KepwareConfigError("Kepware Tag creation timed out.") from exc
+        except requests.exceptions.SSLError as exc:
+            raise KepwareConfigError(
+                "Kepware Configuration API SSL verification failed."
+            ) from exc
+        except requests.exceptions.ConnectionError as exc:
+            raise KepwareConfigError(
+                "Kepware Configuration API is temporarily unavailable."
+            ) from exc
+        except requests.exceptions.RequestException as exc:
+            raise KepwareConfigError("Kepware Tag creation request failed.") from exc
+
+        if response.status_code == 400:
+            raise KepwareConfigError(
+                f"Kepware rejected the Tag properties: {self._safe_response_detail(response)}"
+            )
+        if response.status_code == 401:
+            raise KepwareConfigError(
+                "Kepware Configuration API authentication is required or the configured credentials were rejected."
+            )
+        if response.status_code == 403:
+            raise KepwareConfigError(
+                "Kepware Configuration API authorization was denied."
+            )
+        if response.status_code == 404:
+            raise KepwareConfigError("The selected Kepware destination no longer exists.")
+        if response.status_code == 409:
+            raise KepwareConfigError("Kepware reported a Tag name conflict.")
+        if response.status_code >= 400:
+            raise KepwareConfigError(
+                f"Kepware Tag creation returned HTTP {response.status_code}."
+            )
 
     @staticmethod
     def _collection(data: Any, object_type: str) -> list[dict[str, Any]]:
@@ -298,3 +368,124 @@ class KepwareConfigApi:
                 )
             )
         return children
+
+    def create_tag(
+        self,
+        channel: str,
+        device: str,
+        group_path: list[str],
+        tag_name: str,
+        address: str,
+        description: str = "",
+    ) -> dict[str, Any]:
+        name = tag_name.strip()
+        tag_address = address.strip()
+        tag_description = description.strip()
+        destination_parts = [channel, device, *group_path]
+        destination_path = "/".join(destination_parts)
+
+        if not self.settings.write_enabled:
+            logger.warning(
+                "timestamp=%s kepware_tag_create destination=%s tag=%s address=%s result=FAILED error=WRITE_DISABLED",
+                _audit_timestamp(),
+                destination_path,
+                name,
+                tag_address,
+            )
+            raise KepwareConfigError("Kepware configuration write mode is disabled.")
+        if not name:
+            logger.warning(
+                "timestamp=%s kepware_tag_create destination=%s tag=%s address=%s result=FAILED error=TAG_NAME_REQUIRED",
+                _audit_timestamp(),
+                destination_path,
+                name,
+                tag_address,
+            )
+            raise KepwareConfigError("Tag Name is required.")
+        if not tag_address:
+            logger.warning(
+                "timestamp=%s kepware_tag_create destination=%s tag=%s address=%s result=FAILED error=ADDRESS_REQUIRED",
+                _audit_timestamp(),
+                destination_path,
+                name,
+                tag_address,
+            )
+            raise KepwareConfigError("Address is required.")
+
+        parent_api_path = (
+            f"/project/channels/{self._segment(channel, 'Channel')}"
+            f"/devices/{self._segment(device, 'Device')}"
+        )
+        for group in group_path:
+            parent_api_path += f"/tag_groups/{self._segment(group, 'Tag Group')}"
+        tags_path = f"{parent_api_path}/tags"
+        tag_path = f"{tags_path}/{self._segment(name, 'Tag')}"
+
+        with self._write_lock:
+            try:
+                parent = self._get(parent_api_path, use_cache=False)
+                if not isinstance(parent, dict):
+                    raise KepwareConfigError(
+                        "The selected Kepware destination returned an unexpected response."
+                    )
+
+                current_tags = self._collection(
+                    self._get(tags_path, allow_not_found=True, use_cache=False), "Tag"
+                )
+                if any(
+                    self._name(properties, "Tag").casefold() == name.casefold()
+                    for properties in current_tags
+                ):
+                    raise KepwareConfigError(
+                        f"A Tag named '{name}' already exists at the selected destination."
+                    )
+
+                payload = {
+                    "common.ALLTYPES_NAME": name,
+                    "servermain.TAG_ADDRESS": tag_address,
+                }
+                if tag_description:
+                    payload["common.ALLTYPES_DESCRIPTION"] = tag_description
+
+                self._post_tag(tags_path, payload)
+                self._invalidate_paths(tags_path, tag_path)
+                created = self._get(tag_path, use_cache=False)
+                if not isinstance(created, dict):
+                    raise KepwareConfigError(
+                        "The Tag was submitted, but Kepware returned an unexpected verification response."
+                    )
+                returned_name = self._name(created, "Tag")
+                returned_address = _property_value(created, "TAG_ADDRESS")
+                if returned_name.casefold() != name.casefold() or returned_address != tag_address:
+                    raise KepwareConfigError(
+                        "Kepware created a Tag, but its returned name or address did not match the request."
+                    )
+
+                node = self._node(
+                    "Tag",
+                    returned_name,
+                    ".".join([*destination_parts, returned_name]),
+                    created,
+                )
+                logger.info(
+                    "timestamp=%s kepware_tag_create destination=%s tag=%s address=%s result=SUCCESS",
+                    _audit_timestamp(),
+                    destination_path,
+                    name,
+                    tag_address,
+                )
+                return {
+                    "destination_path": destination_path,
+                    "endpoint": tags_path,
+                    "tag": node,
+                }
+            except KepwareConfigError as exc:
+                logger.warning(
+                    "timestamp=%s kepware_tag_create destination=%s tag=%s address=%s result=FAILED error=%s",
+                    _audit_timestamp(),
+                    destination_path,
+                    name,
+                    tag_address,
+                    str(exc),
+                )
+                raise

@@ -52,12 +52,19 @@
             {% endif %}
         </div>
 
-        <div id="kepware-tree-view" class="tree-view hidden">
+        <div
+            id="kepware-tree-view"
+            class="tree-view hidden"
+            data-write-enabled="{{ 'true' if kepware_write_enabled else 'false' }}"
+        >
             <div class="kepware-heading">
                 <h2>Kepware Configuration Tree</h2>
                 <div class="kepware-controls">
                 <span id="kepware-status" class="connection-status pending">
-                    Kepware Configuration API — Checking…
+                    Kepware API: Checking…
+                </span>
+                <span class="write-mode-status {{ 'enabled' if kepware_write_enabled else 'disabled' }}">
+                    Write Mode: {{ 'Enabled' if kepware_write_enabled else 'Disabled' }}
                 </span>
                 <button type="button" id="refresh-kepware" class="refresh-button">
                     Refresh Kepware
@@ -108,6 +115,48 @@
                     <pre id="kepware-raw-properties"></pre>
                 </details>
             </div>
+
+            <section id="add-kepware-tag-panel" class="add-tag-panel hidden">
+                <h3>Add Kepware Tag</h3>
+                <p id="add-tag-destination" class="destination-path"></p>
+                {% if not kepware_write_enabled %}
+                    <p class="write-disabled-message">Write Disabled</p>
+                {% endif %}
+
+                <form id="add-kepware-tag-form">
+                    <div class="field-group">
+                        <label for="new-tag-name">Tag Name *</label>
+                        <input id="new-tag-name" type="text" required {{ 'disabled' if not kepware_write_enabled else '' }}>
+                    </div>
+                    <div class="field-group">
+                        <label for="new-tag-address">Address *</label>
+                        <input id="new-tag-address" type="text" required {{ 'disabled' if not kepware_write_enabled else '' }}>
+                    </div>
+                    <div class="field-group">
+                        <label for="new-tag-description">Description</label>
+                        <input id="new-tag-description" type="text" {{ 'disabled' if not kepware_write_enabled else '' }}>
+                    </div>
+                    <button type="submit" class="refresh-button" {{ 'disabled' if not kepware_write_enabled else '' }}>
+                        Preview Tag
+                    </button>
+                </form>
+
+                <div id="create-tag-preview" class="create-preview hidden">
+                    <h4>Confirm Tag Creation</h4>
+                    <dl class="object-properties">
+                        <dt>Destination</dt><dd id="preview-destination"></dd>
+                        <dt>Tag Name</dt><dd id="preview-tag-name"></dd>
+                        <dt>Address</dt><dd id="preview-address"></dd>
+                        <dt>Description</dt><dd id="preview-description"></dd>
+                        <dt>Full resulting path</dt><dd id="preview-full-path"></dd>
+                    </dl>
+                    <div class="preview-actions">
+                        <button type="button" id="cancel-create-tag">Cancel</button>
+                        <button type="button" id="confirm-create-tag" class="refresh-button">Create Tag</button>
+                    </div>
+                </div>
+                <p id="create-tag-result" class="create-result hidden"></p>
+            </section>
         </div>
     </section>
 </main>

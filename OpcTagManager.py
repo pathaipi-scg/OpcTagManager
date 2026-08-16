@@ -7,6 +7,7 @@ from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel, Field
 
 from config.config import (
     APP_HOST,
@@ -20,6 +21,7 @@ from config.config import (
     KEPWARE_CONFIG_API_USER,
     KEPWARE_CONFIG_API_VERIFY_SSL,
     KEPWARE_CONFIG_CACHE_TTL_SEC,
+    KEPWARE_CONFIG_WRITE_ENABLED,
     LOG_LEVEL,
     PRODUCTION_LINE,
     SQL_DB,
@@ -51,8 +53,18 @@ kepware_config_api = KepwareConfigApi(
         verify_ssl=KEPWARE_CONFIG_API_VERIFY_SSL,
         timeout=KEPWARE_CONFIG_API_TIMEOUT,
         cache_ttl_sec=KEPWARE_CONFIG_CACHE_TTL_SEC,
+        write_enabled=KEPWARE_CONFIG_WRITE_ENABLED,
     )
 )
+
+
+class CreateKepwareTagRequest(BaseModel):
+    channel: str
+    device: str
+    group_path: list[str] = Field(default_factory=list)
+    tag_name: str
+    address: str
+    description: str = ""
 
 
 def get_conn():
@@ -109,7 +121,11 @@ def home(request: Request):
     return templates.TemplateResponse(
         request,
         "opc_tag_manager.html",
-        {"request": request, "tree": build_tree(tags)},
+        {
+            "request": request,
+            "tree": build_tree(tags),
+            "kepware_write_enabled": KEPWARE_CONFIG_WRITE_ENABLED,
+        },
     )
 
 
@@ -182,6 +198,25 @@ def kepware_group_children(
 def refresh_kepware_cache():
     kepware_config_api.clear_cache()
     return kepware_browse_response(kepware_config_api.get_channels)
+
+
+@app.post("/api/kepware/tags")
+def create_kepware_tag(payload: CreateKepwareTagRequest):
+    try:
+        result = kepware_config_api.create_tag(
+            channel=payload.channel,
+            device=payload.device,
+            group_path=payload.group_path,
+            tag_name=payload.tag_name,
+            address=payload.address,
+            description=payload.description,
+        )
+        return {"success": True, **result}
+    except KepwareConfigError as exc:
+        status_code = 403 if not KEPWARE_CONFIG_WRITE_ENABLED else 400
+        return JSONResponse(
+            {"success": False, "error": str(exc)}, status_code=status_code
+        )
 
 
 if __name__ == "__main__":

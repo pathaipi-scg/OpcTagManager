@@ -24,7 +24,7 @@ This is the runtime-discovered view backed by SQL and `TagMaster`.
 - Read-only selected-object details and redacted raw properties.
 - Graceful unavailable/authentication/SSL/timeout/malformed-response handling.
 
-Phase 3 is strictly read-only. It does not send Kepware POST, PUT, PATCH, or DELETE requests.
+Phase 3 browsing remains read-only. Phase 4.1 adds one gated operation: creating a single Tag with an explicit Kepware POST after preview and duplicate validation. No other Kepware write method is implemented.
 
 Alarm mapping, audio playback, alarm CRUD, and alarm refresh behavior are not part of OpcTagManager.
 
@@ -52,4 +52,4 @@ All deployment-specific configuration is loaded from `config/.env` through `conf
 
 ## Deferred work
 
-Kepware write operations, tag editing, imports, and KM Tag Knowledge integration are intentionally deferred to a later phase.
+Tag editing/deletion, bulk imports, and KM Tag Knowledge integration are intentionally deferred to a later phase.

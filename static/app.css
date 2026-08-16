@@ -202,6 +202,23 @@ input {
     color: #fee2e2;
 }
 
+.write-mode-status {
+    padding: 5px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.write-mode-status.enabled {
+    background: #854d0e;
+    color: #fef3c7;
+}
+
+.write-mode-status.disabled {
+    background: #444;
+    color: #ddd;
+}
+
 .error-message {
     padding: 10px;
     border-left: 3px solid #dc2626;
@@ -274,4 +291,50 @@ input {
     color: #d4d4d4;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+}
+
+.add-tag-panel {
+    margin-top: 24px;
+    padding-top: 18px;
+    border-top: 1px solid #444;
+}
+
+.destination-path {
+    overflow-wrap: anywhere;
+    color: #4fc3f7;
+}
+
+.write-disabled-message {
+    padding: 10px;
+    border-left: 3px solid #888;
+    background: #333;
+    font-weight: bold;
+}
+
+.create-preview {
+    margin-top: 18px;
+    padding: 12px;
+    border: 1px solid #555;
+    background: #2d2d30;
+}
+
+.preview-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 14px;
+}
+
+.preview-actions button {
+    padding: 6px 12px;
+}
+
+.create-result {
+    padding: 10px;
+}
+
+.success-message {
+    border-left: 3px solid #16a34a;
+    background: #193b25;
+    color: #dcfce7;
 }

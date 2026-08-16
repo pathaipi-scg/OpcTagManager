@@ -35,3 +35,14 @@ The following are intentionally outside Phase 2:
 - [x] Add a Kepware-only cache refresh.
 - [x] Preserve loaded nodes when temporary child requests fail.
 - [x] Validate bounded lazy requests against the real Kepware server.
+
+## Phase 4.1 controlled single-Tag creation
+
+- [x] Add a deployment-controlled write safety gate, disabled by default.
+- [x] Allow only Device or Tag Group destinations from the Kepware tree.
+- [x] Require preview and explicit confirmation before creation.
+- [x] Perform fresh parent and case-insensitive duplicate checks.
+- [x] Use one explicit Tag-only POST with the minimum Kepware payload.
+- [x] GET and display the returned Tag after creation.
+- [x] Invalidate only the selected parent's Tag collection cache.
+- [x] Cover the write path with mocks without creating a live Tag.
