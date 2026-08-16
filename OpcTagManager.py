@@ -9,12 +9,16 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from config.config import (
+    APP_HOST,
+    APP_PORT,
     BROWSER_SCRIPT,
+    LOG_LEVEL,
     PRODUCTION_LINE,
     SQL_DB,
     SQL_DRIVER,
     SQL_PASS,
     SQL_SERVER,
+    SQL_TRUST_SERVER_CERTIFICATE,
     SQL_USER,
 )
 
@@ -33,7 +37,7 @@ def get_conn():
         f"DATABASE={SQL_DB};"
         f"UID={SQL_USER};"
         f"PWD={SQL_PASS};"
-        f"TrustServerCertificate=yes;"
+        f"TrustServerCertificate={'yes' if SQL_TRUST_SERVER_CERTIFICATE else 'no'};"
     )
 
 
@@ -88,3 +92,14 @@ def home(request: Request):
 def refresh_browser():
     subprocess.run([sys.executable, BROWSER_SCRIPT])
     return RedirectResponse("/", status_code=303)
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(
+        "OpcTagManager:app",
+        host=APP_HOST,
+        port=APP_PORT,
+        log_level=LOG_LEVEL.lower(),
+    )

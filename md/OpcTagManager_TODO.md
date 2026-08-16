@@ -6,7 +6,7 @@
 - [x] Preserve folder expand/collapse and tag selection.
 - [x] Remove copied alarm mapping and audio functionality.
 - [x] Add a read-only selected-tag details panel.
-- [x] Keep the application runnable as `OpcTagManager:app` on port 1863.
+- [x] Keep the application runnable with host and port loaded from `config/.env`.
 
 ## Deferred
 

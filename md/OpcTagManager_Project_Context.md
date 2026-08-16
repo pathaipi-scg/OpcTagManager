@@ -19,7 +19,8 @@ Alarm mapping, audio playback, alarm CRUD, and alarm refresh behavior are not pa
 
 - Python module: `OpcTagManager.py`
 - FastAPI instance: `app`
-- Run command: `uvicorn OpcTagManager:app --port 1863`
+- Run command: `python OpcTagManager.py`
+- Host and port: loaded from `config/.env` through `config/config.py`
 - Windows launcher: `OpcTagManager.bat`
 
 ## Current structure
