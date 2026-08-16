@@ -43,6 +43,7 @@ def get_bool(name: str) -> bool:
 APP_HOST = get_required("APP_HOST")
 APP_PORT = get_int("APP_PORT")
 LOG_LEVEL = get_required("LOG_LEVEL")
+APP_TIMEZONE = get_required("APP_TIMEZONE")
 
 # OPC
 OPC_URL = get_required("OPC_URL")
@@ -71,8 +72,9 @@ KEPWARE_TAG_DEFAULT_DATA_TYPE = get_int("KEPWARE_TAG_DEFAULT_DATA_TYPE")
 KEPWARE_TAG_DEFAULT_SCAN_RATE_MS = get_int("KEPWARE_TAG_DEFAULT_SCAN_RATE_MS")
 KEPWARE_TAG_DEFAULT_ACCESS = get_int("KEPWARE_TAG_DEFAULT_ACCESS")
 
-# KM tag storage (reserved for a future phase)
+# KM Tag Knowledge storage
 KM_TAG_ROOT = get_required("KM_TAG_ROOT")
+KM_TAG_WRITE_ENABLED = get_bool("KM_TAG_WRITE_ENABLED")
 
 # InfluxDB
 INFLUX_HOST = get_configured("INFLUX_HOST")

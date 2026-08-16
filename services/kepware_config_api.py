@@ -333,6 +333,34 @@ class KepwareConfigApi:
             api_path, full_path, channel, device, group_path
         )
 
+    def get_tag(
+        self,
+        channel: str,
+        device: str,
+        group_path: list[str],
+        tag_name: str,
+    ) -> dict[str, Any]:
+        api_path = (
+            f"/project/channels/{self._segment(channel, 'Channel')}"
+            f"/devices/{self._segment(device, 'Device')}"
+        )
+        for group in group_path:
+            api_path += f"/tag_groups/{self._segment(group, 'Tag Group')}"
+        api_path += f"/tags/{self._segment(tag_name, 'Tag')}"
+        properties = self._get(api_path, use_cache=False)
+        if not isinstance(properties, dict):
+            raise KepwareConfigError("Kepware returned an unexpected Tag response.")
+        returned_name = self._name(properties, "Tag")
+        if returned_name.casefold() != tag_name.casefold():
+            raise KepwareConfigError("The returned Kepware Tag did not match the request.")
+        return self._node(
+            "Tag",
+            returned_name,
+            ".".join([channel, device, *group_path, returned_name]),
+            properties,
+            {"channel": channel, "device": device, "group_path": list(group_path)},
+        )
+
     def _get_immediate_children(
         self,
         api_path: str,

@@ -56,6 +56,7 @@
             id="kepware-tree-view"
             class="tree-view hidden"
             data-write-enabled="{{ 'true' if kepware_write_enabled else 'false' }}"
+            data-km-write-enabled="{{ 'true' if km_tag_write_enabled else 'false' }}"
             data-default-data-type="{{ kepware_tag_default_data_type }}"
             data-default-scan-rate="{{ kepware_tag_default_scan_rate }}"
             data-default-access="{{ kepware_tag_default_access }}"
@@ -188,6 +189,48 @@
                     </div>
                 </div>
                 <p id="create-tag-result" class="create-result hidden"></p>
+            </section>
+
+            <section id="tag-knowledge-panel" class="add-tag-panel hidden">
+                <h3>Tag Knowledge</h3>
+                <p id="knowledge-status" class="tree-counts">Loading Tag Knowledge…</p>
+                <dl class="object-properties knowledge-identity">
+                    <dt>Kepware Path</dt><dd id="knowledge-kepware-path"></dd>
+                    <dt>Address</dt><dd id="knowledge-address"></dd>
+                    <dt>Data Type</dt><dd id="knowledge-data-type"></dd>
+                    <dt>Scan Rate</dt><dd id="knowledge-scan-rate"></dd>
+                    <dt>Access</dt><dd id="knowledge-access"></dd>
+                    <dt>KM Directory</dt><dd id="knowledge-directory"></dd>
+                    <dt>Active Version</dt><dd id="knowledge-version"></dd>
+                    <dt>Updated</dt><dd id="knowledge-updated"></dd>
+                </dl>
+                {% if not km_tag_write_enabled %}
+                    <p class="write-disabled-message">Tag Knowledge Write Disabled</p>
+                {% endif %}
+                <form id="tag-knowledge-form">
+                    <div class="field-group"><label for="knowledge-description">Description / Meaning</label><textarea id="knowledge-description" rows="3" {{ 'disabled' if not km_tag_write_enabled else '' }}></textarea></div>
+                    <div class="field-group"><label for="knowledge-possible-cause">Possible Cause</label><textarea id="knowledge-possible-cause" rows="3" {{ 'disabled' if not km_tag_write_enabled else '' }}></textarea></div>
+                    <div class="field-group"><label for="knowledge-how-to-check">How to Check</label><textarea id="knowledge-how-to-check" rows="3" {{ 'disabled' if not km_tag_write_enabled else '' }}></textarea></div>
+                    <div class="field-group"><label for="knowledge-corrective-action">Corrective Action</label><textarea id="knowledge-corrective-action" rows="3" {{ 'disabled' if not km_tag_write_enabled else '' }}></textarea></div>
+                    <div class="field-group"><label for="knowledge-safety-warning">Safety / Warning</label><textarea id="knowledge-safety-warning" rows="3" {{ 'disabled' if not km_tag_write_enabled else '' }}></textarea></div>
+                    <div class="field-group"><label for="knowledge-additional-notes">Additional Notes</label><textarea id="knowledge-additional-notes" rows="3" {{ 'disabled' if not km_tag_write_enabled else '' }}></textarea></div>
+                    <button type="submit" class="refresh-button" {{ 'disabled' if not km_tag_write_enabled else '' }}>Preview Knowledge</button>
+                </form>
+                <div id="knowledge-preview" class="create-preview hidden">
+                    <h4>Confirm Tag Knowledge Save</h4>
+                    <dl class="object-properties">
+                        <dt>Kepware Tag</dt><dd id="knowledge-preview-tag"></dd>
+                        <dt>KM Directory</dt><dd id="knowledge-preview-directory"></dd>
+                        <dt>New Version</dt><dd id="knowledge-preview-version"></dd>
+                        <dt>New File</dt><dd id="knowledge-preview-file"></dd>
+                    </dl>
+                    <div id="knowledge-preview-fields" class="knowledge-preview-fields"></div>
+                    <div class="preview-actions">
+                        <button type="button" id="cancel-knowledge-save">Cancel</button>
+                        <button type="button" id="confirm-knowledge-save" class="refresh-button">Save Knowledge</button>
+                    </div>
+                </div>
+                <p id="knowledge-result" class="create-result hidden"></p>
             </section>
         </div>
     </section>

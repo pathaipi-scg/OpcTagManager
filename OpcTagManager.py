@@ -1,6 +1,7 @@
 from pathlib import Path
 import subprocess
 import sys
+from datetime import datetime
 
 import pyodbc
 from fastapi import FastAPI, Query, Request
@@ -12,6 +13,7 @@ from pydantic import BaseModel, Field
 from config.config import (
     APP_HOST,
     APP_PORT,
+    APP_TIMEZONE,
     BROWSER_SCRIPT,
     KEPWARE_CONFIG_API_HOST,
     KEPWARE_CONFIG_API_PASSWORD,
@@ -26,6 +28,8 @@ from config.config import (
     KEPWARE_TAG_DEFAULT_DATA_TYPE,
     KEPWARE_TAG_DEFAULT_SCAN_RATE_MS,
     LOG_LEVEL,
+    KM_TAG_ROOT,
+    KM_TAG_WRITE_ENABLED,
     PRODUCTION_LINE,
     SQL_DB,
     SQL_DRIVER,
@@ -39,6 +43,7 @@ from services.kepware_config_api import (
     KepwareConfigError,
     KepwareConfigSettings,
 )
+from services.tag_knowledge import TagKnowledgeError, TagKnowledgeStore
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -59,6 +64,11 @@ kepware_config_api = KepwareConfigApi(
         write_enabled=KEPWARE_CONFIG_WRITE_ENABLED,
     )
 )
+tag_knowledge_store = TagKnowledgeStore(
+    root=KM_TAG_ROOT,
+    timezone_name=APP_TIMEZONE,
+    write_enabled=KM_TAG_WRITE_ENABLED,
+)
 
 
 class CreateKepwareTagRequest(BaseModel):
@@ -71,6 +81,23 @@ class CreateKepwareTagRequest(BaseModel):
     scan_rate: int
     access: int
     description: str = ""
+
+
+class TagKnowledgeIdentityRequest(BaseModel):
+    channel: str
+    device: str
+    group_path: list[str] = Field(default_factory=list)
+    tag_name: str
+
+
+class SaveTagKnowledgeRequest(TagKnowledgeIdentityRequest):
+    description: str = ""
+    possible_cause: str = ""
+    how_to_check: str = ""
+    corrective_action: str = ""
+    safety_warning: str = ""
+    additional_notes: str = ""
+    preview_created_at: str | None = None
 
 
 def get_conn():
@@ -134,6 +161,7 @@ def home(request: Request):
             "kepware_tag_default_data_type": KEPWARE_TAG_DEFAULT_DATA_TYPE,
             "kepware_tag_default_scan_rate": KEPWARE_TAG_DEFAULT_SCAN_RATE_MS,
             "kepware_tag_default_access": KEPWARE_TAG_DEFAULT_ACCESS,
+            "km_tag_write_enabled": KM_TAG_WRITE_ENABLED,
         },
     )
 
@@ -229,6 +257,62 @@ def create_kepware_tag(payload: CreateKepwareTagRequest):
         return JSONResponse(
             {"success": False, "error": str(exc)}, status_code=status_code
         )
+
+
+def _validated_knowledge_identity(payload: TagKnowledgeIdentityRequest):
+    node = kepware_config_api.get_tag(
+        payload.channel, payload.device, payload.group_path, payload.tag_name
+    )
+    return tag_knowledge_store.identity_from_node(node), node
+
+
+def _knowledge_error(exc: Exception, write: bool = False):
+    status_code = 403 if write and not KM_TAG_WRITE_ENABLED else 400
+    return JSONResponse({"success": False, "error": str(exc)}, status_code=status_code)
+
+
+@app.post("/api/tag-knowledge/load")
+def load_tag_knowledge(payload: TagKnowledgeIdentityRequest):
+    try:
+        identity, node = _validated_knowledge_identity(payload)
+        return {"success": True, "tag": node, "knowledge": tag_knowledge_store.load(identity)}
+    except (KepwareConfigError, TagKnowledgeError) as exc:
+        return _knowledge_error(exc)
+
+
+@app.post("/api/tag-knowledge/preview")
+def preview_tag_knowledge(payload: SaveTagKnowledgeRequest):
+    try:
+        identity, _node = _validated_knowledge_identity(payload)
+        return {"success": True, "preview": tag_knowledge_store.preview(identity)}
+    except (KepwareConfigError, TagKnowledgeError) as exc:
+        return _knowledge_error(exc)
+
+
+@app.post("/api/tag-knowledge/save")
+def save_tag_knowledge(payload: SaveTagKnowledgeRequest):
+    try:
+        identity, _node = _validated_knowledge_identity(payload)
+        preview_time = None
+        if payload.preview_created_at:
+            try:
+                preview_time = datetime.fromisoformat(payload.preview_created_at)
+            except ValueError as exc:
+                raise TagKnowledgeError("The Tag Knowledge preview timestamp is invalid.") from exc
+        fields = {
+            "description": payload.description,
+            "possible_cause": payload.possible_cause,
+            "how_to_check": payload.how_to_check,
+            "corrective_action": payload.corrective_action,
+            "safety_warning": payload.safety_warning,
+            "additional_notes": payload.additional_notes,
+        }
+        return {
+            "success": True,
+            "knowledge": tag_knowledge_store.save(identity, fields, now=preview_time),
+        }
+    except (KepwareConfigError, TagKnowledgeError) as exc:
+        return _knowledge_error(exc, write=True)
 
 
 if __name__ == "__main__":

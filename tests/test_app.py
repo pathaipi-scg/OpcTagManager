@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import patch
 
 import OpcTagManager
+from services.kepware_config_api import KepwareConfigError
 
 
 class FakeCursor:
@@ -73,6 +74,8 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertIn('id="new-tag-scan-rate"', html)
         self.assertIn('id="new-tag-access"', html)
         self.assertIn('id="use-tag-template"', html)
+        self.assertIn('id="tag-knowledge-panel"', html)
+        self.assertIn('data-km-write-enabled="false"', html)
         self.assertEqual(self.request("GET", "/static/app.js")[0], 200)
         self.assertEqual(self.request("GET", "/static/app.css")[0], 200)
 
@@ -90,6 +93,29 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertEqual(status, 422)
         missing = {item["loc"][-1] for item in json.loads(body)["detail"]}
         self.assertEqual(missing, {"data_type", "scan_rate", "access"})
+
+    @patch.object(OpcTagManager.tag_knowledge_store, "save")
+    @patch.object(
+        OpcTagManager.kepware_config_api,
+        "get_tag",
+        side_effect=KepwareConfigError("The selected Kepware Tag no longer exists."),
+    )
+    def test_knowledge_save_validates_tag_exists_before_storage(self, get_tag, save):
+        status, body = self.request(
+            "POST",
+            "/api/tag-knowledge/save",
+            {
+                "channel": "LP2",
+                "device": "MIX",
+                "group_path": [],
+                "tag_name": "Missing",
+                "description": "No write should occur",
+            },
+        )
+        self.assertEqual(status, 403)
+        self.assertIn("no longer exists", json.loads(body)["error"])
+        get_tag.assert_called_once()
+        save.assert_not_called()
 
 
 if __name__ == "__main__":

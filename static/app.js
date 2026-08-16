@@ -122,6 +122,7 @@ let loadedCounts = { channels: 0, devices: 0, tag_groups: 0, tags: 0 };
 const kepwareWriteEnabled =
     document.getElementById("kepware-tree-view").dataset.writeEnabled === "true";
 const kepwareTreeView = document.getElementById("kepware-tree-view");
+const kmTagWriteEnabled = kepwareTreeView.dataset.kmWriteEnabled === "true";
 const configuredTagDefaults = {
     dataType: Number.parseInt(kepwareTreeView.dataset.defaultDataType, 10),
     scanRate: Number.parseInt(kepwareTreeView.dataset.defaultScanRate, 10),
@@ -132,6 +133,8 @@ let selectedDestinationDetails = null;
 let selectedDestinationChildren = null;
 let selectedTemplateCandidate = null;
 let templateSourcePath = "";
+let selectedKnowledgeTag = null;
+let pendingKnowledgePayload = null;
 
 viewTabs.forEach((tab) => {
     tab.addEventListener("click", () => {
@@ -343,11 +346,15 @@ function selectKepwareObject(button, node) {
             "hidden",
             !kepwareWriteEnabled,
         );
+        loadTagKnowledge(node);
     } else {
         resetCreateTagPanel();
         selectedTemplateCandidate = null;
         document.getElementById("use-tag-template").classList.add("hidden");
+        resetTagKnowledgePanel();
     }
+
+    if (node.object_type !== "Tag") resetTagKnowledgePanel();
 }
 
 function displayKepwareObject(node) {
@@ -534,6 +541,136 @@ function creationResultMessage(data) {
     });
     return `Created ${data.tag.full_path}. Differences: ${differences.join("; ")}`;
 }
+
+function knowledgeIdentityPayload(node = selectedKnowledgeTag) {
+    return {
+        channel: node.context.channel,
+        device: node.context.device,
+        group_path: node.context.group_path || [],
+        tag_name: node.name,
+    };
+}
+
+function knowledgeFieldsPayload() {
+    return {
+        description: document.getElementById("knowledge-description").value,
+        possible_cause: document.getElementById("knowledge-possible-cause").value,
+        how_to_check: document.getElementById("knowledge-how-to-check").value,
+        corrective_action: document.getElementById("knowledge-corrective-action").value,
+        safety_warning: document.getElementById("knowledge-safety-warning").value,
+        additional_notes: document.getElementById("knowledge-additional-notes").value,
+    };
+}
+
+function resetTagKnowledgePanel() {
+    selectedKnowledgeTag = null;
+    pendingKnowledgePayload = null;
+    document.getElementById("tag-knowledge-panel").classList.add("hidden");
+    document.getElementById("tag-knowledge-form").reset();
+    document.getElementById("knowledge-preview").classList.add("hidden");
+    document.getElementById("knowledge-result").classList.add("hidden");
+}
+
+async function loadTagKnowledge(node) {
+    selectedKnowledgeTag = node;
+    const panel = document.getElementById("tag-knowledge-panel");
+    const status = document.getElementById("knowledge-status");
+    panel.classList.remove("hidden");
+    document.getElementById("knowledge-preview").classList.add("hidden");
+    status.textContent = "Loading Tag Knowledge…";
+    status.className = "tree-counts";
+    try {
+        const response = await fetch("/api/tag-knowledge/load", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(knowledgeIdentityPayload(node)),
+        });
+        const data = await response.json();
+        if (selectedKnowledgeTag !== node) return;
+        if (!data.success) throw new Error(data.error || "Unable to load Tag Knowledge.");
+        const knowledge = data.knowledge;
+        const details = data.tag.tag_details || {};
+        document.getElementById("knowledge-kepware-path").textContent = knowledge.kepware_path;
+        document.getElementById("knowledge-address").textContent = details.address ?? "";
+        document.getElementById("knowledge-data-type").textContent = details.data_type ?? "";
+        document.getElementById("knowledge-scan-rate").textContent = details.scan_rate ?? "";
+        document.getElementById("knowledge-access").textContent = details.access ?? "";
+        document.getElementById("knowledge-directory").textContent = knowledge.km_directory;
+        document.getElementById("knowledge-version").textContent = knowledge.exists ? String(knowledge.version) : "—";
+        document.getElementById("knowledge-updated").textContent = knowledge.updated_at || "—";
+        Object.entries(knowledge.fields).forEach(([key, value]) => {
+            const id = `knowledge-${key.replaceAll("_", "-")}`;
+            document.getElementById(id).value = value;
+        });
+        status.textContent = knowledge.exists ? `Active Knowledge version ${knowledge.version}` : "No Tag Knowledge";
+    } catch (error) {
+        if (selectedKnowledgeTag !== node) return;
+        status.textContent = error.message || "Unable to load Tag Knowledge.";
+        status.className = "error-message";
+    }
+}
+
+document.getElementById("tag-knowledge-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!kmTagWriteEnabled || !selectedKnowledgeTag) return;
+    const result = document.getElementById("knowledge-result");
+    try {
+        const payload = {...knowledgeIdentityPayload(), ...knowledgeFieldsPayload()};
+        const response = await fetch("/api/tag-knowledge/preview", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
+        const data = await response.json();
+        if (!data.success) throw new Error(data.error || "Unable to preview Tag Knowledge.");
+        payload.preview_created_at = data.preview.created_at;
+        pendingKnowledgePayload = payload;
+        document.getElementById("knowledge-preview-tag").textContent = data.preview.kepware_path;
+        document.getElementById("knowledge-preview-directory").textContent = data.preview.km_directory;
+        document.getElementById("knowledge-preview-version").textContent = String(data.preview.new_version);
+        document.getElementById("knowledge-preview-file").textContent = data.preview.new_file;
+        const fields = knowledgeFieldsPayload();
+        document.getElementById("knowledge-preview-fields").textContent = Object.entries(fields)
+            .map(([key, value]) => `${key.replaceAll("_", " ")}: ${value || "(empty)"}`)
+            .join("\n");
+        document.getElementById("knowledge-preview").classList.remove("hidden");
+        result.classList.add("hidden");
+    } catch (error) {
+        result.textContent = error.message || "Unable to preview Tag Knowledge.";
+        result.className = "create-result error-message";
+    }
+});
+
+document.getElementById("cancel-knowledge-save").addEventListener("click", () => {
+    pendingKnowledgePayload = null;
+    document.getElementById("knowledge-preview").classList.add("hidden");
+});
+
+document.getElementById("confirm-knowledge-save").addEventListener("click", async () => {
+    if (!kmTagWriteEnabled || !selectedKnowledgeTag || !pendingKnowledgePayload) return;
+    const button = document.getElementById("confirm-knowledge-save");
+    const result = document.getElementById("knowledge-result");
+    button.disabled = true;
+    try {
+        const response = await fetch("/api/tag-knowledge/save", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(pendingKnowledgePayload),
+        });
+        const data = await response.json();
+        if (!data.success) throw new Error(data.error || "Unable to save Tag Knowledge.");
+        result.textContent = `Saved Knowledge version ${data.knowledge.version}: ${data.knowledge.active_file}`;
+        result.className = "create-result success-message";
+        document.getElementById("knowledge-preview").classList.add("hidden");
+        pendingKnowledgePayload = null;
+        await loadTagKnowledge(selectedKnowledgeTag);
+    } catch (error) {
+        result.textContent = error.message || "Unable to save Tag Knowledge.";
+        result.className = "create-result error-message";
+    } finally {
+        button.disabled = false;
+    }
+});
 
 function setTagProperty(id, value) {
     const detail = document.getElementById(id);

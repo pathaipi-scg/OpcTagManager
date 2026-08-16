@@ -120,6 +120,23 @@ class KepwareConfigApiTests(unittest.TestCase):
         self.assertEqual(tag["tag_details"]["address"], "R1")
         self.assertEqual(tag["tag_details"]["scan_rate"], 100)
 
+    def test_get_tag_validates_real_tag_and_uses_structured_encoded_path(self):
+        client, session = self.make_client()
+        path = "/project/channels/Line%201/devices/Device%2FA/tag_groups/Group%20One/tags/Tag%2FOne"
+        session.responses[self.base + path] = FakeResponse(
+            {
+                "common.ALLTYPES_NAME": "Tag/One",
+                "servermain.TAG_ADDRESS": "R2",
+                "servermain.TAG_DATA_TYPE": 5,
+                "servermain.TAG_SCAN_RATE_MILLISECONDS": 1000,
+                "servermain.TAG_READ_WRITE_ACCESS": 1,
+            }
+        )
+        tag = client.get_tag("Line 1", "Device/A", ["Group One"], "Tag/One")
+        self.assertEqual(tag["full_path"], "Line 1.Device/A.Group One.Tag/One")
+        self.assertEqual(tag["context"]["group_path"], ["Group One"])
+        self.assertEqual(session.calls[-1][1], self.base + path)
+
     def create_client(self, current_tags=None, post_response=None, write_enabled=True):
         parent = "/project/channels/Line%201/devices/Device%2FA/tag_groups/Group%20One/tag_groups/Nested%2FGroup"
         tags_path = parent + "/tags"

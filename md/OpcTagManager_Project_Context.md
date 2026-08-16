@@ -28,6 +28,15 @@ Phase 3 browsing remains read-only. Phase 4 adds one gated operation: creating a
 
 Alarm mapping, audio playback, alarm CRUD, and alarm refresh behavior are not part of OpcTagManager.
 
+### Tag Knowledge
+
+- Text-only, versioned Markdown knowledge for existing Kepware Tags is stored beneath configured `KM_TAG_ROOT`.
+- Filesystem hierarchy mirrors structured Channel, Device, recursive Tag Group, and Tag identity components.
+- `KM_TAG_WRITE_ENABLED` is independent of Kepware Tag creation permission and defaults to disabled.
+- Each save creates a new timestamped Markdown file and atomically updates `knowledge.index.json` to identify the active version.
+- Historical Markdown versions are retained. Factory-KM filtering of retired versions must be completed before production search indexes every Tag version.
+- Images, documents, attachments, automated training, and Ask KM integration are not included.
+
 ## Entry point
 
 - Python module: `OpcTagManager.py`
@@ -52,4 +61,4 @@ All deployment-specific configuration is loaded from `config/.env` through `conf
 
 ## Deferred work
 
-Tag editing/deletion, scaling-property cloning, bulk imports, and KM Tag Knowledge integration are intentionally deferred to a later phase.
+Tag editing/deletion, scaling-property cloning, bulk imports, Tag Knowledge attachments, and broader Factory-KM integration are intentionally deferred to a later phase.
