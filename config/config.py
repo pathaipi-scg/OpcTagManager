@@ -39,8 +39,7 @@ INFLUX_PASS = os.getenv("INFLUX_PASS")
 # Poller
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "5"))
 
-# Filesystem paths (default to production values; override in .env per machine)
-MP3_FOLDER = os.getenv("MP3_FOLDER", r"")
+# Filesystem path for rebuilding the OPC tag browser
 BROWSER_SCRIPT = os.getenv("BROWSER_SCRIPT", r"D:\AI\opc_service\app\browser.py")
 
 # production line
@@ -52,6 +51,5 @@ KEPWARE_MODBUS_PORT = int(os.getenv("KEPWARE_MODBUS_PORT", "502"))
 
 RELOAD_BROWSER_ADDR = int(os.getenv("RELOAD_BROWSER_ADDR", "12001"))
 RELOAD_POLLER_ADDR = int(os.getenv("RELOAD_POLLER_ADDR", "12002"))
-RELOAD_ALARM_ADDR = int(os.getenv("RELOAD_ALARM_ADDR", "12003"))
 RELOAD_TEST_ADDR = int(os.getenv("RELOAD_TEST_ADDR", "12004"))
 RELOAD_EAK_ADDR = int(os.getenv("RELOAD_EAK_ADDR", "12005"))

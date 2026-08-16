@@ -1,194 +1,36 @@
-
 # OpcTagManager Project Context
 
-## Project Overview
+## Current baseline
 
-Alarm System เป็นระบบตรวจสอบและแจ้งเตือน Alarm สำหรับโรงงาน
+OpcTagManager is a FastAPI application for browsing OPC/Kepware tags stored in the existing SQL tag data source.
 
-ระบบพัฒนาด้วย Python Flask และมีแผนเชื่อมต่อ OPC-UA เพื่อรับข้อมูล Alarm จาก PLC และอุปกรณ์ภาคสนาม
+The Phase 2 baseline provides:
 
-เป้าหมายคือสร้างระบบที่ดูแลรักษาง่าย ขยายต่อได้ และรองรับการใช้งานจริงในโรงงาน
+- A nested OPC Tag Tree built from active `TagMaster` records.
+- Existing production-line and `SERVER/SYSTEM` filtering.
+- Native folder expand/collapse behavior.
+- Read-only tag selection showing the tag path and Tag ID.
+- The existing OPC tree refresh workflow.
+- A placeholder panel for future tag configuration.
 
----
+Alarm mapping, audio playback, alarm CRUD, and alarm refresh behavior are not part of OpcTagManager.
 
-## Repository
+## Entry point
 
-GitHub Repository
+- Python module: `OpcTagManager.py`
+- FastAPI instance: `app`
+- Run command: `uvicorn OpcTagManager:app --port 1863`
+- Windows launcher: `OpcTagManager.bat`
 
-OpcTagManager
+## Current structure
 
----
+- `OpcTagManager.py`
+- `config/config.py`
+- `templates/base.html`
+- `templates/opc_tag_manager.html`
+- `static/app.css`
+- `static/app.js`
 
-## Current Technology Stack
+## Deferred work
 
-### Backend
-
-- Python
-    
-- Flask
-    
-
-### Frontend
-
-- HTML
-    
-- CSS
-    
-- JavaScript
-    
-
-### Source Control
-
-- Git
-    
-- GitHub
-    
-
----
-
-## Development Environment
-
-### Local Development Machine
-
-ใช้สำหรับ
-
-- พัฒนาโปรแกรม
-    
-- Refactor Code
-    
-- พัฒนา UI
-    
-- ทดสอบ Logic
-    
-
-ข้อจำกัด
-
-- ไม่มี OPC-UA Server จริง
-    
-- ไม่มี PLC จริง
-    
-- ไม่มี Alarm Source จริง
-    
-- อาจไม่มีไฟล์เสียงจริง
-    
-
----
-
-### Production Server
-
-ใช้สำหรับ
-
-- เชื่อมต่อ OPC-UA จริง
-    
-- รับ Alarm จริง
-    
-- ทดสอบเสียงแจ้งเตือนจริง
-    
-- Deploy Production
-    
-
----
-
-## Current Project Structure
-
-Current project files
-
-- OpcTagManager.py
-    
-- config/config.py
-    
-- templates/*
-    
-- static/*
-    
-
----
-
-## Future Architecture
-
-ควรแยก Layer ให้ชัดเจน
-
-### Web Layer
-
-Flask Routes  
-UI Rendering  
-REST API
-
-### Alarm Layer
-
-Alarm Logic  
-Alarm State  
-Alarm Priority
-
-### OPC-UA Layer
-
-Connect  
-Reconnect  
-Subscription  
-Data Processing
-
-### Audio Layer
-
-Play Alarm  
-Stop Alarm  
-Mute Alarm
-
-### Configuration Layer
-
-System Configuration  
-Environment Variables
-
----
-
-## Development Rules
-
-Before making changes
-
-1. Understand existing code
-    
-2. Explain findings
-    
-3. Propose plan
-    
-4. Wait for approval
-    
-
-Do not perform large refactors without approval.
-
-Keep existing functionality working.
-
----
-
-## Current Goal
-
-1. Review current codebase
-    
-2. Improve maintainability
-    
-3. Prepare OPC-UA integration
-    
-4. Prepare alarm audio system
-    
-5. Improve project structure
-    
-
----
-
-## What AI Agents Should Do First
-
-When entering this project
-
-1. Read all source files
-    
-2. Explain current architecture
-    
-3. Identify risks
-    
-4. Suggest improvements
-    
-5. Create refactoring roadmap
-    
-
-Do not modify code immediately.
-
-Always explain before changing code.
+Kepware Configuration API integration and tag-management features are intentionally deferred to a later phase.

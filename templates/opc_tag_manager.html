@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% macro render_tree(node) %}
+<ul class="tree">
+    {% for key, value in node.items() %}
+        {% if value is mapping and value.get('_leaf') %}
+            <li class="leaf">
+                <button
+                    type="button"
+                    class="tag-name tag-click"
+                    data-tagid="{{ value.tagid }}"
+                    data-path="{{ value.fullpath }}"
+                >{{ key }}</button>
+                <span class="tag-type">({{ value.datatype }})</span>
+                <span class="tag-id">ID: {{ value.tagid }}</span>
+            </li>
+        {% else %}
+            <li>
+                <details>
+                    <summary>{{ key }}</summary>
+                    {{ render_tree(value) }}
+                </details>
+            </li>
+        {% endif %}
+    {% endfor %}
+</ul>
+{% endmacro %}
+
+{% block content %}
+<header class="header-bar">
+    <h1>OpcTagManager</h1>
+
+    <form method="post" action="/refresh">
+        <button type="submit" class="refresh-button">Refresh OPC Tree</button>
+    </form>
+</header>
+
+<main class="workspace">
+    <section class="panel opc-panel" aria-labelledby="opc-tree-title">
+        <h2 id="opc-tree-title">OPC Tag Tree</h2>
+
+        {% if tree %}
+            {{ render_tree(tree) }}
+        {% else %}
+            <p>No tag data found.</p>
+        {% endif %}
+    </section>
+
+    <section class="panel details-panel" aria-labelledby="tag-details-title">
+        <h2 id="tag-details-title">Tag Details</h2>
+
+        <div class="field-group">
+            <label for="selected-tag-path">Selected Tag Path</label>
+            <input id="selected-tag-path" type="text" readonly value="No tag selected">
+        </div>
+
+        <div class="field-group">
+            <label for="selected-tag-id">Tag ID</label>
+            <input id="selected-tag-id" type="text" readonly value="">
+        </div>
+
+        <p class="placeholder-message">Tag configuration will be added in the next phase.</p>
+    </section>
+</main>
+{% endblock %}

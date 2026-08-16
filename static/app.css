@@ -1,9 +1,133 @@
-body{font-family:Arial;margin:20px;} table{border-collapse:collapse;} td,th{padding:4px;}
-.mp3-click {
-    cursor: pointer;
-    color: blue;
+html,
+body {
+    height: 100%;
 }
 
-.mp3-click:hover {
-    text-decoration: underline;
+body {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 16px;
+    overflow: hidden;
+    background: #1e1e1e;
+    color: #d4d4d4;
+    font-family: Arial, Helvetica, sans-serif;
+}
+
+button,
+input {
+    font: inherit;
+}
+
+.header-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 15px;
+}
+
+.header-bar h1,
+.panel h2 {
+    margin-top: 0;
+}
+
+.workspace {
+    display: flex;
+    gap: 8px;
+    height: calc(100vh - 98px);
+    min-height: 120px;
+}
+
+.panel {
+    box-sizing: border-box;
+    overflow: auto;
+    padding: 14px;
+    border: 1px solid #444;
+    border-radius: 6px;
+    background: #252526;
+}
+
+.opc-panel {
+    flex: 1 1 65%;
+}
+
+.details-panel {
+    flex: 0 1 35%;
+    min-width: 280px;
+}
+
+.tree {
+    margin: 0;
+    padding-left: 18px;
+    list-style-type: none;
+    white-space: nowrap;
+}
+
+.tree li {
+    margin: 4px 0;
+}
+
+.tag-name {
+    padding: 1px 3px;
+    border: 1px solid transparent;
+    border-radius: 2px;
+    background: transparent;
+    color: #d4d4d4;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.tag-name:hover {
+    color: #4fc3f7;
+}
+
+.tag-name.selected-tag {
+    border-color: #3b82f6;
+    background: #1d4ed8;
+    color: white;
+}
+
+.tag-type {
+    color: #aaa;
+    font-size: 12px;
+}
+
+.tag-id {
+    color: #888;
+    font-size: 11px;
+}
+
+.refresh-button {
+    padding: 6px 12px;
+    border: 0;
+    border-radius: 4px;
+    background: #0e639c;
+    color: white;
+    cursor: pointer;
+}
+
+.field-group {
+    margin-bottom: 18px;
+}
+
+.field-group label {
+    display: block;
+    margin-bottom: 6px;
+    font-weight: bold;
+}
+
+.field-group input {
+    box-sizing: border-box;
+    width: 100%;
+    padding: 8px;
+    border: 1px solid #555;
+    background: #333;
+    color: white;
+}
+
+.placeholder-message {
+    margin-top: 28px;
+    padding: 12px;
+    border-left: 3px solid #0e639c;
+    background: #2d2d30;
+    color: #b8b8b8;
 }
