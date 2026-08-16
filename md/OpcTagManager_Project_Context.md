@@ -1,5 +1,5 @@
 
-# Alarm System Project Context
+# OpcTagManager Project Context
 
 ## Project Overview
 
@@ -15,7 +15,7 @@ Alarm System เป็นระบบตรวจสอบและแจ้ง�
 
 GitHub Repository
 
-alarm_system
+OpcTagManager
 
 ---
 
@@ -93,7 +93,7 @@ alarm_system
 
 Current project files
 
-- alarm_list.py
+- OpcTagManager.py
     
 - config/config.py
     

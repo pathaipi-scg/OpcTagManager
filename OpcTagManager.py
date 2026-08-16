@@ -12,7 +12,7 @@ from config.config import *
 
 from pyModbusTCP.client import ModbusClient
 
-app = FastAPI()
+app = FastAPI(title="OpcTagManager")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
