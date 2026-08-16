@@ -2,7 +2,7 @@
 
 ## Current baseline
 
-OpcTagManager is a FastAPI application with two separate read-only tag views.
+OpcTagManager is a FastAPI application with two separate tag views. Runtime browsing remains read-only; Kepware Tag creation and KM Tag Knowledge saving are independently gated operations.
 
 ### OPC Runtime Tree
 
@@ -50,6 +50,7 @@ Alarm mapping, audio playback, alarm CRUD, and alarm refresh behavior are not pa
 - `OpcTagManager.py`
 - `config/config.py`
 - `services/kepware_config_api.py`
+- `services/tag_knowledge.py`
 - `templates/base.html`
 - `templates/opc_tag_manager.html`
 - `static/app.css`
@@ -62,3 +63,9 @@ All deployment-specific configuration is loaded from `config/.env` through `conf
 ## Deferred work
 
 Tag editing/deletion, scaling-property cloning, bulk imports, Tag Knowledge attachments, and broader Factory-KM integration are intentionally deferred to a later phase.
+
+## Current milestone and next validation
+
+Phase 4.3 is complete and its automated filesystem tests used temporary KM roots. No real Knowledge save has yet been made beneath `D:\KM\Vault\Tags`.
+
+The next task is a manually approved first Knowledge save for `LP2 / MIX / Cement_FML`, followed by a second-version test. Phase 4.4 must not begin until those live checks succeed.

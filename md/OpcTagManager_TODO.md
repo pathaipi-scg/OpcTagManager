@@ -68,3 +68,15 @@ The following are intentionally outside Phase 2:
 - [x] Test writes exclusively against temporary KM roots.
 
 Before production Factory-KM search is enabled across Tag versions, implement active/retired-version filtering so historical Markdown files are not indexed as simultaneously current.
+
+## Next manual validation
+
+- [ ] Set `KEPWARE_CONFIG_WRITE_ENABLED=false` unless Kepware writing is specifically required.
+- [ ] Enable `KM_TAG_WRITE_ENABLED` only for the approved manual test and restart OpcTagManager.
+- [ ] Save Version 1 Knowledge for `LP2 / MIX / Cement_FML`.
+- [ ] Verify `D:\KM\Vault\Tags\LP2\MIX\Cement_FML\` contains one timestamped Markdown file and `knowledge.index.json`.
+- [ ] Verify actual Kepware metadata, active status/index, and containment beneath `KM_TAG_ROOT`.
+- [ ] Verify Factory-KM discovers the new Tags folder through its filesystem tree.
+- [ ] Save Version 2 and verify increment plus historical preservation.
+
+After these checks succeed, the next planned phase is Phase 4.4 for image and document attachments. Do not begin it automatically.
