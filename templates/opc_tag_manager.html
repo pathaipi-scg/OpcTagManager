@@ -55,9 +55,14 @@
         <div id="kepware-tree-view" class="tree-view hidden">
             <div class="kepware-heading">
                 <h2>Kepware Configuration Tree</h2>
+                <div class="kepware-controls">
                 <span id="kepware-status" class="connection-status pending">
                     Kepware Configuration API — Checking…
                 </span>
+                <button type="button" id="refresh-kepware" class="refresh-button">
+                    Refresh Kepware
+                </button>
+                </div>
             </div>
             <p id="kepware-error" class="error-message hidden"></p>
             <p id="kepware-counts" class="tree-counts hidden"></p>
@@ -93,6 +98,7 @@
                     <dt>Full Kepware Path</dt><dd id="kepware-object-path"></dd>
                     <dt class="tag-property">Address</dt><dd class="tag-property" id="kepware-tag-address"></dd>
                     <dt class="tag-property">Data Type</dt><dd class="tag-property" id="kepware-tag-data-type"></dd>
+                    <dt class="tag-property">Scan Rate</dt><dd class="tag-property" id="kepware-tag-scan-rate"></dd>
                     <dt class="tag-property">Description</dt><dd class="tag-property" id="kepware-tag-description"></dd>
                     <dt class="tag-property">Access</dt><dd class="tag-property" id="kepware-tag-access"></dd>
                 </dl>

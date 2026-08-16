@@ -3,7 +3,7 @@ import subprocess
 import sys
 
 import pyodbc
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -19,6 +19,7 @@ from config.config import (
     KEPWARE_CONFIG_API_TIMEOUT,
     KEPWARE_CONFIG_API_USER,
     KEPWARE_CONFIG_API_VERIFY_SSL,
+    KEPWARE_CONFIG_CACHE_TTL_SEC,
     LOG_LEVEL,
     PRODUCTION_LINE,
     SQL_DB,
@@ -49,6 +50,7 @@ kepware_config_api = KepwareConfigApi(
         password=KEPWARE_CONFIG_API_PASSWORD,
         verify_ssl=KEPWARE_CONFIG_API_VERIFY_SSL,
         timeout=KEPWARE_CONFIG_API_TIMEOUT,
+        cache_ttl_sec=KEPWARE_CONFIG_CACHE_TTL_SEC,
     )
 )
 
@@ -127,19 +129,59 @@ def kepware_status():
         )
 
 
-@app.get("/api/kepware/tree")
-def kepware_tree():
+def kepware_browse_response(load_nodes):
     try:
-        return kepware_config_api.get_configuration_tree()
+        return {
+            "connected": True,
+            "base_url": kepware_config_api.base_url,
+            "nodes": load_nodes(),
+        }
     except KepwareConfigError as exc:
         return JSONResponse(
             {
                 "connected": False,
                 "error": str(exc),
                 "base_url": kepware_config_api.base_url,
-                "tree": [],
+                "nodes": [],
             }
         )
+
+
+@app.get("/api/kepware/channels")
+def kepware_channels():
+    return kepware_browse_response(kepware_config_api.get_channels)
+
+
+@app.get("/api/kepware/devices")
+def kepware_devices(channel: str = Query(min_length=1)):
+    return kepware_browse_response(lambda: kepware_config_api.get_devices(channel))
+
+
+@app.get("/api/kepware/device-children")
+def kepware_device_children(
+    channel: str = Query(min_length=1),
+    device: str = Query(min_length=1),
+):
+    return kepware_browse_response(
+        lambda: kepware_config_api.get_device_children(channel, device)
+    )
+
+
+@app.get("/api/kepware/group-children")
+def kepware_group_children(
+    channel: str = Query(min_length=1),
+    device: str = Query(min_length=1),
+    group_path: list[str] = Query(min_length=1),
+):
+    return kepware_browse_response(
+        lambda: kepware_config_api.get_group_children(channel, device, group_path)
+    )
+
+
+@app.post("/api/kepware/refresh")
+def refresh_kepware_cache():
+    kepware_config_api.clear_cache()
+    return kepware_browse_response(kepware_config_api.get_channels)
 
 
 if __name__ == "__main__":

@@ -27,3 +27,11 @@ The following are intentionally outside Phase 2:
 - [x] Handle an unavailable Kepware API without affecting `GET /`.
 - [x] Use only deployment configuration loaded from `config/.env`.
 - [x] Keep all Kepware Configuration API operations read-only.
+
+## Phase 3.2 stabilization
+
+- [x] Replace full recursive loading with lazy node expansion.
+- [x] Cache read-only Kepware collection responses using configured TTL.
+- [x] Add a Kepware-only cache refresh.
+- [x] Preserve loaded nodes when temporary child requests fail.
+- [x] Validate bounded lazy requests against the real Kepware server.

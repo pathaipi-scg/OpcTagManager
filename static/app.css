@@ -165,6 +165,22 @@ input {
     gap: 12px;
 }
 
+.kepware-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.refresh-button:disabled {
+    opacity: 0.6;
+    cursor: wait;
+}
+
+.loading-node {
+    color: #aaa;
+    font-style: italic;
+}
+
 .connection-status {
     padding: 5px 8px;
     border-radius: 4px;

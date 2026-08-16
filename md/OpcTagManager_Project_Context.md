@@ -18,6 +18,9 @@ This is the runtime-discovered view backed by SQL and `TagMaster`.
 
 - Direct read-only access to Kepware Configuration API v1.
 - Separate Channel, Device, Tag Group, nested Tag Group, and Tag hierarchy.
+- Lazy loading: Channels first, then only the expanded object's immediate children.
+- Short-lived endpoint caching with TTL configured in `config/.env`.
+- A Kepware-only refresh that clears the read cache and reloads Channels.
 - Read-only selected-object details and redacted raw properties.
 - Graceful unavailable/authentication/SSL/timeout/malformed-response handling.
 
