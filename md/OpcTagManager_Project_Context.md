@@ -47,6 +47,20 @@ Alarm mapping, audio playback, alarm CRUD, and alarm refresh behavior are not pa
 - Reads, index validation, atomic JSON replacement, SHA-256 calculation, duplicate-hash lookup, link, and unlink foundations are implemented. File upload and interactive linking are not.
 - APIs accept structured Kepware identity only. They never accept a client filesystem path, and write APIs re-fetch the Tag from Kepware before calculating the Tag directory.
 
+### Resource upload and linking (Phase 4.5)
+
+- Public types are fixed singular values mapped server-side to plural category directories.
+- ResourceIds are generated only by the server as a type prefix plus UUID4 and never derive from filenames or display names.
+- Uploads stream in 1 MiB chunks into `_Resources\.tmp`, enforcing `KM_RESOURCE_MAX_UPLOAD_MB` while calculating SHA-256; temporary files are always cleaned.
+- A strict engineering-document extension allowlist rejects executables, scripts, archives, paths, UNC/drive-qualified names, NULs, and controls.
+- SHA-256 duplicate detection is global across all types and versions. Duplicate content creates no new file/version and returns the existing identity for explicit reuse.
+- Stored filenames use a sanitized display name, `vNNN`, and timestamp. Original filenames remain metadata only.
+- New versions retain history, atomically advance the active index, and leave ResourceId-based Tag references unchanged.
+- Active or historical files are resolved only through validated index metadata. Search covers fixed type and safe resource metadata.
+- Link relation type is derived from resource type. Batch linking validates every Kepware Tag before mutation and reports retry-safe per-Tag outcomes.
+- The UI supports upload, duplicate reuse, search/link, lazy-tree multi-Tag selection, open/history/unlink, and explicit new-version confirmation.
+- OpcTagManager stores originals and identity/version/link metadata. Factory-KM owns future AI extraction, transformation, training, and reading.
+
 ### Ownership boundary
 
 Factory-KM owns Chat, Task, Conversation, task closure/summary, actual repair history, parts changed and photos from actual work, and Maintenance Events. OpcTagManager owns Kepware Tag identity, curated/versioned Tag Knowledge, Shared Resources, Tag-to-Resource linking, and future review/promotion of Factory-KM feedback.
@@ -79,8 +93,8 @@ All deployment-specific configuration is loaded from `config/.env` through `conf
 
 ## Deferred work
 
-Tag editing/deletion, scaling-property cloning, bulk imports, resource uploads, and broader Factory-KM integration are intentionally deferred to a later phase. Phase 4.5 will add Upload New Resource, Link Existing Resource, file versioning workflows, duplicate warnings, and multi-Tag linking. Richer Supplier/Contact, Quotation/Purchase, maintenance history, Factory-KM feedback/promotion, and external Inventory/ERP lookup remain later work. Stock remains external live data keyed in future by fields such as PartNo and MaterialCode.
+Tag editing/deletion, scaling-property cloning, bulk imports, and broader Factory-KM integration are intentionally deferred. Richer Supplier/Contact, Quotation/Purchase, maintenance history, Factory-KM feedback/promotion, and external Inventory/ERP lookup remain later work. Stock remains external live data keyed in future by fields such as PartNo and MaterialCode.
 
 ## Current milestone and next validation
 
-Phase 4.4 foundation is complete. One earlier manually approved live Knowledge V1 was saved for `LP2.MIX.OTM_TEST_Cement_FML`. Phase 4.4 automated filesystem tests use temporary KM roots only and do not write to the real Vault.
+Phase 4.5 is complete pending review. The existing live Knowledge V1 for `LP2.MIX.OTM_TEST_Cement_FML` was not modified. Automated filesystem tests use temporary KM roots only.

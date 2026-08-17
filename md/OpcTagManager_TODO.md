@@ -98,9 +98,18 @@ The second-version live validation remains a separately approved manual operatio
 
 ## Phase 4.5 — do not start without approval
 
-- [ ] Upload New Resource.
-- [ ] Link Existing Resource interaction.
-- [ ] Resource file-version workflow and SHA-256 duplicate warning.
-- [ ] Multi-Tag linking workflow.
+- [x] Stream Upload New Resource with allowlisted extension and configured size enforcement.
+- [x] Generate type-prefixed UUID4 ResourceIds server-side.
+- [x] Use readable version/timestamp filenames and retain original filename metadata.
+- [x] Detect identical SHA-256 globally without creating another physical file.
+- [x] Upload immutable versions under one ResourceId and atomically activate the latest.
+- [x] Open active and historical versions without accepting paths or filenames.
+- [x] Search by fixed resource type and safe metadata.
+- [x] Implement duplicate reuse, Link Existing, unlink, history, and version-upload UI.
+- [x] Implement lazy-tree multi-Tag selection without full-tree traversal.
+- [x] Prevalidate all batch targets and return retry-safe per-Tag outcomes.
+- [x] Keep automated writes beneath temporary KM roots.
+
+Phase 4.5 awaits review. Do not enable a write gate or perform a live Resource upload before separate approval.
 
 Later phases retain Supplier/Contact richer UI, Quotation/Purchase workflows, Maintenance History Reader, Factory-KM Feedback Reader and Knowledge Promotion, and Inventory/ERP integration. Stock remains external live data.

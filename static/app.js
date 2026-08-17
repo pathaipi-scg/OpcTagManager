@@ -123,6 +123,7 @@ const kepwareWriteEnabled =
     document.getElementById("kepware-tree-view").dataset.writeEnabled === "true";
 const kepwareTreeView = document.getElementById("kepware-tree-view");
 const kmTagWriteEnabled = kepwareTreeView.dataset.kmWriteEnabled === "true";
+const kmResourceWriteEnabled = kepwareTreeView.dataset.kmResourceWriteEnabled === "true";
 const configuredTagDefaults = {
     dataType: Number.parseInt(kepwareTreeView.dataset.defaultDataType, 10),
     scanRate: Number.parseInt(kepwareTreeView.dataset.defaultScanRate, 10),
@@ -135,6 +136,9 @@ let selectedTemplateCandidate = null;
 let templateSourcePath = "";
 let selectedKnowledgeTag = null;
 let pendingKnowledgePayload = null;
+let resourceForLinking = null;
+let resourceTargetTags = new Map();
+let resourceTagSelectionMode = false;
 
 viewTabs.forEach((tab) => {
     tab.addEventListener("click", () => {
@@ -320,6 +324,10 @@ function updateLoadedCounts() {
 }
 
 function selectKepwareObject(button, node) {
+    if (resourceTagSelectionMode && node.object_type === "Tag") {
+        resourceTargetTags.set(node.full_path, node);
+        renderResourceTargets();
+    }
     document.querySelectorAll(".kepware-object").forEach((item) => {
         item.classList.remove("selected-object");
     });
@@ -601,7 +609,20 @@ async function loadTagResources(node) {
             type.textContent = link.relation_type;
             const name = document.createElement("span");
             name.textContent = link.resource.display_name;
-            item.append(type, name);
+            const details = document.createElement("span");
+            details.textContent = [link.resource.manufacturer, link.resource.model, link.resource.part_no, link.resource.material_code,
+                `v${link.resource.active_version}`, link.resource.updated_at].filter(Boolean).join(" · ");
+            const actions = document.createElement("div"); actions.className = "preview-actions";
+            actions.innerHTML = `<a href="/api/resources/${encodeURIComponent(link.resource_id)}/file" target="_blank">Open</a>`;
+            const versions = document.createElement("button"); versions.type = "button"; versions.textContent = "Versions";
+            versions.addEventListener("click", () => showResourceVersions(link.resource));
+            const unlink = document.createElement("button"); unlink.type = "button"; unlink.textContent = "Unlink"; unlink.disabled = !kmResourceWriteEnabled;
+            unlink.addEventListener("click", () => unlinkResource(link.resource_id));
+            const more = document.createElement("button"); more.type = "button"; more.textContent = "Link to More Tags"; more.disabled = !kmResourceWriteEnabled;
+            more.addEventListener("click", () => beginTargetSelection(link.resource));
+            const newVersion = document.createElement("button"); newVersion.type = "button"; newVersion.textContent = "Upload New Version"; newVersion.disabled = !kmResourceWriteEnabled;
+            newVersion.addEventListener("click", () => showVersionUpload(link.resource));
+            actions.append(versions, unlink, more, newVersion); item.append(type, name, details, actions);
             list.append(item);
         });
     } catch (error) {
@@ -610,6 +631,86 @@ async function loadTagResources(node) {
         status.className = "error-message";
     }
 }
+
+function showWorkflow(viewId) {
+    document.getElementById("resource-workflow").classList.remove("hidden");
+    ["resource-search-view", "resource-upload-form", "resource-version-view", "resource-target-view"].forEach((id) =>
+        document.getElementById(id).classList.toggle("hidden", id !== viewId));
+    document.getElementById("resource-workflow-result").classList.add("hidden");
+}
+
+document.getElementById("link-existing-resource").addEventListener("click", async () => { showWorkflow("resource-search-view"); await searchResources(); });
+document.getElementById("upload-new-resource").addEventListener("click", () => showWorkflow("resource-upload-form"));
+document.getElementById("close-resource-workflow").addEventListener("click", () => { resourceTagSelectionMode = false; document.getElementById("resource-workflow").classList.add("hidden"); });
+document.getElementById("resource-search").addEventListener("input", searchResources);
+
+async function searchResources() {
+    const response = await fetch(`/api/resources?q=${encodeURIComponent(document.getElementById("resource-search").value)}`);
+    const data = await response.json(); const list = document.getElementById("resource-search-results"); list.replaceChildren();
+    (data.resources || []).forEach((resource) => {
+        const button = document.createElement("button"); button.type = "button";
+        const active = resource.versions.find((version) => version.version === resource.active_version);
+        button.textContent = [resource.resource_type, resource.display_name, resource.manufacturer, resource.model,
+            `v${resource.active_version}`, active?.original_filename].filter(Boolean).join(" — ");
+        button.addEventListener("click", () => beginTargetSelection(resource)); list.append(button);
+    });
+}
+
+document.getElementById("resource-upload-form").addEventListener("submit", async (event) => {
+    event.preventDefault(); const result = document.getElementById("resource-workflow-result");
+    const response = await fetch("/api/resources/upload", {method: "POST", body: new FormData(event.currentTarget)}); const data = await response.json();
+    if (!data.success) return showResourceResult(data.error || "Upload failed.", true);
+    if (data.status === "duplicate") {
+        resourceForLinking = data.duplicate; showResourceResult(`This file already exists: ${data.duplicate.display_name}, ${data.duplicate.resource_type}, version ${data.duplicate.version}. Use Existing Resource to link it.`);
+        const use = document.createElement("button"); use.textContent = "Use Existing Resource"; use.onclick = () => beginTargetSelection(data.duplicate); result.append(document.createElement("br"), use); return;
+    }
+    showResourceResult(`Created ${data.resource.resource_id}, active version ${data.resource.active_version}.`); beginTargetSelection(data.resource);
+});
+
+function beginTargetSelection(resource) {
+    resourceForLinking = resource; resourceTargetTags = new Map();
+    if (selectedKnowledgeTag) resourceTargetTags.set(selectedKnowledgeTag.full_path, selectedKnowledgeTag);
+    showWorkflow("resource-target-view"); renderResourceTargets();
+}
+
+function renderResourceTargets() {
+    const container = document.getElementById("resource-target-tags"); container.replaceChildren();
+    resourceTargetTags.forEach((node, path) => { const chip = document.createElement("button"); chip.type = "button"; chip.textContent = `${path} ×`; chip.onclick = () => { resourceTargetTags.delete(path); renderResourceTargets(); }; container.append(chip); });
+}
+
+document.getElementById("select-more-tags").addEventListener("click", () => { resourceTagSelectionMode = !resourceTagSelectionMode; showResourceResult(resourceTagSelectionMode ? "Selection mode active: manually expand the lazy Kepware tree and click Tag nodes." : "Selection mode stopped."); });
+document.getElementById("link-resource-targets").addEventListener("click", async () => {
+    if (!resourceForLinking || !resourceTargetTags.size) return;
+    const tags = [...resourceTargetTags.values()].map((node) => ({channel: node.context.channel, device: node.context.device, tag_groups: node.context.group_path || [], tag: node.name}));
+    const response = await fetch("/api/tag-resources/link-many", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({resource_id: resourceForLinking.resource_id, tags})});
+    const data = await response.json(); showResourceResult(data.success ? data.results.map((r) => `${r.kepware_path}: ${r.status}`).join("; ") : data.error, !data.success);
+    resourceTagSelectionMode = false; if (selectedKnowledgeTag) await loadTagResources(selectedKnowledgeTag);
+});
+
+async function unlinkResource(resourceId) {
+    const response = await fetch("/api/tag-resources/unlink", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({...knowledgeIdentityPayload(), resource_id: resourceId})});
+    const data = await response.json(); if (!data.success) showResourceResult(data.error, true); else await loadTagResources(selectedKnowledgeTag);
+}
+
+function showResourceVersions(resource) {
+    showWorkflow("resource-search-view"); const list = document.getElementById("resource-search-results"); list.replaceChildren();
+    [...resource.versions].reverse().forEach((version) => { const link = document.createElement("a"); link.target = "_blank"; link.href = `/api/resources/${encodeURIComponent(resource.resource_id)}/file?version=${version.version}`; link.textContent = `v${version.version}${version.version === resource.active_version ? " Active" : ""} — ${version.original_filename}`; list.append(link); });
+}
+
+function showVersionUpload(resource) { resourceForLinking = resource; showWorkflow("resource-version-view"); document.getElementById("resource-version-preview").textContent = `${resource.display_name}: current v${resource.active_version}, new v${resource.active_version + 1}`; }
+document.getElementById("resource-version-file").addEventListener("change", (event) => {
+    if (!resourceForLinking) return;
+    const selected = event.target.files[0]?.name || "No file selected";
+    document.getElementById("resource-version-preview").textContent = `${resourceForLinking.display_name}: current v${resourceForLinking.active_version}, new v${resourceForLinking.active_version + 1}, selected file: ${selected}`;
+});
+document.getElementById("confirm-resource-version").addEventListener("click", async () => {
+    const file = document.getElementById("resource-version-file").files[0]; if (!file || !resourceForLinking) return;
+    const form = new FormData(); form.append("file", file); const response = await fetch(`/api/resources/${encodeURIComponent(resourceForLinking.resource_id)}/versions`, {method: "POST", body: form}); const data = await response.json();
+    showResourceResult(data.status === "duplicate" ? `This version/content already exists as ${data.duplicate.display_name} v${data.duplicate.version}.` : data.success ? `Active version is now ${data.resource.active_version}.` : data.error, !data.success);
+    if (data.success && data.resource && selectedKnowledgeTag) await loadTagResources(selectedKnowledgeTag);
+});
+
+function showResourceResult(message, error = false) { const result = document.getElementById("resource-workflow-result"); result.textContent = message; result.className = `create-result ${error ? "error-message" : "success-message"}`; }
 
 async function loadTagKnowledge(node) {
     selectedKnowledgeTag = node;

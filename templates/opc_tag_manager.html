@@ -237,8 +237,40 @@
                 <h3>Reference Resources</h3>
                 <p id="tag-resources-status" class="tree-counts">Loading Reference Resources…</p>
                 <div id="tag-resources-list" class="resource-list"></div>
-                <button type="button" id="link-existing-resource" disabled>Link Existing Resource</button>
-                <p class="tree-counts">Resource linking UI will be added in Phase 4.5.</p>
+                {% if not km_resource_write_enabled %}<p class="write-disabled-message">Shared Resource Write Disabled</p>{% endif %}
+                <div class="preview-actions">
+                    <button type="button" id="link-existing-resource" {{ 'disabled' if not km_resource_write_enabled else '' }}>Link Existing Resource</button>
+                    <button type="button" id="upload-new-resource" {{ 'disabled' if not km_resource_write_enabled else '' }}>Upload New Resource</button>
+                </div>
+                <div id="resource-workflow" class="create-preview hidden">
+                    <div id="resource-search-view" class="hidden">
+                        <h4>Link Existing Resource</h4>
+                        <input id="resource-search" type="search" placeholder="Search name, manufacturer, model, part or material code">
+                        <div id="resource-search-results" class="resource-list"></div>
+                    </div>
+                    <form id="resource-upload-form" class="hidden">
+                        <h4>Upload New Resource</h4>
+                        <div class="field-group"><label>Resource Type *</label><select name="resource_type" required><option>Manual</option><option>Drawing</option><option>Supplier</option><option>Quotation</option><option>Purchase</option><option>Photo</option><option value="GeneralDocument">General Document</option></select></div>
+                        <div class="field-group"><label>Display Name *</label><input name="display_name" required></div>
+                        <div class="field-group"><label>Manufacturer</label><input name="manufacturer"></div>
+                        <div class="field-group"><label>Model</label><input name="model"></div>
+                        <div class="field-group"><label>Part No.</label><input name="part_no"></div>
+                        <div class="field-group"><label>Material Code</label><input name="material_code"></div>
+                        <div class="field-group"><label>File *</label><input name="file" type="file" required></div>
+                        <button type="submit" class="refresh-button">Upload Resource</button>
+                    </form>
+                    <div id="resource-version-view" class="hidden">
+                        <h4>Upload New Version</h4><p id="resource-version-preview"></p>
+                        <input id="resource-version-file" type="file"><button type="button" id="confirm-resource-version">Confirm New Version</button>
+                    </div>
+                    <div id="resource-target-view" class="hidden">
+                        <h4>Target Tags</h4><div id="resource-target-tags"></div>
+                        <button type="button" id="select-more-tags">Select More Tags</button>
+                        <button type="button" id="link-resource-targets" class="refresh-button">Link to Selected Tags</button>
+                    </div>
+                    <p id="resource-workflow-result" class="create-result hidden"></p>
+                    <button type="button" id="close-resource-workflow">Close</button>
+                </div>
             </section>
         </div>
     </section>

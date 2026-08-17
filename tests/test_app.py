@@ -1,10 +1,16 @@
 import asyncio
+import inspect
 import json
+import io
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
 import OpcTagManager
+from starlette.datastructures import UploadFile
 from services.kepware_config_api import KepwareConfigError
+from services.shared_resources import SharedResourceStore
 
 
 class FakeCursor:
@@ -129,7 +135,7 @@ class OpcTagManagerAppTests(unittest.TestCase):
         link.side_effect = OpcTagManager.SharedResourceError("Shared Resource write mode is disabled.")
         status, body = self.request("POST", "/api/tag-resources/link", {
             "channel": "LP2", "device": "MIX", "tag_name": "Cement_FML",
-            "resource_id": "DOC_AS550_MANUAL", "relation_type": "Manual",
+            "resource_id": "MAN_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         })
         self.assertEqual(status, 403)
         self.assertIn("write mode is disabled", json.loads(body)["error"])
@@ -137,11 +143,58 @@ class OpcTagManagerAppTests(unittest.TestCase):
     def test_resource_link_rejects_client_filesystem_path(self):
         status, body = self.request("POST", "/api/tag-resources/link", {
             "channel": "LP2", "device": "MIX", "tag_name": "Cement_FML",
-            "resource_id": "DOC_AS550_MANUAL", "relation_type": "Manual",
+            "resource_id": "MAN_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "filesystem_path": "D:\\KM\\Vault\\Tags\\other",
         })
         self.assertEqual(status, 422)
         self.assertEqual(json.loads(body)["detail"][0]["type"], "extra_forbidden")
+
+    def test_physical_upload_routes_reject_while_gate_disabled(self):
+        response = OpcTagManager.upload_resource("Manual", "Manual", UploadFile(io.BytesIO(b"data"), filename="manual.pdf"))
+        self.assertEqual(response.status_code, 403)
+        response = OpcTagManager.upload_resource_version("MAN_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", UploadFile(io.BytesIO(b"data"), filename="v2.pdf"))
+        self.assertEqual(response.status_code, 403)
+
+    def test_upload_ignores_injected_creation_identity_and_generates_resource_id(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = SharedResourceStore(Path(temporary) / "Tags", "Asia/Bangkok", True)
+            with patch.object(OpcTagManager, "shared_resource_store", store), patch.object(OpcTagManager, "KM_RESOURCE_WRITE_ENABLED", True):
+                response = OpcTagManager.upload_resource("Manual", "Safe Manual", UploadFile(io.BytesIO(b"safe"), filename="manual.pdf"), None, None, None, None)
+            resource_id = response["resource"]["resource_id"]
+            self.assertNotEqual(resource_id, "MAN_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+            self.assertTrue(resource_id.startswith("MAN_"))
+            parameters = inspect.signature(OpcTagManager.upload_resource).parameters
+            self.assertNotIn("resource_id", parameters)
+            self.assertNotIn("filesystem_path", parameters)
+
+    def test_batch_validates_every_tag_before_any_link_mutation(self):
+        payload = {"resource_id": "MAN_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "tags": [
+            {"channel": "LP2", "device": "MIX", "tag_groups": [], "tag": "One"},
+            {"channel": "LP2", "device": "MIX", "tag_groups": [], "tag": "Missing"},
+        ]}
+        with patch.object(OpcTagManager, "KM_RESOURCE_WRITE_ENABLED", True), \
+             patch.object(OpcTagManager.shared_resource_store, "read_index", return_value={}), \
+             patch.object(OpcTagManager.shared_resource_store, "link") as link, \
+             patch.object(OpcTagManager.kepware_config_api, "get_tag", side_effect=[{
+                 "name": "One", "full_path": "LP2.MIX.One", "context": {"channel": "LP2", "device": "MIX", "group_path": []}, "tag_details": {}
+             }, KepwareConfigError("missing")]) as get_tag:
+            status, _body = self.request("POST", "/api/tag-resources/link-many", payload)
+        self.assertEqual(status, 400)
+        self.assertEqual(get_tag.call_count, 2)
+        link.assert_not_called()
+
+    def test_batch_reports_partial_failure_and_retry_safe_statuses(self):
+        payload = {"resource_id": "MAN_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "tags": [
+            {"channel": "LP2", "device": "MIX", "tag_groups": [], "tag": "One"},
+            {"channel": "LP2", "device": "MIX", "tag_groups": [], "tag": "Two"},
+        ]}
+        nodes = [{"name": name, "full_path": f"LP2.MIX.{name}", "context": {"channel": "LP2", "device": "MIX", "group_path": []}, "tag_details": {}} for name in ("One", "Two")]
+        with patch.object(OpcTagManager, "KM_RESOURCE_WRITE_ENABLED", True), patch.object(OpcTagManager.shared_resource_store, "read_index", return_value={}), \
+             patch.object(OpcTagManager.kepware_config_api, "get_tag", side_effect=nodes), \
+             patch.object(OpcTagManager.shared_resource_store, "link", side_effect=[{"status": "already_linked"}, OpcTagManager.SharedResourceError("disk failure")]):
+            status, body = self.request("POST", "/api/tag-resources/link-many", payload)
+        self.assertEqual(status, 200)
+        self.assertEqual([item["status"] for item in json.loads(body)["results"]], ["already_linked", "failed"])
 
 
 if __name__ == "__main__":

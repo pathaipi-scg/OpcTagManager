@@ -4,8 +4,8 @@ import sys
 from datetime import datetime
 
 import pyodbc
-from fastapi import FastAPI, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi import FastAPI, File, Form, Query, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field
@@ -31,6 +31,7 @@ from config.config import (
     KM_TAG_ROOT,
     KM_TAG_WRITE_ENABLED,
     KM_RESOURCE_WRITE_ENABLED,
+    KM_RESOURCE_MAX_UPLOAD_MB,
     PRODUCTION_LINE,
     SQL_DB,
     SQL_DRIVER,
@@ -75,6 +76,7 @@ shared_resource_store = SharedResourceStore(
     tag_root=KM_TAG_ROOT,
     timezone_name=APP_TIMEZONE,
     write_enabled=KM_RESOURCE_WRITE_ENABLED,
+    max_upload_mb=KM_RESOURCE_MAX_UPLOAD_MB,
 )
 
 
@@ -110,11 +112,24 @@ class SaveTagKnowledgeRequest(TagKnowledgeIdentityRequest):
 
 class TagResourceLinkRequest(TagKnowledgeIdentityRequest):
     resource_id: str
-    relation_type: str
 
 
 class TagResourceUnlinkRequest(TagKnowledgeIdentityRequest):
     resource_id: str
+
+
+class BatchTagIdentity(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    channel: str
+    device: str
+    tag_groups: list[str] = Field(default_factory=list)
+    tag: str
+
+
+class LinkManyResourcesRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    resource_id: str
+    tags: list[BatchTagIdentity] = Field(min_length=1, max_length=200)
 
 
 def get_conn():
@@ -339,9 +354,9 @@ def save_tag_knowledge(payload: SaveTagKnowledgeRequest):
 
 
 @app.get("/api/resources")
-def list_resources():
+def list_resources(resource_type: str | None = None, q: str | None = None):
     try:
-        return {"success": True, "resources": shared_resource_store.list_resources()}
+        return {"success": True, "resources": shared_resource_store.list_resources(resource_type, q)}
     except SharedResourceError as exc:
         return _resource_error(exc)
 
@@ -350,6 +365,39 @@ def list_resources():
 def get_resource(resource_id: str):
     try:
         return {"success": True, "resource": shared_resource_store.read_index(resource_id)}
+    except SharedResourceError as exc:
+        return _resource_error(exc)
+
+
+@app.post("/api/resources/upload")
+def upload_resource(resource_type: str = Form(), display_name: str = Form(), file: UploadFile = File(),
+                    manufacturer: str | None = Form(None), model: str | None = Form(None),
+                    part_no: str | None = Form(None), material_code: str | None = Form(None)):
+    try:
+        result = shared_resource_store.upload_new(resource_type, display_name, file.filename or "", file.file,
+                                                   manufacturer, model, part_no, material_code)
+        return {"success": True, **result}
+    except SharedResourceError as exc:
+        return _resource_error(exc, write=True)
+    finally:
+        file.file.close()
+
+
+@app.post("/api/resources/{resource_id}/versions")
+def upload_resource_version(resource_id: str, file: UploadFile = File()):
+    try:
+        return {"success": True, **shared_resource_store.upload_version(resource_id, file.filename or "", file.file)}
+    except SharedResourceError as exc:
+        return _resource_error(exc, write=True)
+    finally:
+        file.file.close()
+
+
+@app.get("/api/resources/{resource_id}/file")
+def open_resource_file(resource_id: str, version: int | None = Query(default=None, ge=1)):
+    try:
+        path, _index, item = shared_resource_store.resolve_file(resource_id, version)
+        return FileResponse(path, filename=item["original_filename"])
     except SharedResourceError as exc:
         return _resource_error(exc)
 
@@ -373,7 +421,7 @@ def get_tag_resources(
 def link_tag_resource(payload: TagResourceLinkRequest):
     try:
         identity, _node = _validated_knowledge_identity(payload)
-        return {"success": True, "references": shared_resource_store.link(identity, payload.resource_id, payload.relation_type)}
+        return {"success": True, "references": shared_resource_store.link(identity, payload.resource_id)}
     except (KepwareConfigError, TagKnowledgeError, SharedResourceError) as exc:
         return _resource_error(exc, write=True)
 
@@ -383,6 +431,30 @@ def unlink_tag_resource(payload: TagResourceUnlinkRequest):
     try:
         identity, _node = _validated_knowledge_identity(payload)
         return {"success": True, "references": shared_resource_store.unlink(identity, payload.resource_id)}
+    except (KepwareConfigError, TagKnowledgeError, SharedResourceError) as exc:
+        return _resource_error(exc, write=True)
+
+
+@app.post("/api/tag-resources/link-many")
+def link_many_tag_resources(payload: LinkManyResourcesRequest):
+    try:
+        if not KM_RESOURCE_WRITE_ENABLED:
+            raise SharedResourceError("Shared Resource write mode is disabled.")
+        shared_resource_store.read_index(payload.resource_id)
+        validated = []
+        for target in payload.tags:
+            identity_payload = TagKnowledgeIdentityRequest(channel=target.channel, device=target.device,
+                                                           group_path=target.tag_groups, tag_name=target.tag)
+            identity, _node = _validated_knowledge_identity(identity_payload)
+            validated.append(identity)
+        results = []
+        for identity in validated:
+            try:
+                result = shared_resource_store.link(identity, payload.resource_id)
+                results.append({"kepware_path": identity.full_path, "status": result["status"]})
+            except SharedResourceError as exc:
+                results.append({"kepware_path": identity.full_path, "status": "failed", "error": str(exc)})
+        return {"success": True, "results": results}
     except (KepwareConfigError, TagKnowledgeError, SharedResourceError) as exc:
         return _resource_error(exc, write=True)
 

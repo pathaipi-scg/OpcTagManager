@@ -1,27 +1,26 @@
 from __future__ import annotations
 
 from datetime import datetime
-import hashlib
-import json
-import os
-from pathlib import Path
-import re
+import hashlib, json, os, re, uuid
+from pathlib import Path, PurePath
 from threading import Lock
 from typing import Any, BinaryIO
-
 import pytz
 
 from services.tag_knowledge import TagIdentity, TagKnowledgeStore, encode_windows_component
 
-
 RESOURCE_INDEX_FILENAME = "resource.index.json"
 REFERENCES_FILENAME = "references.json"
-RESOURCE_TYPES = (
-    "Manuals", "Drawings", "Suppliers", "Quotations", "Purchases", "Photos",
-    "GeneralDocuments",
-)
-RELATION_TYPES = ("Manual", "Drawing", "Supplier", "Quotation", "Purchase", "Photo", "General Document")
-RESOURCE_ID_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9_-]{2,127}$")
+RESOURCE_CATEGORIES = {
+    "Manual": ("Manuals", "MAN"), "Drawing": ("Drawings", "DWG"),
+    "Supplier": ("Suppliers", "SUP"), "Quotation": ("Quotations", "QUO"),
+    "Purchase": ("Purchases", "PUR"), "Photo": ("Photos", "PHO"),
+    "GeneralDocument": ("GeneralDocuments", "DOC"),
+}
+RESOURCE_TYPES = tuple(RESOURCE_CATEGORIES)
+ALLOWED_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".pptx", ".txt", ".md", ".csv", ".png", ".jpg", ".jpeg", ".webp", ".dwg", ".dxf"}
+RESOURCE_ID_PATTERN = re.compile(r"^(MAN|DWG|SUP|QUO|PUR|PHO|DOC)_[0-9A-F]{32}$")
+CHUNK_SIZE = 1024 * 1024
 
 
 class SharedResourceError(RuntimeError):
@@ -29,224 +28,268 @@ class SharedResourceError(RuntimeError):
 
 
 class SharedResourceStore:
-    def __init__(self, tag_root: str | Path, timezone_name: str, write_enabled: bool):
+    def __init__(self, tag_root: str | Path, timezone_name: str, write_enabled: bool, max_upload_mb: int = 100):
         self.tag_root = Path(tag_root).expanduser().resolve(strict=False)
         self.resource_root = (self.tag_root / "_Resources").resolve(strict=False)
         self._require_beneath(self.resource_root, self.tag_root, "Resource root is outside KM_TAG_ROOT.")
-        try:
-            self.timezone = pytz.timezone(timezone_name)
-        except pytz.UnknownTimeZoneError as exc:
-            raise RuntimeError(f"Unknown APP_TIMEZONE: {timezone_name}") from exc
+        if not isinstance(max_upload_mb, int) or max_upload_mb < 1:
+            raise RuntimeError("KM_RESOURCE_MAX_UPLOAD_MB must be a positive integer")
+        self.max_upload_bytes = max_upload_mb * 1024 * 1024
+        try: self.timezone = pytz.timezone(timezone_name)
+        except pytz.UnknownTimeZoneError as exc: raise RuntimeError(f"Unknown APP_TIMEZONE: {timezone_name}") from exc
         self.write_enabled = write_enabled
         self._write_lock = Lock()
         self._tag_paths = TagKnowledgeStore(tag_root, timezone_name, False)
 
     @staticmethod
     def validate_resource_id(resource_id: str) -> str:
-        if not isinstance(resource_id, str) or not RESOURCE_ID_PATTERN.fullmatch(resource_id):
-            raise SharedResourceError("ResourceId must be 3-128 uppercase letters, digits, underscores, or hyphens.")
+        if not isinstance(resource_id, str) or not RESOURCE_ID_PATTERN.fullmatch(resource_id): raise SharedResourceError("ResourceId is invalid.")
         return resource_id
-
-    @classmethod
-    def generate_resource_id(cls, resource_type: str, display_name: str) -> str:
-        cls.validate_resource_type(resource_type)
-        slug = re.sub(r"[^A-Z0-9]+", "_", display_name.upper()).strip("_")[:80]
-        if not slug:
-            raise SharedResourceError("Display name cannot generate a safe ResourceId.")
-        return cls.validate_resource_id(f"{resource_type[:3].upper()}_{slug}")
 
     @staticmethod
     def validate_resource_type(resource_type: str) -> str:
-        if resource_type not in RESOURCE_TYPES:
-            raise SharedResourceError("Resource type is not supported.")
+        if resource_type not in RESOURCE_CATEGORIES: raise SharedResourceError("Resource type is not supported.")
         return resource_type
 
+    @classmethod
+    def generate_resource_id(cls, resource_type: str) -> str:
+        cls.validate_resource_type(resource_type)
+        return f"{RESOURCE_CATEGORIES[resource_type][1]}_{uuid.uuid4().hex.upper()}"
+
     def directory_for_resource(self, resource_type: str, resource_id: str) -> Path:
-        self.validate_resource_type(resource_type)
-        self.validate_resource_id(resource_id)
-        destination = (self.resource_root / resource_type / encode_windows_component(resource_id)).resolve(strict=False)
+        self.validate_resource_type(resource_type); self.validate_resource_id(resource_id)
+        destination = (self.resource_root / RESOURCE_CATEGORIES[resource_type][0] / resource_id).resolve(strict=False)
         self._require_beneath(destination, self.resource_root, "Resource destination is outside the Shared Resource root.")
         return destination
 
     def references_path(self, identity: TagIdentity) -> Path:
-        tag_directory = self._tag_paths.directory_for(identity)
-        self._require_beneath(tag_directory, self.tag_root, "Tag references destination is outside KM_TAG_ROOT.")
-        return tag_directory / REFERENCES_FILENAME
+        directory = self._tag_paths.directory_for(identity)
+        self._require_beneath(directory, self.tag_root, "Tag references destination is outside KM_TAG_ROOT.")
+        return directory / REFERENCES_FILENAME
+
+    def upload_new(self, resource_type: str, display_name: str, original_filename: str, stream: BinaryIO,
+                   manufacturer: str | None = None, model: str | None = None, part_no: str | None = None,
+                   material_code: str | None = None, now: datetime | None = None) -> dict[str, Any]:
+        self._require_write_enabled(); self.validate_resource_type(resource_type)
+        metadata = self._validate_metadata(display_name, manufacturer, model, part_no, material_code)
+        original, extension = self._validate_upload_filename(original_filename)
+        temp_path = final_path = None
+        try:
+            temp_path, digest, size = self._stream_to_temp(stream)
+            with self._write_lock:
+                duplicate = self.find_by_sha256(digest)
+                if duplicate: return {"status": "duplicate", "duplicate": duplicate}
+                resource_id = self.generate_resource_id(resource_type); created_at = self._now(now)
+                directory = self.directory_for_resource(resource_type, resource_id); directory.mkdir(parents=True, exist_ok=False)
+                filename = self._versioned_filename(display_name, 1, created_at, extension, directory); final_path = directory / filename
+                os.replace(temp_path, final_path); temp_path = None
+                index = {"schema_version": 1, "resource_id": resource_id, "resource_type": resource_type, **metadata,
+                         "active_version": 1, "active_file": filename, "created_at": created_at.isoformat(), "updated_at": created_at.isoformat(),
+                         "versions": [{"version": 1, "filename": filename, "sha256": digest, "size_bytes": size,
+                                       "created_at": created_at.isoformat(), "original_filename": original}]}
+                self._atomic_json(directory / RESOURCE_INDEX_FILENAME, index)
+            return {"status": "created", "resource": index}
+        except OSError as exc:
+            if final_path and final_path.exists(): final_path.unlink()
+            raise SharedResourceError("Unable to store the Resource safely.") from exc
+        finally:
+            if temp_path and temp_path.exists(): temp_path.unlink()
+
+    def upload_version(self, resource_id: str, original_filename: str, stream: BinaryIO, now: datetime | None = None) -> dict[str, Any]:
+        self._require_write_enabled(); current = self.read_index(resource_id)
+        original, extension = self._validate_upload_filename(original_filename); temp_path = final_path = None
+        try:
+            temp_path, digest, size = self._stream_to_temp(stream)
+            with self._write_lock:
+                duplicate = self.find_by_sha256(digest)
+                if duplicate: return {"status": "duplicate", "duplicate": duplicate}
+                current = self.read_index(resource_id); version = current["active_version"] + 1; created_at = self._now(now)
+                directory = self.directory_for_resource(current["resource_type"], resource_id)
+                filename = self._versioned_filename(current["display_name"], version, created_at, extension, directory); final_path = directory / filename
+                os.replace(temp_path, final_path); temp_path = None
+                updated = json.loads(json.dumps(current)); updated.update(active_version=version, active_file=filename, updated_at=created_at.isoformat())
+                updated["versions"].append({"version": version, "filename": filename, "sha256": digest, "size_bytes": size,
+                                            "created_at": created_at.isoformat(), "original_filename": original})
+                self._atomic_json(directory / RESOURCE_INDEX_FILENAME, updated)
+            return {"status": "version_created", "resource": updated}
+        except OSError as exc:
+            if final_path and final_path.exists(): final_path.unlink()
+            raise SharedResourceError("Unable to store the Resource version safely.") from exc
+        finally:
+            if temp_path and temp_path.exists(): temp_path.unlink()
+
+    def resolve_file(self, resource_id: str, version: int | None = None) -> tuple[Path, dict[str, Any], dict[str, Any]]:
+        index = self.read_index(resource_id); requested = index["active_version"] if version is None else version
+        item = next((v for v in index["versions"] if v["version"] == requested), None)
+        if item is None: raise SharedResourceError("Resource version was not found.")
+        directory = self.directory_for_resource(index["resource_type"], resource_id); path = (directory / item["filename"]).resolve(strict=False)
+        self._require_beneath(path, directory, "Resource file path is unsafe.")
+        if not path.is_file(): raise SharedResourceError("Resource file was not found.")
+        return path, index, item
 
     def validate_index(self, index: dict[str, Any]) -> dict[str, Any]:
-        if not isinstance(index, dict):
-            raise SharedResourceError("Resource index must be a JSON object.")
         required = ("resource_id", "resource_type", "display_name", "active_version", "active_file", "created_at", "updated_at", "versions")
-        if any(key not in index for key in required):
-            raise SharedResourceError("Resource index is missing required fields.")
-        self.validate_resource_id(index["resource_id"])
-        self.validate_resource_type(index["resource_type"])
-        if not isinstance(index["display_name"], str) or not index["display_name"].strip():
-            raise SharedResourceError("Resource display name is required.")
-        if not isinstance(index["active_version"], int) or index["active_version"] < 1:
-            raise SharedResourceError("Active resource version must be a positive integer.")
-        self._validate_filename(index["active_file"])
-        if not isinstance(index["versions"], list) or not index["versions"]:
-            raise SharedResourceError("Resource index must contain at least one version.")
-        active_found = False
-        for version in index["versions"]:
-            if not isinstance(version, dict) or any(key not in version for key in ("version", "filename", "sha256", "created_at", "original_filename")):
-                raise SharedResourceError("Resource version metadata is invalid.")
-            self._validate_filename(version["filename"])
-            self._validate_filename(version["original_filename"])
-            if not isinstance(version["version"], int) or version["version"] < 1 or not re.fullmatch(r"[0-9a-f]{64}", str(version["sha256"])):
-                raise SharedResourceError("Resource version number or SHA-256 is invalid.")
-            active_found |= version["version"] == index["active_version"] and version["filename"] == index["active_file"]
-        if not active_found:
-            raise SharedResourceError("Active resource version does not match versions metadata.")
-        for optional in ("manufacturer", "model", "part_no", "material_code"):
-            if optional in index and index[optional] is not None and not isinstance(index[optional], str):
-                raise SharedResourceError(f"Resource field {optional} must be text or null.")
+        if not isinstance(index, dict) or any(k not in index for k in required): raise SharedResourceError("Resource index is missing required fields.")
+        self.validate_resource_id(index["resource_id"]); self.validate_resource_type(index["resource_type"])
+        self._validate_metadata(index["display_name"], *(index.get(k) for k in ("manufacturer", "model", "part_no", "material_code")))
+        if not isinstance(index["active_version"], int) or index["active_version"] < 1: raise SharedResourceError("Active resource version must be positive.")
+        self._validate_leaf_filename(index["active_file"])
+        if not isinstance(index["versions"], list) or not index["versions"]: raise SharedResourceError("Resource index must contain versions.")
+        active = False
+        for item in index["versions"]:
+            if not isinstance(item, dict) or any(k not in item for k in ("version", "filename", "sha256", "created_at", "original_filename")): raise SharedResourceError("Resource version metadata is invalid.")
+            self._validate_leaf_filename(item["filename"]); self._validate_leaf_filename(item["original_filename"])
+            if not isinstance(item["version"], int) or item["version"] < 1 or not re.fullmatch(r"[0-9a-f]{64}", str(item["sha256"])): raise SharedResourceError("Resource version number or SHA-256 is invalid.")
+            active |= item["version"] == index["active_version"] and item["filename"] == index["active_file"]
+        if not active: raise SharedResourceError("Active resource version does not match versions metadata.")
         return index
 
     def write_index(self, index: dict[str, Any]) -> dict[str, Any]:
-        if not self.write_enabled:
-            raise SharedResourceError("Shared Resource write mode is disabled.")
-        validated = self.validate_index(index)
-        directory = self.directory_for_resource(validated["resource_type"], validated["resource_id"])
-        with self._write_lock:
-            directory.mkdir(parents=True, exist_ok=True)
-            self._atomic_json(directory / RESOURCE_INDEX_FILENAME, validated)
+        self._require_write_enabled(); validated = self.validate_index(index); directory = self.directory_for_resource(validated["resource_type"], validated["resource_id"])
+        with self._write_lock: directory.mkdir(parents=True, exist_ok=True); self._atomic_json(directory / RESOURCE_INDEX_FILENAME, validated)
         return validated
 
     def read_index(self, resource_id: str) -> dict[str, Any]:
-        self.validate_resource_id(resource_id)
-        matches = []
-        for resource_type in RESOURCE_TYPES:
-            path = self.directory_for_resource(resource_type, resource_id) / RESOURCE_INDEX_FILENAME
-            if path.is_file():
-                matches.append(path)
-        if len(matches) != 1:
-            raise SharedResourceError("ResourceId was not found." if not matches else "ResourceId is duplicated in the Resource Library.")
+        self.validate_resource_id(resource_id); matches = []
+        for kind in RESOURCE_TYPES:
+            path = self.directory_for_resource(kind, resource_id) / RESOURCE_INDEX_FILENAME
+            if path.is_file(): matches.append(path)
+        if len(matches) != 1: raise SharedResourceError("ResourceId was not found." if not matches else "ResourceId is duplicated.")
         return self._read_validated_index(matches[0])
 
-    def list_resources(self) -> list[dict[str, Any]]:
-        if not self.resource_root.is_dir():
-            return []
+    def list_resources(self, resource_type: str | None = None, query: str | None = None) -> list[dict[str, Any]]:
+        if resource_type is not None: self.validate_resource_type(resource_type)
         resources = []
-        for resource_type in RESOURCE_TYPES:
-            category = self.resource_root / resource_type
+        for kind in ((resource_type,) if resource_type else RESOURCE_TYPES):
+            category = self.resource_root / RESOURCE_CATEGORIES[kind][0]
             if category.is_dir():
-                for path in category.glob(f"*/{RESOURCE_INDEX_FILENAME}"):
-                    resources.append(self._read_validated_index(path))
-        return sorted(resources, key=lambda item: (item["resource_type"], item["display_name"].casefold()))
+                for path in category.glob(f"*/{RESOURCE_INDEX_FILENAME}"): resources.append(self._read_validated_index(path))
+        if query and query.strip():
+            needle = query.strip().casefold()
+            resources = [r for r in resources if needle in " ".join(str(r.get(k) or "") for k in ("display_name", "manufacturer", "model", "part_no", "material_code")).casefold()
+                         or any(needle in str(v.get("original_filename", "")).casefold() for v in r["versions"])]
+        return sorted(resources, key=lambda r: (r["resource_type"], r["display_name"].casefold()))
 
     def read_references(self, identity: TagIdentity) -> dict[str, Any]:
         path = self.references_path(identity)
-        if not path.is_file():
-            return {"kepware_path": identity.full_path, "resources": []}
+        if not path.is_file(): return {"kepware_path": identity.full_path, "resources": []}
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if data.get("kepware_path") != identity.full_path or not isinstance(data.get("resources"), list):
-                raise ValueError
-            seen = set()
+            data = json.loads(path.read_text(encoding="utf-8")); seen = set()
+            if data.get("kepware_path") != identity.full_path or not isinstance(data.get("resources"), list): raise ValueError
             for link in data["resources"]:
-                resource_id = self.validate_resource_id(link.get("resource_id"))
-                if resource_id in seen or not isinstance(link.get("relation_type"), str) or not isinstance(link.get("linked_at"), str):
-                    raise ValueError
-                seen.add(resource_id)
+                rid = self.validate_resource_id(link.get("resource_id"))
+                if rid in seen or link.get("relation_type") not in RESOURCE_TYPES or not isinstance(link.get("linked_at"), str): raise ValueError
+                seen.add(rid)
             return data
-        except (OSError, ValueError, TypeError, json.JSONDecodeError, SharedResourceError) as exc:
-            raise SharedResourceError("Tag references file is invalid.") from exc
+        except (OSError, ValueError, TypeError, json.JSONDecodeError, SharedResourceError) as exc: raise SharedResourceError("Tag references file is invalid.") from exc
 
-    def link(self, identity: TagIdentity, resource_id: str, relation_type: str, now: datetime | None = None) -> dict[str, Any]:
-        self._require_write_enabled()
-        resource = self.read_index(resource_id)
-        if relation_type not in RELATION_TYPES:
-            raise SharedResourceError("Relation type is not supported.")
+    def link(self, identity: TagIdentity, resource_id: str, now: datetime | None = None) -> dict[str, Any]:
+        self._require_write_enabled(); resource = self.read_index(resource_id)
         with self._write_lock:
-            references = self.read_references(identity)
-            if any(item["resource_id"] == resource_id for item in references["resources"]):
-                raise SharedResourceError("ResourceId is already linked to this Tag.")
-            references["resources"].append({"resource_id": resource_id, "relation_type": relation_type, "linked_at": self._now(now).isoformat()})
-            path = self.references_path(identity)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            self._atomic_json(path, references)
-        return {**references, "resource": resource}
+            refs = self.read_references(identity)
+            if any(i["resource_id"] == resource_id for i in refs["resources"]): return {"status": "already_linked", **refs, "resource": resource}
+            refs["resources"].append({"resource_id": resource_id, "relation_type": resource["resource_type"], "linked_at": self._now(now).isoformat()})
+            path = self.references_path(identity); path.parent.mkdir(parents=True, exist_ok=True); self._atomic_json(path, refs)
+        return {"status": "linked", **refs, "resource": resource}
 
     def unlink(self, identity: TagIdentity, resource_id: str) -> dict[str, Any]:
-        self._require_write_enabled()
-        self.validate_resource_id(resource_id)
+        self._require_write_enabled(); self.validate_resource_id(resource_id)
         with self._write_lock:
-            references = self.read_references(identity)
-            remaining = [item for item in references["resources"] if item["resource_id"] != resource_id]
-            if len(remaining) == len(references["resources"]):
-                raise SharedResourceError("ResourceId is not linked to this Tag.")
-            references["resources"] = remaining
-            self._atomic_json(self.references_path(identity), references)
-        return references
+            refs = self.read_references(identity); remaining = [i for i in refs["resources"] if i["resource_id"] != resource_id]
+            if len(remaining) == len(refs["resources"]): return {"status": "already_unlinked", **refs}
+            refs["resources"] = remaining; self._atomic_json(self.references_path(identity), refs)
+        return {"status": "unlinked", **refs}
 
     def references_with_resources(self, identity: TagIdentity) -> dict[str, Any]:
-        references = self.read_references(identity)
-        return {**references, "resources": [{**link, "resource": self.read_index(link["resource_id"])} for link in references["resources"]]}
+        refs = self.read_references(identity)
+        return {**refs, "resources": [{**link, "resource": self.read_index(link["resource_id"])} for link in refs["resources"]]}
+
+    def find_by_sha256(self, digest: str) -> dict[str, Any] | None:
+        if not re.fullmatch(r"[0-9a-f]{64}", digest): raise SharedResourceError("SHA-256 is invalid.")
+        for resource in self.list_resources():
+            for version in resource["versions"]:
+                if version["sha256"] == digest: return {"resource_id": resource["resource_id"], "resource_type": resource["resource_type"], "display_name": resource["display_name"], "version": version["version"], "original_filename": version["original_filename"]}
+        return None
+
+    def _stream_to_temp(self, stream: BinaryIO) -> tuple[Path, str, int]:
+        directory = self.resource_root / ".tmp"; directory.mkdir(parents=True, exist_ok=True); path = directory / f"upload-{uuid.uuid4().hex}.tmp"
+        digest = hashlib.sha256(); size = 0
+        try:
+            with open(path, "xb") as target:
+                while chunk := stream.read(CHUNK_SIZE):
+                    size += len(chunk)
+                    if size > self.max_upload_bytes: raise SharedResourceError("Resource file exceeds the configured upload size limit.")
+                    digest.update(chunk); target.write(chunk)
+                target.flush(); os.fsync(target.fileno())
+            if size == 0: raise SharedResourceError("Resource file is empty.")
+            return path, digest.hexdigest(), size
+        except Exception:
+            if path.exists(): path.unlink()
+            raise
 
     @staticmethod
     def sha256(source: str | Path | BinaryIO) -> str:
         digest = hashlib.sha256()
         if hasattr(source, "read"):
-            stream = source
-            while chunk := stream.read(1024 * 1024):
-                digest.update(chunk)
+            while chunk := source.read(CHUNK_SIZE): digest.update(chunk)
         else:
             with open(source, "rb") as stream:
-                while chunk := stream.read(1024 * 1024):
-                    digest.update(chunk)
+                while chunk := stream.read(CHUNK_SIZE): digest.update(chunk)
         return digest.hexdigest()
 
-    def find_by_sha256(self, sha256: str) -> dict[str, Any] | None:
-        if not re.fullmatch(r"[0-9a-f]{64}", sha256):
-            raise SharedResourceError("SHA-256 must be 64 lowercase hexadecimal characters.")
-        for resource in self.list_resources():
-            for version in resource["versions"]:
-                if version["sha256"] == sha256:
-                    return {"resource_id": resource["resource_id"], "resource_type": resource["resource_type"], "version": version["version"], "filename": version["filename"]}
-        return None
+    @staticmethod
+    def _validate_metadata(display_name: Any, manufacturer: Any, model: Any, part_no: Any, material_code: Any) -> dict[str, Any]:
+        values = {"display_name": display_name, "manufacturer": manufacturer, "model": model, "part_no": part_no, "material_code": material_code}
+        if not isinstance(display_name, str) or not display_name.strip(): raise SharedResourceError("Resource display name is required.")
+        for key, value in values.items():
+            if value is not None and (not isinstance(value, str) or len(value) > 300 or any(ord(c) < 32 for c in value)): raise SharedResourceError(f"Resource field {key} is invalid.")
+        return {k: v.strip() if isinstance(v, str) else None for k, v in values.items()}
+
+    @staticmethod
+    def _validate_upload_filename(filename: str) -> tuple[str, str]:
+        if not isinstance(filename, str) or not filename or "\x00" in filename or any(ord(c) < 32 for c in filename): raise SharedResourceError("Original filename is invalid.")
+        if filename != PurePath(filename).name or "/" in filename or "\\" in filename or re.match(r"^[A-Za-z]:", filename): raise SharedResourceError("Original filename must not contain a path.")
+        extension = Path(filename).suffix.lower()
+        if extension not in ALLOWED_EXTENSIONS: raise SharedResourceError("Resource file type is not allowed.")
+        return filename, extension
+
+    @staticmethod
+    def _readable_stem(display_name: str) -> str:
+        stem = re.sub(r"[^A-Za-z0-9._ -]+", "_", display_name).strip(" ._"); stem = re.sub(r"[ .]+", "_", stem)[:100] or "Resource"
+        return encode_windows_component(stem)
+
+    def _versioned_filename(self, display_name: str, version: int, created_at: datetime, extension: str, directory: Path) -> str:
+        base = f"{self._readable_stem(display_name)}_v{version:03d}_{created_at.strftime('%Y%m%d_%H%M%S')}"; candidate = f"{base}{extension}"; suffix = 1
+        while (directory / candidate).exists(): candidate = f"{base}_{suffix}{extension}"; suffix += 1
+        return candidate
 
     def _read_validated_index(self, path: Path) -> dict[str, Any]:
-        try:
-            return self.validate_index(json.loads(path.read_text(encoding="utf-8")))
-        except (OSError, json.JSONDecodeError, SharedResourceError) as exc:
-            raise SharedResourceError("Resource index is invalid.") from exc
+        try: return self.validate_index(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, json.JSONDecodeError, SharedResourceError) as exc: raise SharedResourceError("Resource index is invalid.") from exc
 
     def _require_write_enabled(self) -> None:
-        if not self.write_enabled:
-            raise SharedResourceError("Shared Resource write mode is disabled.")
+        if not self.write_enabled: raise SharedResourceError("Shared Resource write mode is disabled.")
 
     def _now(self, value: datetime | None) -> datetime:
-        if value is None:
-            return datetime.now(self.timezone)
-        if value.tzinfo is None:
-            return self.timezone.localize(value)
+        if value is None: return datetime.now(self.timezone)
+        if value.tzinfo is None: return self.timezone.localize(value)
         return value.astimezone(self.timezone)
 
     @staticmethod
-    def _validate_filename(filename: Any) -> None:
-        if not isinstance(filename, str) or not filename or Path(filename).name != filename or filename in {".", ".."}:
-            raise SharedResourceError("Resource filenames must be safe leaf filenames.")
+    def _validate_leaf_filename(filename: Any) -> None:
+        if not isinstance(filename, str) or not filename or filename in {".", ".."} or "/" in filename or "\\" in filename or "\x00" in filename: raise SharedResourceError("Resource filenames must be safe leaf filenames.")
 
     @staticmethod
     def _require_beneath(path: Path, root: Path, message: str) -> None:
-        try:
-            path.relative_to(root)
-        except ValueError as exc:
-            raise SharedResourceError(message) from exc
+        try: path.relative_to(root)
+        except ValueError as exc: raise SharedResourceError(message) from exc
 
     @staticmethod
     def _atomic_json(path: Path, data: dict[str, Any]) -> None:
-        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            with open(temporary, "x", encoding="utf-8", newline="\n") as handle:
-                json.dump(data, handle, ensure_ascii=False, indent=2)
-                handle.write("\n")
-                handle.flush()
-                os.fsync(handle.fileno())
+            with open(temporary, "x", encoding="utf-8", newline="\n") as handle: json.dump(data, handle, ensure_ascii=False, indent=2); handle.write("\n"); handle.flush(); os.fsync(handle.fileno())
             os.replace(temporary, path)
         finally:
-            if temporary.exists():
-                temporary.unlink()
+            if temporary.exists(): temporary.unlink()
