@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 import subprocess
 import sys
 from datetime import datetime
@@ -238,6 +239,28 @@ def build_tree(rows):
     return tree
 
 
+def search_runtime_tags(query: str, limit: int = 25, include_inactive: bool = False) -> list[dict]:
+    needle = query.strip()
+    if not needle or len(needle) > 500 or not 1 <= limit <= 100:
+        raise ValueError("Tag search query or limit is invalid.")
+    conn = get_conn()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT TOP (?) TagId, Path, DataType, IsActive
+               FROM TagMaster
+               WHERE Path LIKE ? AND (? = 1 OR IsActive = 1)
+               ORDER BY CASE WHEN Path = ? THEN 0 ELSE 1 END, Path, TagId""",
+            limit, f"%{needle}%", 1 if include_inactive else 0, needle,
+        )
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+    return [{"kepware_path": str(row[1]), "tag_name": str(row[1]).split("/")[-1],
+             "levels": str(row[1]).split("/")[:-1], "data_type": row[2], "is_active": bool(row[3])}
+            for row in rows]
+
+
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
     conn = get_conn()
@@ -443,7 +466,7 @@ def save_tag_knowledge(payload: SaveTagKnowledgeRequest):
 @app.get("/api/resources")
 def list_resources(resource_type: str | None = None, q: str | None = None):
     try:
-        return {"success": True, "resources": shared_resource_store.list_resources(resource_type, q)}
+        return {"success": True, "resources": [shared_resource_store.with_canonical_revision(item) for item in shared_resource_store.list_resources(resource_type, q)]}
     except SharedResourceError as exc:
         return _resource_error(exc)
 
@@ -567,10 +590,40 @@ def edit_equipment_part(resource_id: str, payload: EquipmentPartRequest):
         return _resource_error(exc, write=True)
 
 
+@app.get("/api/opc-tags/search")
+def search_opc_tags(q: str = Query(min_length=1, max_length=500), limit: int = Query(default=25, ge=1, le=100),
+                    include_inactive: bool = False):
+    try:
+        return {"success": True, "tags": search_runtime_tags(q, limit, include_inactive), "limit": limit}
+    except (ValueError, pyodbc.Error) as exc:
+        return _resource_error(SharedResourceError(str(exc)))
+
+
+@app.get("/api/canonical/{canonical_id}")
+def get_canonical_state(canonical_id: str):
+    try:
+        if canonical_id.startswith("CNT_"):
+            for supplier in supplier_profile_store.list():
+                contact = next((item for item in supplier["contacts"] if item["contact_id"] == canonical_id), None)
+                if contact:
+                    return {"success": True, "state": {"exists": True, "canonical_id": canonical_id,
+                        "canonical_revision": supplier["canonical_revision"], "supplier_resource_id": supplier["resource_id"],
+                        "supplier_canonical_revision": supplier["canonical_revision"], "resource_type": "Contact",
+                        "contact_name": contact["contact_name"], "contact_type": contact["contact_type"]}}
+            return {"success": True, "state": {"exists": False, "canonical_id": canonical_id}}
+        try: index = shared_resource_store.read_index(canonical_id)
+        except SharedResourceError as exc:
+            if "was not found" in str(exc): return {"success": True, "state": {"exists": False, "canonical_id": canonical_id}}
+            raise
+        return {"success": True, "state": shared_resource_store.canonical_state(index)}
+    except SharedResourceError as exc:
+        return _resource_error(exc)
+
+
 @app.get("/api/resources/{resource_id}")
 def get_resource(resource_id: str):
     try:
-        return {"success": True, "resource": shared_resource_store.read_index(resource_id)}
+        return {"success": True, "resource": shared_resource_store.with_canonical_revision(shared_resource_store.read_index(resource_id))}
     except SharedResourceError as exc:
         return _resource_error(exc)
 
@@ -616,6 +669,38 @@ def upload_resource(resource_type: str = Form(), display_name: str = Form(), fil
         return {"success": True, **result}
     except SharedResourceError as exc:
         return _resource_error(exc, write=True)
+    finally:
+        file.file.close()
+
+
+@app.post("/api/integration/resources")
+def create_integration_resource(resource_type: str = Form(), display_name: str = Form(), source_sha256: str = Form(),
+                                source_document_id: str = Form(), source_application: str = Form(), file: UploadFile = File(),
+                                source_document_version: str | None = Form(None), extraction_run_id: str | None = Form(None),
+                                review_id: str | None = Form(None), confirm_separate_token: str | None = Form(None)):
+    try:
+        if resource_type not in {"Manual", "Drawing", "Quotation", "GeneralDocument"}:
+            raise SharedResourceError("Integration Resource type is not supported.")
+        if display_name.startswith("\\\\") or re.match(r"^[A-Za-z]:[\\/]", display_name):
+            raise SharedResourceError("Physical paths are not accepted as Resource metadata.")
+        provenance={"source_document_id":source_document_id,"source_document_version":source_document_version,
+                    "source_application":source_application,"extraction_run_id":extraction_run_id,"review_id":review_id}
+        result=shared_resource_store.upload_new(resource_type,display_name,file.filename or "",file.file,
+            confirm_separate_token=confirm_separate_token if isinstance(confirm_separate_token,str) else None,
+            expected_sha256=source_sha256,source_provenance=provenance)
+        if result["status"]=="duplicate":
+            duplicate=result["duplicate"]
+            return {"success":True,"status":"existing","created":False,"resource_id":duplicate["resource_id"],
+                    "resource_type":duplicate["resource_type"],"canonical_revision":duplicate["canonical_revision"],
+                    "active_version":duplicate["active_version"],"matched_version":duplicate["version"]}
+        if result["status"]=="similar_resource_found": return {"success":True,"status":result["status"],"created":False,
+            "candidates":result["candidates"],"decision_token":result["decision_token"]}
+        resource=result["resource"]
+        return {"success":True,"status":"created","created":True,"resource_id":resource["resource_id"],
+                "resource_type":resource["resource_type"],"canonical_revision":shared_resource_store.canonical_revision(resource),
+                "active_version":resource["active_version"]}
+    except SharedResourceError as exc:
+        return _resource_error(exc,write=True)
     finally:
         file.file.close()
 

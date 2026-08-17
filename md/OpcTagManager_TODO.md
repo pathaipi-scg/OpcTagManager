@@ -179,6 +179,20 @@ Phase 4.8 is approved. Live relationship writes still require the existing write
 
 Phase 4.9 is complete and approved. The approved baseline is 121 passing tests. No live relationship writes or Factory-KM integration were performed.
 
+## Phase 4.10 canonical integration contracts
+
+- [x] Normalize outward `canonical_revision` as `v<active_version>:<active-sha256>` without creating a competing persistence/version system.
+- [x] Return revisions on Supplier, Supplier-owned Contact, Equipment/Part, Shared Resource, candidate, and relationship reads where applicable.
+- [x] Add generic read-only canonical preflight lookup for `SUP_`, `CNT_`, `EPT_`, and Shared Resource identities.
+- [x] Add bounded, deterministic, read-only runtime TagMaster search without Kepware configuration calls or mutations.
+- [x] Add controlled multipart Factory-KM document canonicalization for Manual, Drawing, Quotation, and General Document only.
+- [x] Require declared SHA-256, logical Factory-KM provenance, existing duplicate/similarity decisions, and `KM_RESOURCE_WRITE_ENABLED`.
+- [x] Keep physical paths out of integration identity and response contracts.
+- [x] Document future stale-write behavior: mismatch between reviewed and current revision becomes `CONFLICT`.
+- [x] Test only with temporary Resource roots and mocked TagMaster access.
+
+Phase 4.10 implementation is complete and awaits review. It does not implement the Factory-KM command executor or any relationship execution, live Vault operation, Kepware mutation, authentication work, or KMVaultManager integration.
+
 Later phases retain Quotation/Purchase workflows, installed asset instances, Equipment/Part deletion, Maintenance History Reader, Factory-KM Feedback Reader and Knowledge Promotion, and Inventory/ERP integration. Stock remains external live data.
 
 ## Approved next direction - not started

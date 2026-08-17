@@ -1,6 +1,6 @@
 # Engineering Relationship Contract
 
-Status: Phase 4.9 engineering relationship management and canonical lookup foundation.
+Status: Phase 4.10 canonical integration contracts implemented; awaiting review.
 
 ## Canonical identities
 
@@ -43,6 +43,27 @@ links. Supplier links on EPT profiles continue to use the existing versioned
 - `/api/equipment-parts/candidates` returns `EPT_` candidates and evidence for Material Code, manufacturer plus Part No., manufacturer plus model, Part No., model, display name, and aliases.
 
 Candidate responses never auto-select, merge, create, update, or link. They expose logical IDs and canonical metadata only; physical Vault paths are excluded.
+
+## Canonical integration revisions
+
+All canonical Shared Resource domains expose `canonical_revision` in the
+normalized form `v<active-version>:<active-version-sha256>`. Supplier and EPT
+profile edits already create immutable versions, so meaningful edits change
+the token and semantic no-ops do not. Contact candidates expose their owning
+Supplier revision because Contacts remain contained in Supplier profiles.
+
+Future mutation preflight must compare the reviewer-recorded expected revision
+with `GET /api/canonical/{canonical_id}`. A mismatch is a conflict and must not
+silently continue. Absolute paths and timestamps alone are not revisions.
+
+`GET /api/opc-tags/search` searches the existing active runtime TagMaster list
+with a bounded parameterized read and never calls or mutates Kepware.
+
+`POST /api/integration/resources` is a controlled multipart handoff for
+Manual, Drawing, Quotation, and GeneralDocument content. It verifies the
+caller-provided SHA-256, accepts logical provenance only, reuses existing
+duplicate/similarity rules, and remains gated by `KM_RESOURCE_WRITE_ENABLED`.
+It does not create Suppliers, Contacts, EPT profiles, or relationships.
 
 ## Factory-KM integration direction
 

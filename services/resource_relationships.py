@@ -89,10 +89,12 @@ class ResourceRelationshipStore:
 
     def with_resources(self, source_resource_id: str) -> dict[str, Any]:
         data = self.read(source_resource_id)
+        source = self.resources.read_index(source_resource_id)
         return {
             **data,
+            "source_canonical_revision": self.resources.canonical_revision(source),
             "relationships": [
-                {**link, "resource": self.resources.read_index(link["target_resource_id"])}
+                {**link, "resource": self.resources.with_canonical_revision(self.resources.read_index(link["target_resource_id"]))}
                 for link in data["relationships"]
             ],
         }

@@ -39,8 +39,11 @@ def test_create_generates_ept_profile_markdown_index_and_string_material_code(ca
     assert item["resource_id"].startswith("EPT_") and len(item["resource_id"]) == 36
     assert item["material_code"] == "001000123456" and isinstance(item["material_code"], str)
     directory = resources.directory_for_resource("EquipmentPart", item["resource_id"])
-    assert json.loads((directory / "equipment_part.profile.json").read_text(encoding="utf-8")) == item
-    assert json.loads((directory / "resource.index.json").read_text(encoding="utf-8")) == index
+    stored_item = json.loads((directory / "equipment_part.profile.json").read_text(encoding="utf-8"))
+    assert stored_item == {key: value for key, value in item.items() if key != "canonical_revision"}
+    assert json.loads((directory / "resource.index.json").read_text(encoding="utf-8")) == {
+        key: value for key, value in index.items() if key != "canonical_revision"
+    }
     assert index["active_version"] == 1 and index["resource_type"] == "EquipmentPart"
     markdown = (directory / index["active_file"]).read_text(encoding="utf-8")
     assert 'KnowledgeType: "EquipmentPartProfile"' in markdown and "# ABB ACS550 Inverter" in markdown
@@ -89,16 +92,19 @@ def test_invalid_or_non_supplier_resource_relationship_is_rejected(catalog_setup
 def test_edit_versions_preserves_tags_and_supplier_profile(catalog_setup):
     catalog, resources, suppliers, _root, supplier, _ = catalog_setup
     created = catalog.create(part_payload([supplier["resource_id"]])); item = created["equipment_part"]
+    revision_v1 = item["canonical_revision"]
     identity = TagIdentity("LP2", "PACKER", [], "DriveFault", "LP2.PACKER.DriveFault", "1", 5, 100, 1)
     resources.link(identity, item["resource_id"]); refs_before = resources.references_path(identity).read_bytes()
     supplier_path = resources.directory_for_resource("Supplier", supplier["resource_id"]); supplier_before = {p.name: p.read_bytes() for p in supplier_path.iterdir()}
     changed = part_payload([supplier["resource_id"]]); changed["description"] = "Updated description"
     result = catalog.edit(item["resource_id"], changed, datetime(2026, 8, 18, 10, 0)); directory = resources.directory_for_resource("EquipmentPart", item["resource_id"])
     assert result["equipment_part"]["resource_id"] == item["resource_id"] and result["resource"]["active_version"] == 2
+    assert result["equipment_part"]["canonical_revision"] != revision_v1
     assert len(list(directory.glob("*.md"))) == 2 and resources.references_path(identity).read_bytes() == refs_before
     assert {p.name: p.read_bytes() for p in supplier_path.iterdir()} == supplier_before
     submitted = {key: result["equipment_part"][key] for key in part_payload()}
-    assert catalog.edit(item["resource_id"], submitted)["status"] == "unchanged"
+    no_op = catalog.edit(item["resource_id"], submitted)
+    assert no_op["status"] == "unchanged" and no_op["equipment_part"]["canonical_revision"] == result["equipment_part"]["canonical_revision"]
     assert len(list(directory.glob("*.md"))) == 2
 
 

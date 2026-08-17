@@ -46,8 +46,11 @@ def test_create_generates_supplier_contacts_profile_markdown_and_index(supplier_
     assert len({contact["contact_id"] for contact in supplier["contacts"]}) == 2
     assert supplier["contacts"][0]["phone"] == "+66 2 645 0009 ext. 7"
     directory = resources.directory_for_resource("Supplier", supplier["resource_id"])
-    assert json.loads((directory / "supplier.profile.json").read_text(encoding="utf-8")) == supplier
-    assert json.loads((directory / "resource.index.json").read_text(encoding="utf-8")) == index
+    stored_supplier = json.loads((directory / "supplier.profile.json").read_text(encoding="utf-8"))
+    assert stored_supplier == {key: value for key, value in supplier.items() if key != "canonical_revision"}
+    assert json.loads((directory / "resource.index.json").read_text(encoding="utf-8")) == {
+        key: value for key, value in index.items() if key != "canonical_revision"
+    }
     assert index["active_version"] == 1 and index["active_file"].endswith(".md")
     markdown = (directory / index["active_file"]).read_text(encoding="utf-8")
     assert "KnowledgeType: \"SupplierProfile\"" in markdown and "# SICK Thailand" in markdown
@@ -88,15 +91,18 @@ def test_tax_id_create_read_normalize_version_and_noop(supplier_setup):
     store, resources, _root = supplier_setup
     submitted = payload(); submitted["tax_id"] = "  001-234-567-8901  "
     created = store.create(submitted); supplier = created["supplier"]
+    revision_v1 = supplier["canonical_revision"]
     assert supplier["tax_id"] == "001-234-567-8901"
     assert store.read(supplier["resource_id"])["supplier"]["tax_id"] == "001-234-567-8901"
     assert store.normalize_tax_id(" 001 234-567-8901 ") == "0012345678901"
     assert store.list("0012345678901")[0]["resource_id"] == supplier["resource_id"]
     unchanged = {key: supplier[key] for key in payload()} | {"tax_id": "001-234-567-8901"}
-    assert store.edit(supplier["resource_id"], unchanged)["status"] == "unchanged"
+    no_op = store.edit(supplier["resource_id"], unchanged)
+    assert no_op["status"] == "unchanged" and no_op["supplier"]["canonical_revision"] == revision_v1
     changed = dict(unchanged); changed["tax_id"] = "009-999"
     edited = store.edit(supplier["resource_id"], changed)
     assert edited["resource"]["active_version"] == 2
+    assert edited["supplier"]["canonical_revision"] != revision_v1
     directory = resources.directory_for_resource("Supplier", supplier["resource_id"])
     assert len(list(directory.glob("*.md"))) == 2
 
@@ -136,6 +142,7 @@ def test_contact_candidates_are_cnt_scoped_read_only_and_match_name_email_phone(
     for query in ({"name": "Person A"}, {"email": "TECH@example.co.th"}, {"phone": "+66812345678"}):
         matches = store.find_contacts(**query)
         assert matches[0]["contact_id"] == contact["contact_id"] and matches[0]["supplier_resource_id"] == supplier["resource_id"]
+        assert matches[0]["supplier_canonical_revision"] == supplier["canonical_revision"]
         assert matches[0]["match_evidence"]
     assert store.read(supplier["resource_id"])["resource"]["active_version"] == 1
 

@@ -79,13 +79,18 @@ class SharedResourceStore:
     def upload_new(self, resource_type: str, display_name: str, original_filename: str, stream: BinaryIO,
                    manufacturer: str | None = None, model: str | None = None, part_no: str | None = None,
                    material_code: str | None = None, now: datetime | None = None,
-                   confirm_separate_token: str | None = None) -> dict[str, Any]:
+                   confirm_separate_token: str | None = None, expected_sha256: str | None = None,
+                   source_provenance: dict[str, Any] | None = None) -> dict[str, Any]:
         self._require_write_enabled(); self.validate_resource_type(resource_type)
         metadata = self._validate_metadata(display_name, manufacturer, model, part_no, material_code)
         original, extension = self._validate_upload_filename(original_filename)
         temp_path = final_path = None
         try:
             temp_path, digest, size = self._stream_to_temp(stream)
+            if expected_sha256 is not None:
+                if not re.fullmatch(r"[0-9a-f]{64}", expected_sha256) or digest != expected_sha256:
+                    raise SharedResourceError("Source SHA-256 does not match uploaded content.")
+            provenance = self._validate_source_provenance(source_provenance)
             with self._write_lock:
                 duplicate = self.find_by_sha256(digest)
                 if duplicate: return {"status": "duplicate", "duplicate": duplicate}
@@ -105,6 +110,7 @@ class SharedResourceStore:
                          "active_version": 1, "active_file": filename, "created_at": created_at.isoformat(), "updated_at": created_at.isoformat(),
                          "versions": [{"version": 1, "filename": filename, "sha256": digest, "size_bytes": size,
                                        "created_at": created_at.isoformat(), "original_filename": original}]}
+                if provenance: index["source_provenance"] = provenance
                 self._atomic_json(directory / RESOURCE_INDEX_FILENAME, index)
                 if confirm_separate_token:
                     self._pending_decisions.pop(confirm_separate_token, None)
@@ -177,6 +183,23 @@ class SharedResourceStore:
         if len(matches) != 1: raise SharedResourceError("ResourceId was not found." if not matches else "ResourceId is duplicated.")
         return self._read_validated_index(matches[0])
 
+    @staticmethod
+    def canonical_revision(index: dict[str, Any]) -> str:
+        active = next((item for item in index["versions"] if item["version"] == index["active_version"]), None)
+        if not active: raise SharedResourceError("Active Resource version is invalid.")
+        return f"v{index['active_version']}:{active['sha256']}"
+
+    @classmethod
+    def with_canonical_revision(cls, index: dict[str, Any]) -> dict[str, Any]:
+        return {**index, "canonical_revision": cls.canonical_revision(index)}
+
+    @classmethod
+    def canonical_state(cls, index: dict[str, Any]) -> dict[str, Any]:
+        return {"exists": True, "canonical_id": index["resource_id"], "canonical_revision": cls.canonical_revision(index),
+                "resource_type": index["resource_type"], "active_version": index["active_version"],
+                "display_name": index["display_name"], "manufacturer": index.get("manufacturer"),
+                "model": index.get("model"), "part_no": index.get("part_no"), "material_code": index.get("material_code")}
+
     def list_resources(self, resource_type: str | None = None, query: str | None = None) -> list[dict[str, Any]]:
         if resource_type is not None: self.validate_resource_type(resource_type)
         resources = []
@@ -228,8 +251,23 @@ class SharedResourceStore:
         if not re.fullmatch(r"[0-9a-f]{64}", digest): raise SharedResourceError("SHA-256 is invalid.")
         for resource in self.list_resources():
             for version in resource["versions"]:
-                if version["sha256"] == digest: return {"resource_id": resource["resource_id"], "resource_type": resource["resource_type"], "display_name": resource["display_name"], "version": version["version"], "original_filename": version["original_filename"]}
+                if version["sha256"] == digest: return {"resource_id": resource["resource_id"], "resource_type": resource["resource_type"], "display_name": resource["display_name"], "version": version["version"], "original_filename": version["original_filename"], "canonical_revision": self.canonical_revision(resource), "active_version": resource["active_version"]}
         return None
+
+    @staticmethod
+    def _validate_source_provenance(value: dict[str, Any] | None) -> dict[str, Any] | None:
+        if value is None: return None
+        allowed={"source_document_id","source_document_version","source_application","extraction_run_id","review_id"}
+        if not isinstance(value,dict) or set(value)-allowed: raise SharedResourceError("Source provenance is invalid.")
+        output={}
+        for key,item in value.items():
+            if item is None: continue
+            if not isinstance(item,(str,int)) or isinstance(item,bool): raise SharedResourceError("Source provenance is invalid.")
+            text=str(item).strip()
+            if not text or len(text)>256 or "\\" in text or "/" in text or re.match(r"^[A-Za-z]:",text): raise SharedResourceError("Source provenance must use logical identities only.")
+            output[key]=item
+        if output.get("source_application") != "Factory-KM": raise SharedResourceError("Source application must be Factory-KM.")
+        return output
 
     def find_similar_resources(self, resource_type: str, metadata: dict[str, Any], original_filename: str) -> list[dict[str, Any]]:
         self.validate_resource_type(resource_type)
@@ -257,6 +295,7 @@ class SharedResourceStore:
                     "display_name": resource["display_name"], "manufacturer": resource.get("manufacturer"),
                     "model": resource.get("model"), "part_no": resource.get("part_no"),
                     "material_code": resource.get("material_code"), "active_version": resource["active_version"],
+                    "canonical_revision": self.canonical_revision(resource),
                     "original_filename": active["original_filename"],
                     "match_strength": "strong" if any(score >= 4 for _name, score in signals) else "likely",
                     "matched_on": [name for name, _score in signals], "_score": sum(score for _name, score in signals),

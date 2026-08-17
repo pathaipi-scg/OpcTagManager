@@ -71,7 +71,9 @@ class SupplierProfileStore:
             self.resources._atomic_json(staging / RESOURCE_INDEX_FILENAME, index)
             resource_dir.parent.mkdir(parents=True, exist_ok=True)
             os.replace(staging, resource_dir)
-            return {"status": "created", "supplier": profile, "resource": index}
+            revision = self.resources.canonical_revision(index)
+            return {"status": "created", "supplier": {**profile, "canonical_revision": revision},
+                    "resource": self.resources.with_canonical_revision(index)}
         except OSError as exc:
             raise SupplierProfileError("Unable to create the Supplier profile safely.") from exc
         finally:
@@ -90,7 +92,8 @@ class SupplierProfileStore:
         except (OSError, json.JSONDecodeError) as exc:
             raise SupplierProfileError("Supplier profile is invalid.") from exc
         validated = self._validate_stored(profile, resource_id)
-        return {"supplier": validated, "resource": index}
+        revision = self.resources.canonical_revision(index)
+        return {"supplier": {**validated, "canonical_revision": revision}, "resource": self.resources.with_canonical_revision(index)}
 
     def list(self, query: str | None = None) -> list[dict[str, Any]]:
         suppliers = []
@@ -110,7 +113,7 @@ class SupplierProfileStore:
                 )
                 if not raw_match and not tax_match:
                     continue
-            suppliers.append({**profile, "active_version": index["active_version"]})
+            suppliers.append({**profile, "active_version": index["active_version"], "canonical_revision": self.resources.canonical_revision(index)})
         return sorted(suppliers, key=lambda item: item["supplier_name"].casefold())
 
     def edit(self, resource_id: str, submitted: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
@@ -142,7 +145,9 @@ class SupplierProfileStore:
             except OSError as exc:
                 if file_path.exists(): file_path.unlink()
                 raise SupplierProfileError("Unable to update the Supplier profile safely.") from exc
-            return {"status": "version_created", "supplier": updated, "resource": next_index}
+            revision = self.resources.canonical_revision(next_index)
+            return {"status": "version_created", "supplier": {**updated, "canonical_revision": revision},
+                    "resource": self.resources.with_canonical_revision(next_index)}
 
     def render_markdown(self, profile: dict[str, Any], version: int) -> str:
         yaml_values = {
@@ -286,7 +291,7 @@ class SupplierProfileStore:
             for signal, matched in checks.items():
                 if matched: evidence.append({"signal": signal, "match": "exact", "weight": weights[signal]})
             if evidence:
-                results.append({key: item.get(key, "") for key in ("resource_id", "supplier_name", "supplier_code", "tax_id", "company_name", "website", "general_phone", "general_email")} |
+                results.append({key: item.get(key, "") for key in ("resource_id", "canonical_revision", "supplier_name", "supplier_code", "tax_id", "company_name", "website", "general_phone", "general_email")} |
                                {"match_evidence": evidence, "_score": sum(entry["weight"] for entry in evidence)})
         results.sort(key=lambda value: (-value["_score"], value["supplier_name"].casefold(), value["resource_id"]))
         for result in results: result.pop("_score")
@@ -304,7 +309,8 @@ class SupplierProfileStore:
                 if requested_phone and requested_phone in {self.normalize_phone(contact["phone"]), self.normalize_phone(contact["mobile"])}: evidence.append({"signal": "phone", "match": "exact"})
                 if evidence or (supplier_resource_id and not any((requested_name, requested_email, requested_phone))):
                     results.append({key: contact[key] for key in ("contact_id", "contact_name", "contact_type", "department_role", "phone", "mobile", "email")} |
-                                   {"supplier_resource_id": supplier["resource_id"], "supplier_name": supplier["supplier_name"], "match_evidence": evidence})
+                                   {"supplier_resource_id": supplier["resource_id"], "supplier_name": supplier["supplier_name"],
+                                    "supplier_canonical_revision": supplier["canonical_revision"], "match_evidence": evidence})
         return sorted(results, key=lambda value: (value["supplier_name"].casefold(), value["contact_name"].casefold(), value["contact_id"]))
 
     @staticmethod

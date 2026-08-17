@@ -55,7 +55,9 @@ class EquipmentPartStore:
             profile.update(resource_id=resource_id, updated_at=created_at.isoformat())
             index = self._publish_new(profile, created_at)
             if confirm_separate_token: self._pending_decisions.pop(confirm_separate_token, None)
-            return {"status": "created", "equipment_part": profile, "resource": index}
+            revision = self.resources.canonical_revision(index)
+            return {"status": "created", "equipment_part": {**profile, "canonical_revision": revision},
+                    "resource": self.resources.with_canonical_revision(index)}
 
     def read(self, resource_id: str) -> dict[str, Any]:
         index = self.resources.read_index(resource_id)
@@ -64,7 +66,8 @@ class EquipmentPartStore:
         try: profile = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc: raise EquipmentPartError("Equipment / Part profile is invalid.") from exc
         validated = self._validate_stored(profile, resource_id)
-        return {"equipment_part": validated, "resource": index}
+        revision = self.resources.canonical_revision(index)
+        return {"equipment_part": {**validated, "canonical_revision": revision}, "resource": self.resources.with_canonical_revision(index)}
 
     def list(self, query: str | None = None) -> list[dict[str, Any]]:
         items = []
@@ -72,7 +75,7 @@ class EquipmentPartStore:
             try: profile = self.read(index["resource_id"])["equipment_part"]
             except EquipmentPartError: continue
             if query and query.strip() and query.strip().casefold() not in self._search_text(profile): continue
-            items.append({**profile, "active_version": index["active_version"]})
+            items.append({**profile, "active_version": index["active_version"], "canonical_revision": self.resources.canonical_revision(index)})
         return sorted(items, key=lambda item: item["display_name"].casefold())
 
     def edit(self, resource_id: str, submitted: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
@@ -101,7 +104,9 @@ class EquipmentPartStore:
             except OSError as exc:
                 if file_path.exists(): file_path.unlink()
                 raise EquipmentPartError("Unable to update the Equipment / Part profile safely.") from exc
-            return {"status": "version_created", "equipment_part": updated, "resource": next_index}
+            revision = self.resources.canonical_revision(next_index)
+            return {"status": "version_created", "equipment_part": {**updated, "canonical_revision": revision},
+                    "resource": self.resources.with_canonical_revision(next_index)}
 
     def find_similar(self, profile: dict[str, Any]) -> list[dict[str, Any]]:
         requested = {key: normalize_resource_identity(profile[key]) for key in
@@ -116,7 +121,8 @@ class EquipmentPartStore:
             if requested["part_no"] and requested["part_no"] == current["part_no"]: signals.append(("part_no", 3))
             if requested["model"] and requested["model"] == current["model"]: signals.append(("model", 3))
             if signals:
-                candidates.append({"resource_id": item["resource_id"], "display_name": item["display_name"],
+                candidates.append({"resource_id": item["resource_id"], "canonical_revision": item["canonical_revision"],
+                                   "display_name": item["display_name"],
                                    "item_kind": item["item_kind"], "manufacturer": item["manufacturer"],
                                    "model": item["model"], "part_no": item["part_no"], "material_code": item["material_code"],
                                    "match_strength": "strong" if any(score >= 5 for _, score in signals) else "medium",
@@ -143,7 +149,7 @@ class EquipmentPartStore:
             if requested["display_name"] and requested["display_name"] == current["display_name"]: add("display_name", 40)
             if requested["alias"] and requested["alias"] in aliases: add("alias", 30)
             if evidence:
-                results.append({key: item[key] for key in ("resource_id", "display_name", "item_kind", "manufacturer", "model", "part_no", "material_code", "aliases")} |
+                results.append({key: item[key] for key in ("resource_id", "canonical_revision", "display_name", "item_kind", "manufacturer", "model", "part_no", "material_code", "aliases")} |
                                {"match_evidence": evidence, "_score": sum(entry["weight"] for entry in evidence)})
         results.sort(key=lambda value: (-value["_score"], value["display_name"].casefold(), value["resource_id"]))
         for result in results: result.pop("_score")
