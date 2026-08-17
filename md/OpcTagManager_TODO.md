@@ -177,6 +177,22 @@ Phase 4.8 is approved. Live relationship writes still require the existing write
 - [x] Exclude filesystem paths from integration responses.
 - [x] Keep relationship mutations behind `KM_RESOURCE_WRITE_ENABLED` and tests under temporary roots.
 
-Phase 4.9 is complete pending review. No live relationship writes or Factory-KM integration were performed.
+Phase 4.9 is complete and approved. The approved baseline is 121 passing tests. No live relationship writes or Factory-KM integration were performed.
 
 Later phases retain Quotation/Purchase workflows, installed asset instances, Equipment/Part deletion, Maintenance History Reader, Factory-KM Feedback Reader and Knowledge Promotion, and Inventory/ERP integration. Stock remains external live data.
+
+## Approved next direction - not started
+
+The next major cross-project goal is Factory-KM document ingestion -> Manual/Quotation extraction -> OpcTagManager `SUP_`/`CNT_`/`EPT_` candidate lookup -> human review -> confirmed engineering relationships.
+
+Keep deferred until separately approved:
+
+- Shared Identity/Auth service
+- Factory-KM AI quotation extraction
+- Live cross-project writes
+- KMVaultManager implementation and migration of current adapters
+- Stock master
+- Purchase domain beyond current Shared Resources
+- Automatic Supplier, Contact, or Equipment/Part identity creation
+
+`QUO_` remains an OpcTagManager Shared Resource, but quotation OCR/LLM parsing and a large manual quotation-entry workflow do not belong in OpcTagManager. Candidate APIs remain read-only and never auto-select, create, update, merge, or link.

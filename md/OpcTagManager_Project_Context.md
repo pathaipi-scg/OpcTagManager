@@ -91,6 +91,47 @@ Future Quotation/Purchase records may reference both `SUP_<uuid>` and `EPT_<uuid
 
 Equipment/Part filesystem operations remain isolated for later migration behind the documented shared KM Vault Manager architecture: `OpcTagManager + Factory-KM -> KM Vault Manager -> D:\KM\Vault`. Phase 4.7 does not implement that service and does not introduce absolute paths as identities.
 
+### Approved engineering relationships and integration lookup (Phases 4.8-4.9)
+
+Phase 4.8, Canonical Engineering Relationship Foundation, is complete and approved. Phase 4.9, Engineering Relationship Management UI and Integration Candidate APIs, is complete and approved. The automated test baseline is 121 passing tests.
+
+Canonical cross-module identities are `KepwarePath`, `SUP_<uuid>`, Supplier-owned `CNT_<uuid>`, `EPT_<uuid>`, and stable `ResourceId`. Physical filesystem paths are implementation details and are not cross-module identities.
+
+The supported engineering graph is:
+
+```text
+KepwarePath -> EPT_ -> SUP_
+EPT_ -> MAN_
+EPT_ -> DWG_
+EPT_ -> QUO_
+EPT_ -> DOC_
+SUP_ -> QUO_
+KepwarePath -> ResourceId
+```
+
+The final direction is backward compatible: direct Tag-to-Resource links remain supported. Tag relationships continue to use `references.json`; controlled Resource-to-Resource engineering relationships use `relationships.json`. Relationship reads and explicit writes use:
+
+- `GET /api/resource-relationships/{source_resource_id}`
+- `POST /api/resource-relationships/link`
+- `POST /api/resource-relationships/unlink`
+
+Relationship mutations remain protected by `KM_RESOURCE_WRITE_ENABLED`.
+
+Supplier Profiles support optional string-valued `tax_id`. Stored formatting and leading zeroes are preserved while a normalized representation is used for matching. Tax ID is the strongest planned quotation Supplier signal, but matching never automatically merges identities and may return multiple ambiguous candidates. Contacts remain stable `CNT_` identities owned inside Supplier profiles.
+
+Read-only integration lookup is available through:
+
+- `GET /api/suppliers/candidates`
+- `GET /api/contacts/candidates`
+- `GET /api/equipment-parts/candidates`
+- `GET /api/suppliers/{resource_id}/equipment-parts`
+
+Candidate responses return stable canonical IDs, canonical metadata, and explicit match evidence. They do not auto-select, create, update, merge, or create relationships.
+
+`QUO_` remains a Shared Resource in OpcTagManager. OpcTagManager does not own quotation OCR, LLM extraction, a large manual quotation-entry workflow, or automatic Supplier/EPT creation. Future Factory-KM owns document upload, Markdown transformation, AI extraction, candidate lookup, and human review. OpcTagManager remains the canonical registry and engineering-relationship owner and accepts only separately confirmed relationship operations.
+
+As integration context only, Factory-KM has completed its Manifest Domain foundation and Manifest-driven PageIndex discovery. PageIndex workspace generation, Dictionary, and LLM Wiki work are paused while document/quotation integration is planned. KMVaultManager exists as a separate foundation repository; current OpcTagManager filesystem adapters are not being rewritten behind it yet, and migration remains gradual.
+
 ### Ownership boundary
 
 Factory-KM owns Chat, Task, Conversation, task closure/summary, actual repair history, parts changed and photos from actual work, and Maintenance Events. OpcTagManager owns Kepware Tag identity, curated/versioned Tag Knowledge, Shared Resources, Tag-to-Resource linking, and future review/promotion of Factory-KM feedback.
@@ -123,8 +164,8 @@ All deployment-specific configuration is loaded from `config/.env` through `conf
 
 ## Deferred work
 
-Tag editing/deletion, scaling-property cloning, bulk imports, and broader Factory-KM integration are intentionally deferred. Quotation/Purchase, installed asset instances, Supplier or Equipment/Part deletion/retirement, maintenance history, Factory-KM feedback/promotion, Part-to-Resource linking, KM Vault Manager, and external Inventory/ERP lookup remain later work. Stock remains external live data keyed in future by fields such as PartNo and MaterialCode.
+Tag editing/deletion, scaling-property cloning, bulk imports, and broader Factory-KM integration are intentionally deferred. Shared Identity/Auth, Factory-KM AI quotation extraction, live cross-project writes, KMVaultManager implementation/migration, Stock master, Purchase domain beyond current Resources, automatic canonical identity creation, installed asset instances, Supplier or Equipment/Part deletion/retirement, maintenance history, and Factory-KM feedback/promotion remain later work.
 
 ## Current milestone and next validation
 
-Phase 4.9 engineering relationship management and canonical lookup is complete pending review. Engineers can manage compatible existing EPT-to-Resource and Supplier-to-Quotation edges with explicit confirmation/unlink, while existing versioned EPT Supplier links remain canonical. Read-only Supplier, Supplier-owned Contact, and Equipment/Part candidate APIs return logical identities and match evidence without automatic selection or physical paths. No live Equipment/Part, Supplier, or relationship was created, and the existing live Knowledge V1 for `LP2.MIX.OTM_TEST_Cement_FML` was not modified. Automated filesystem tests use temporary KM roots only.
+Phases 4.8 and 4.9 are complete and approved. The baseline is 121 passing tests. The next major cross-project direction is Factory-KM document ingestion, Manual/Quotation extraction, OpcTagManager `SUP_`/`CNT_`/`EPT_` candidate lookup, human review, and confirmed engineering relationships. No implementation of that cross-project workflow is authorized by this status update.
