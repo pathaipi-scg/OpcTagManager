@@ -375,10 +375,13 @@ def get_resource(resource_id: str):
 @app.post("/api/resources/upload")
 def upload_resource(resource_type: str = Form(), display_name: str = Form(), file: UploadFile = File(),
                     manufacturer: str | None = Form(None), model: str | None = Form(None),
-                    part_no: str | None = Form(None), material_code: str | None = Form(None)):
+                    part_no: str | None = Form(None), material_code: str | None = Form(None),
+                    confirm_separate_token: str | None = Form(None)):
     try:
         result = shared_resource_store.upload_new(resource_type, display_name, file.filename or "", file.file,
-                                                   manufacturer, model, part_no, material_code)
+                                                   manufacturer, model, part_no, material_code,
+                                                   confirm_separate_token=(confirm_separate_token
+                                                       if isinstance(confirm_separate_token, str) else None))
         return {"success": True, **result}
     except SharedResourceError as exc:
         return _resource_error(exc, write=True)

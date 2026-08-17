@@ -119,6 +119,11 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertIn('[data-theme="light"]', stylesheet)
         self.assertIn('background: var(--bg-card)', stylesheet)
         self.assertNotIn('background: #f8fafc', stylesheet)
+        self.assertIn('data.status === "similar_resource_found"', javascript)
+        self.assertIn("Upload as New Version", javascript)
+        self.assertIn("Create Separate Resource", javascript)
+        self.assertIn("Confirm Separate Resource", javascript)
+        self.assertIn("The selected file has different content.", javascript)
         self.assertEqual(self.request("GET", "/static/app.js")[0], 200)
         self.assertEqual(self.request("GET", "/static/app.css")[0], 200)
 
@@ -206,6 +211,7 @@ class OpcTagManagerAppTests(unittest.TestCase):
             parameters = inspect.signature(OpcTagManager.upload_resource).parameters
             self.assertNotIn("resource_id", parameters)
             self.assertNotIn("filesystem_path", parameters)
+            self.assertIn("confirm_separate_token", parameters)
 
     def test_batch_validates_every_tag_before_any_link_mutation(self):
         payload = {"resource_id": "MAN_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "tags": [

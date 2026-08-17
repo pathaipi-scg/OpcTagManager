@@ -170,6 +170,7 @@ let pendingKnowledgePayload = null;
 let resourceForLinking = null;
 let resourceTargetTags = new Map();
 let resourceTagSelectionMode = false;
+let pendingSimilarUpload = null;
 
 viewTabs.forEach((tab) => {
     tab.addEventListener("click", () => {
@@ -710,14 +711,77 @@ async function searchResources() {
 
 document.getElementById("resource-upload-form").addEventListener("submit", async (event) => {
     event.preventDefault(); const result = document.getElementById("resource-workflow-result");
-    const response = await fetch("/api/resources/upload", {method: "POST", body: new FormData(event.currentTarget)}); const data = await response.json();
+    const formData = new FormData(event.currentTarget);
+    const response = await fetch("/api/resources/upload", {method: "POST", body: formData}); const data = await response.json();
     if (!data.success) return showResourceResult(data.error || "Upload failed.", true);
     if (data.status === "duplicate") {
         resourceForLinking = data.duplicate; showResourceResult(`This file already exists: ${data.duplicate.display_name}, ${data.duplicate.resource_type}, version ${data.duplicate.version}. Use Existing Resource to link it.`);
-        const use = document.createElement("button"); use.textContent = "Use Existing Resource"; use.onclick = () => beginTargetSelection(data.duplicate); result.append(document.createElement("br"), use); return;
+        const use = document.createElement("button"); use.textContent = "Use Existing Resource"; use.onclick = () => beginTargetSelection(data.duplicate);
+        const cancel = document.createElement("button"); cancel.textContent = "Cancel"; cancel.onclick = closeResourceDecision;
+        result.append(document.createElement("br"), use, cancel); return;
+    }
+    if (data.status === "similar_resource_found") {
+        pendingSimilarUpload = {formData, decisionToken: data.decision_token, candidates: data.candidates};
+        showSimilarResourceDecision(data.candidates[0], formData.get("file")?.name || "Selected file");
+        return;
     }
     showResourceResult(`Created ${data.resource.resource_id}, active version ${data.resource.active_version}.`); beginTargetSelection(data.resource);
 });
+
+function showSimilarResourceDecision(candidate, selectedFilename) {
+    const result = document.getElementById("resource-workflow-result");
+    showResourceResult("A similar Resource already exists. The selected file has different content.", false, true);
+    const details = document.createElement("dl"); details.className = "object-properties resource-decision-details";
+    const rows = [
+        ["Existing Resource", candidate.display_name], ["Type", candidate.resource_type],
+        ["Manufacturer", candidate.manufacturer || "—"], ["Model", candidate.model || "—"],
+        ["Current Version", String(candidate.active_version)], ["Existing Original File", candidate.original_filename],
+        ["Selected File", selectedFilename],
+    ];
+    rows.forEach(([label, value]) => { const term = document.createElement("dt"); term.textContent = label; const description = document.createElement("dd"); description.textContent = value; details.append(term, description); });
+    const prompt = document.createElement("p"); prompt.textContent = "Choose what this file represents:";
+    const version = document.createElement("button"); version.textContent = "Upload as New Version"; version.onclick = () => uploadSimilarAsVersion(candidate);
+    const separate = document.createElement("button"); separate.textContent = "Create Separate Resource"; separate.onclick = () => confirmSeparateResource(candidate);
+    const cancel = document.createElement("button"); cancel.textContent = "Cancel"; cancel.onclick = closeResourceDecision;
+    const actions = document.createElement("div"); actions.className = "preview-actions"; actions.append(version, separate, cancel);
+    result.append(details, prompt, actions);
+}
+
+async function uploadSimilarAsVersion(candidate) {
+    if (!pendingSimilarUpload) return;
+    const file = pendingSimilarUpload.formData.get("file"); const form = new FormData(); form.append("file", file);
+    const response = await fetch(`/api/resources/${encodeURIComponent(candidate.resource_id)}/versions`, {method: "POST", body: form});
+    const data = await response.json();
+    if (!data.success) return showResourceResult(data.error || "Unable to upload the new version.", true);
+    if (data.status === "duplicate") return showResourceResult(`This file already exists as ${data.duplicate.display_name} version ${data.duplicate.version}.`);
+    pendingSimilarUpload = null; showResourceResult(`Uploaded as version ${data.resource.active_version} of ${data.resource.display_name}. Existing Tag links remain unchanged.`);
+    if (selectedKnowledgeTag) await loadTagResources(selectedKnowledgeTag);
+}
+
+function confirmSeparateResource(candidate) {
+    if (!pendingSimilarUpload) return;
+    const displayName = pendingSimilarUpload.formData.get("display_name");
+    showResourceResult(`Create a separate Resource? A similar Resource already exists: ${candidate.display_name}. New Resource: ${displayName}. This will create a new ResourceId and will not update the existing ${candidate.resource_type}.`, false, true);
+    const result = document.getElementById("resource-workflow-result");
+    const confirm = document.createElement("button"); confirm.textContent = "Confirm Separate Resource"; confirm.onclick = createConfirmedSeparateResource;
+    const cancel = document.createElement("button"); cancel.textContent = "Cancel"; cancel.onclick = closeResourceDecision;
+    result.append(document.createElement("br"), confirm, cancel);
+}
+
+async function createConfirmedSeparateResource() {
+    if (!pendingSimilarUpload) return;
+    const form = new FormData(); pendingSimilarUpload.formData.forEach((value, key) => form.append(key, value));
+    form.append("confirm_separate_token", pendingSimilarUpload.decisionToken);
+    const response = await fetch("/api/resources/upload", {method: "POST", body: form}); const data = await response.json();
+    if (!data.success) return showResourceResult(data.error || "Unable to create a separate Resource.", true);
+    if (data.status !== "created") return showResourceResult("The Resource state changed. Review the upload decision again.", true);
+    pendingSimilarUpload = null; showResourceResult(`Created separate Resource ${data.resource.resource_id}.`); beginTargetSelection(data.resource);
+}
+
+function closeResourceDecision() {
+    pendingSimilarUpload = null;
+    showWorkflow("resource-upload-form");
+}
 
 function beginTargetSelection(resource) {
     resourceForLinking = resource; resourceTargetTags = new Map();
@@ -762,7 +826,7 @@ document.getElementById("confirm-resource-version").addEventListener("click", as
     if (data.success && data.resource && selectedKnowledgeTag) await loadTagResources(selectedKnowledgeTag);
 });
 
-function showResourceResult(message, error = false) { const result = document.getElementById("resource-workflow-result"); result.textContent = message; result.className = `create-result ${error ? "error-message" : "success-message"}`; }
+function showResourceResult(message, error = false, warning = false) { const result = document.getElementById("resource-workflow-result"); result.textContent = message; result.className = `create-result ${error ? "error-message" : warning ? "warning-message" : "success-message"}`; }
 
 async function loadTagKnowledge(node) {
     selectedKnowledgeTag = node;

@@ -4,6 +4,7 @@ from datetime import datetime
 import hashlib, json, os, re, uuid
 from pathlib import Path, PurePath
 from threading import Lock
+from time import monotonic
 from typing import Any, BinaryIO
 import pytz
 
@@ -21,6 +22,13 @@ RESOURCE_TYPES = tuple(RESOURCE_CATEGORIES)
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".pptx", ".txt", ".md", ".csv", ".png", ".jpg", ".jpeg", ".webp", ".dwg", ".dxf"}
 RESOURCE_ID_PATTERN = re.compile(r"^(MAN|DWG|SUP|QUO|PUR|PHO|DOC)_[0-9A-F]{32}$")
 CHUNK_SIZE = 1024 * 1024
+DECISION_TTL_SECONDS = 10 * 60
+
+
+def normalize_resource_identity(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return re.sub(r"[\s_-]+", " ", value.strip().casefold())
 
 
 class SharedResourceError(RuntimeError):
@@ -39,6 +47,7 @@ class SharedResourceStore:
         except pytz.UnknownTimeZoneError as exc: raise RuntimeError(f"Unknown APP_TIMEZONE: {timezone_name}") from exc
         self.write_enabled = write_enabled
         self._write_lock = Lock()
+        self._pending_decisions: dict[str, dict[str, Any]] = {}
         self._tag_paths = TagKnowledgeStore(tag_root, timezone_name, False)
 
     @staticmethod
@@ -69,7 +78,8 @@ class SharedResourceStore:
 
     def upload_new(self, resource_type: str, display_name: str, original_filename: str, stream: BinaryIO,
                    manufacturer: str | None = None, model: str | None = None, part_no: str | None = None,
-                   material_code: str | None = None, now: datetime | None = None) -> dict[str, Any]:
+                   material_code: str | None = None, now: datetime | None = None,
+                   confirm_separate_token: str | None = None) -> dict[str, Any]:
         self._require_write_enabled(); self.validate_resource_type(resource_type)
         metadata = self._validate_metadata(display_name, manufacturer, model, part_no, material_code)
         original, extension = self._validate_upload_filename(original_filename)
@@ -79,6 +89,14 @@ class SharedResourceStore:
             with self._write_lock:
                 duplicate = self.find_by_sha256(digest)
                 if duplicate: return {"status": "duplicate", "duplicate": duplicate}
+                candidates = self.find_similar_resources(resource_type, metadata, original)
+                if candidates:
+                    if not confirm_separate_token:
+                        token = self._create_decision_token(digest, resource_type, metadata, original, candidates)
+                        return {"status": "similar_resource_found", "candidates": candidates, "decision_token": token}
+                    self._validate_decision_token(confirm_separate_token, digest, resource_type, metadata, original, candidates)
+                elif confirm_separate_token:
+                    raise SharedResourceError("The separate Resource confirmation is no longer valid.")
                 resource_id = self.generate_resource_id(resource_type); created_at = self._now(now)
                 directory = self.directory_for_resource(resource_type, resource_id); directory.mkdir(parents=True, exist_ok=False)
                 filename = self._versioned_filename(display_name, 1, created_at, extension, directory); final_path = directory / filename
@@ -88,6 +106,8 @@ class SharedResourceStore:
                          "versions": [{"version": 1, "filename": filename, "sha256": digest, "size_bytes": size,
                                        "created_at": created_at.isoformat(), "original_filename": original}]}
                 self._atomic_json(directory / RESOURCE_INDEX_FILENAME, index)
+                if confirm_separate_token:
+                    self._pending_decisions.pop(confirm_separate_token, None)
             return {"status": "created", "resource": index}
         except OSError as exc:
             if final_path and final_path.exists(): final_path.unlink()
@@ -210,6 +230,70 @@ class SharedResourceStore:
             for version in resource["versions"]:
                 if version["sha256"] == digest: return {"resource_id": resource["resource_id"], "resource_type": resource["resource_type"], "display_name": resource["display_name"], "version": version["version"], "original_filename": version["original_filename"]}
         return None
+
+    def find_similar_resources(self, resource_type: str, metadata: dict[str, Any], original_filename: str) -> list[dict[str, Any]]:
+        self.validate_resource_type(resource_type)
+        requested = {key: normalize_resource_identity(metadata.get(key)) for key in
+                     ("display_name", "manufacturer", "model", "part_no", "material_code")}
+        requested_stem = normalize_resource_identity(Path(original_filename).stem)
+        candidates = []
+        for resource in self.list_resources(resource_type):
+            signals = []
+            if requested["display_name"] and requested["display_name"] == normalize_resource_identity(resource.get("display_name")):
+                signals.append(("display_name", 3))
+            active = next(item for item in resource["versions"] if item["version"] == resource["active_version"])
+            if requested_stem and requested_stem == normalize_resource_identity(Path(active["original_filename"]).stem):
+                signals.append(("original_filename", 3))
+            for key in ("part_no", "material_code"):
+                if requested[key] and requested[key] == normalize_resource_identity(resource.get(key)):
+                    signals.append((key, 5))
+            if (requested["manufacturer"] and requested["model"]
+                    and requested["manufacturer"] == normalize_resource_identity(resource.get("manufacturer"))
+                    and requested["model"] == normalize_resource_identity(resource.get("model"))):
+                signals.append(("manufacturer_model", 4))
+            if signals:
+                candidates.append({
+                    "resource_id": resource["resource_id"], "resource_type": resource["resource_type"],
+                    "display_name": resource["display_name"], "manufacturer": resource.get("manufacturer"),
+                    "model": resource.get("model"), "part_no": resource.get("part_no"),
+                    "material_code": resource.get("material_code"), "active_version": resource["active_version"],
+                    "original_filename": active["original_filename"],
+                    "match_strength": "strong" if any(score >= 4 for _name, score in signals) else "likely",
+                    "matched_on": [name for name, _score in signals], "_score": sum(score for _name, score in signals),
+                })
+        candidates.sort(key=lambda item: (-item["_score"], item["display_name"].casefold()))
+        for candidate in candidates: candidate.pop("_score")
+        return candidates
+
+    def _create_decision_token(self, digest: str, resource_type: str, metadata: dict[str, Any], original: str,
+                               candidates: list[dict[str, Any]]) -> str:
+        self._remove_expired_decisions()
+        token = uuid.uuid4().hex
+        self._pending_decisions[token] = {
+            "expires": monotonic() + DECISION_TTL_SECONDS, "digest": digest, "resource_type": resource_type,
+            "identity": self._decision_identity(metadata, original),
+            "candidate_ids": {item["resource_id"] for item in candidates},
+        }
+        return token
+
+    def _validate_decision_token(self, token: str, digest: str, resource_type: str, metadata: dict[str, Any],
+                                 original: str, candidates: list[dict[str, Any]]) -> None:
+        self._remove_expired_decisions(); decision = self._pending_decisions.get(token)
+        current_ids = {item["resource_id"] for item in candidates}
+        if (not decision or decision["digest"] != digest or decision["resource_type"] != resource_type
+                or decision["identity"] != self._decision_identity(metadata, original)
+                or not decision["candidate_ids"].intersection(current_ids)):
+            raise SharedResourceError("The separate Resource confirmation is invalid or expired. Upload the file again for review.")
+
+    @staticmethod
+    def _decision_identity(metadata: dict[str, Any], original: str) -> tuple[str, ...]:
+        return tuple(normalize_resource_identity(metadata.get(key)) for key in
+                     ("display_name", "manufacturer", "model", "part_no", "material_code")) + (normalize_resource_identity(original),)
+
+    def _remove_expired_decisions(self) -> None:
+        now = monotonic()
+        for token in [key for key, value in self._pending_decisions.items() if value["expires"] <= now]:
+            self._pending_decisions.pop(token, None)
 
     def _stream_to_temp(self, stream: BinaryIO) -> tuple[Path, str, int]:
         directory = self.resource_root / ".tmp"; directory.mkdir(parents=True, exist_ok=True); path = directory / f"upload-{uuid.uuid4().hex}.tmp"

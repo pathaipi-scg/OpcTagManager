@@ -5,7 +5,7 @@ import tempfile
 from unittest.mock import patch
 import pytest
 
-from services.shared_resources import SharedResourceError, SharedResourceStore
+from services.shared_resources import SharedResourceError, SharedResourceStore, normalize_resource_identity
 from services.tag_knowledge import TagIdentity
 
 
@@ -137,3 +137,83 @@ def test_disabled_gate_blocks_all_mutations_without_root(setup_store):
     for action in (lambda: upload(store), lambda: store.upload_version("MAN_" + "A" * 32, "x.pdf", io.BytesIO(b"x")), lambda: store.link(identity, "MAN_" + "A" * 32), lambda: store.unlink(identity, "MAN_" + "A" * 32)):
         with pytest.raises(SharedResourceError, match="write mode"): action()
     assert not disabled_root.exists()
+
+
+def test_identity_normalization_is_deterministic_without_removing_model_characters():
+    assert normalize_resource_identity(" INVERTER_ABB-ACS  550 ") == "inverter abb acs 550"
+    assert normalize_resource_identity("ACS550/01") == "acs550/01"
+
+
+def test_exact_duplicate_has_priority_for_same_or_different_filename(setup_store):
+    store, root, _ = setup_store
+    first = upload(store)["resource"]; before = sorted(path for path in root.rglob("*") if path.is_file())
+    for filename in ("AS550 Manual.pdf", "renamed-manual.pdf"):
+        result = upload(store, filename=filename)
+        assert result["status"] == "duplicate"
+        assert result["duplicate"]["resource_id"] == first["resource_id"]
+    assert store.read_index(first["resource_id"])["active_version"] == 1
+    assert sorted(path for path in root.rglob("*") if path.is_file()) == before
+
+
+@pytest.mark.parametrize("new_name,new_filename,metadata,matched_on", [
+    ("inverter-abb-acs-550", "other.pdf", {}, "display_name"),
+    ("Different title", "AS550-Manual.pdf", {}, "original_filename"),
+    ("Different title", "other.pdf", {"manufacturer": "Delta", "model": "AS550"}, "manufacturer_model"),
+    ("Different title", "other.pdf", {"part_no": "P-100"}, "part_no"),
+    ("Different title", "other.pdf", {"material_code": "MAT-9"}, "material_code"),
+])
+def test_different_content_finds_candidate_by_supported_identity_signal(setup_store, new_name, new_filename, metadata, matched_on):
+    store, _, _ = setup_store
+    upload(store, name="INVERTER ABB ACS 550", filename="AS550_Manual.pdf", manufacturer="Delta", model="AS550", part_no="P-100", material_code="MAT-9")
+    result = upload(store, content=b"different revision", name=new_name, filename=new_filename, **metadata)
+    assert result["status"] == "similar_resource_found"
+    assert matched_on in result["candidates"][0]["matched_on"]
+    assert result["decision_token"]
+
+
+def test_unrelated_metadata_creates_normally_without_false_candidate(setup_store):
+    store, _, _ = setup_store
+    upload(store, name="AS550 Manual", filename="as550.pdf", manufacturer="ABB", model="ACS550")
+    result = upload(store, content=b"unrelated", name="Packing Drawing", filename="packing.dwg",
+                    kind="Manual", manufacturer="Other", model="X1", part_no="P2", material_code="M2")
+    assert result["status"] == "created"
+
+
+def test_candidate_can_be_uploaded_as_new_version_without_changing_links(setup_store):
+    store, _, identity = setup_store
+    first = upload(store)["resource"]; store.link(identity, first["resource_id"]); references = store.references_path(identity).read_bytes()
+    decision = upload(store, content=b"revision-2")
+    assert decision["status"] == "similar_resource_found"
+    updated = store.upload_version(decision["candidates"][0]["resource_id"], "AS550 Manual.pdf", io.BytesIO(b"revision-2"))["resource"]
+    assert updated["resource_id"] == first["resource_id"] and updated["active_version"] == 2
+    assert len(updated["versions"]) == 2
+    assert store.references_path(identity).read_bytes() == references
+
+
+def test_explicit_separate_confirmation_creates_new_id_and_preserves_original(setup_store):
+    store, _, _ = setup_store
+    first = upload(store)["resource"]
+    decision = upload(store, content=b"separate-document")
+    result = store.upload_new("Manual", "AS550 User Manual", "AS550 Manual.pdf", io.BytesIO(b"separate-document"),
+                              now=datetime(2026, 8, 17, 10, 0), confirm_separate_token=decision["decision_token"])
+    assert result["status"] == "created"
+    assert result["resource"]["resource_id"] != first["resource_id"]
+    assert store.read_index(first["resource_id"])["active_version"] == 1
+
+
+def test_separate_confirmation_rejects_changed_file_or_injected_token(setup_store):
+    store, _, _ = setup_store
+    upload(store); decision = upload(store, content=b"candidate-content")
+    with pytest.raises(SharedResourceError, match="invalid or expired"):
+        store.upload_new("Manual", "AS550 User Manual", "AS550 Manual.pdf", io.BytesIO(b"changed-again"),
+                         confirm_separate_token=decision["decision_token"])
+    with pytest.raises(SharedResourceError, match="invalid or expired"):
+        store.upload_new("Manual", "AS550 User Manual", "AS550 Manual.pdf", io.BytesIO(b"candidate-content"),
+                         confirm_separate_token="client-injected")
+
+
+def test_manual_candidate_is_not_offered_as_drawing_version(setup_store):
+    store, _, _ = setup_store
+    upload(store)
+    result = upload(store, content=b"drawing-content", kind="Drawing", name="AS550 User Manual", filename="AS550 Manual.pdf")
+    assert result["status"] == "created" and result["resource"]["resource_type"] == "Drawing"

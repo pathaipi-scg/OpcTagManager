@@ -57,6 +57,7 @@ Alarm mapping, audio playback, alarm CRUD, and alarm refresh behavior are not pa
 - Uploads stream in 1 MiB chunks into `_Resources\.tmp`, enforcing `KM_RESOURCE_MAX_UPLOAD_MB` while calculating SHA-256; temporary files are always cleaned.
 - A strict engineering-document extension allowlist rejects executables, scripts, archives, paths, UNC/drive-qualified names, NULs, and controls.
 - SHA-256 duplicate detection is global across all types and versions. Duplicate content creates no new file/version and returns the existing identity for explicit reuse.
+- Resource identity decisions follow three rules: the same SHA-256 reuses the exact existing Resource; different content with likely same-type identity asks the user to choose New Version or Separate Resource; unrelated different content creates a normal new Resource. Similarity is a deterministic warning, never an automatic merge.
 - Stored filenames use a sanitized display name, `vNNN`, and timestamp. Original filenames remain metadata only.
 - New versions retain history, atomically advance the active index, and leave ResourceId-based Tag references unchanged.
 - Active or historical files are resolved only through validated index metadata. Search covers fixed type and safe resource metadata.

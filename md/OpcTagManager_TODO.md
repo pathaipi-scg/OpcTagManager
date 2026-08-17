@@ -104,6 +104,7 @@ The second-version live validation remains a separately approved manual operatio
 - [x] Generate type-prefixed UUID4 ResourceIds server-side.
 - [x] Use readable version/timestamp filenames and retain original filename metadata.
 - [x] Detect identical SHA-256 globally without creating another physical file.
+- [x] Warn on different content with likely matching Resource identity and require an explicit New Version or Separate Resource choice.
 - [x] Upload immutable versions under one ResourceId and atomically activate the latest.
 - [x] Open active and historical versions without accepting paths or filenames.
 - [x] Search by fixed resource type and safe metadata.
