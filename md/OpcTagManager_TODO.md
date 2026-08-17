@@ -69,14 +69,38 @@ The following are intentionally outside Phase 2:
 
 Before production Factory-KM search is enabled across Tag versions, implement active/retired-version filtering so historical Markdown files are not indexed as simultaneously current.
 
-## Next manual validation
+## Manual Knowledge validation
 
 - [ ] Set `KEPWARE_CONFIG_WRITE_ENABLED=false` unless Kepware writing is specifically required.
 - [ ] Enable `KM_TAG_WRITE_ENABLED` only for the approved manual test and restart OpcTagManager.
-- [ ] Save Version 1 Knowledge for `LP2 / MIX / Cement_FML`.
-- [ ] Verify `D:\KM\Vault\Tags\LP2\MIX\Cement_FML\` contains one timestamped Markdown file and `knowledge.index.json`.
+- [x] Save Version 1 Knowledge for `LP2.MIX.OTM_TEST_Cement_FML` (completed before Phase 4.4).
+- [ ] Retain/record any separate manual verification evidence for its timestamped Markdown file and `knowledge.index.json`.
 - [ ] Verify actual Kepware metadata, active status/index, and containment beneath `KM_TAG_ROOT`.
 - [ ] Verify Factory-KM discovers the new Tags folder through its filesystem tree.
 - [ ] Save Version 2 and verify increment plus historical preservation.
 
-After these checks succeed, the next planned phase is Phase 4.4 for image and document attachments. Do not begin it automatically.
+The second-version live validation remains a separately approved manual operation; it is not part of automated Phase 4.4 testing.
+
+## Phase 4.4 Shared Resource architecture foundation
+
+- [x] Restrict Shared Resources to `KM_TAG_ROOT\_Resources` with canonical containment checks.
+- [x] Define stable ResourceId validation/generation and supported Resource types.
+- [x] Define and validate versionable `resource.index.json` metadata including PartNo and MaterialCode.
+- [x] Store atomic ResourceId links in each server-calculated Tag `references.json`.
+- [x] Prevent duplicate links and support unlink behavior.
+- [x] Add reusable SHA-256 calculation and duplicate-version lookup.
+- [x] Add independent `KM_RESOURCE_WRITE_ENABLED=false` gate.
+- [x] Add narrow resource list/detail and Tag reference read/link/unlink APIs.
+- [x] Revalidate Tag identity against Kepware before reading or changing Tag references.
+- [x] Add read-only Reference Resources UI below Tag Knowledge.
+- [x] Test filesystem behavior exclusively with temporary KM roots.
+- [x] Record Factory-KM and OpcTagManager ownership boundaries.
+
+## Phase 4.5 — do not start without approval
+
+- [ ] Upload New Resource.
+- [ ] Link Existing Resource interaction.
+- [ ] Resource file-version workflow and SHA-256 duplicate warning.
+- [ ] Multi-Tag linking workflow.
+
+Later phases retain Supplier/Contact richer UI, Quotation/Purchase workflows, Maintenance History Reader, Factory-KM Feedback Reader and Knowledge Promotion, and Inventory/ERP integration. Stock remains external live data.

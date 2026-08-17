@@ -75,7 +75,9 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertIn('id="new-tag-access"', html)
         self.assertIn('id="use-tag-template"', html)
         self.assertIn('id="tag-knowledge-panel"', html)
+        self.assertIn('id="tag-resources-panel"', html)
         self.assertIn('data-km-write-enabled="false"', html)
+        self.assertIn('data-km-resource-write-enabled="false"', html)
         self.assertEqual(self.request("GET", "/static/app.js")[0], 200)
         self.assertEqual(self.request("GET", "/static/app.css")[0], 200)
 
@@ -116,6 +118,30 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertIn("no longer exists", json.loads(body)["error"])
         get_tag.assert_called_once()
         save.assert_not_called()
+
+    @patch.object(OpcTagManager.shared_resource_store, "link")
+    @patch.object(OpcTagManager.kepware_config_api, "get_tag", return_value={
+        "name": "Cement_FML", "full_path": "LP2.MIX.Cement_FML",
+        "context": {"channel": "LP2", "device": "MIX", "group_path": []},
+        "tag_details": {},
+    })
+    def test_resource_link_write_gate_is_independent_and_disabled(self, _get_tag, link):
+        link.side_effect = OpcTagManager.SharedResourceError("Shared Resource write mode is disabled.")
+        status, body = self.request("POST", "/api/tag-resources/link", {
+            "channel": "LP2", "device": "MIX", "tag_name": "Cement_FML",
+            "resource_id": "DOC_AS550_MANUAL", "relation_type": "Manual",
+        })
+        self.assertEqual(status, 403)
+        self.assertIn("write mode is disabled", json.loads(body)["error"])
+
+    def test_resource_link_rejects_client_filesystem_path(self):
+        status, body = self.request("POST", "/api/tag-resources/link", {
+            "channel": "LP2", "device": "MIX", "tag_name": "Cement_FML",
+            "resource_id": "DOC_AS550_MANUAL", "relation_type": "Manual",
+            "filesystem_path": "D:\\KM\\Vault\\Tags\\other",
+        })
+        self.assertEqual(status, 422)
+        self.assertEqual(json.loads(body)["detail"][0]["type"], "extra_forbidden")
 
 
 if __name__ == "__main__":

@@ -347,6 +347,7 @@ function selectKepwareObject(button, node) {
             !kepwareWriteEnabled,
         );
         loadTagKnowledge(node);
+        loadTagResources(node);
     } else {
         resetCreateTagPanel();
         selectedTemplateCandidate = null;
@@ -569,6 +570,45 @@ function resetTagKnowledgePanel() {
     document.getElementById("tag-knowledge-form").reset();
     document.getElementById("knowledge-preview").classList.add("hidden");
     document.getElementById("knowledge-result").classList.add("hidden");
+    document.getElementById("tag-resources-panel").classList.add("hidden");
+}
+
+async function loadTagResources(node) {
+    const panel = document.getElementById("tag-resources-panel");
+    const status = document.getElementById("tag-resources-status");
+    const list = document.getElementById("tag-resources-list");
+    panel.classList.remove("hidden");
+    status.textContent = "Loading Reference Resources…";
+    status.className = "tree-counts";
+    list.replaceChildren();
+    const query = new URLSearchParams({
+        channel: node.context.channel,
+        device: node.context.device,
+        tag: node.name,
+    });
+    (node.context.group_path || []).forEach((group) => query.append("tag_groups", group));
+    try {
+        const response = await fetch(`/api/tag-resources?${query}`);
+        const data = await response.json();
+        if (selectedKnowledgeTag !== node) return;
+        if (!data.success) throw new Error(data.error || "Unable to load Reference Resources.");
+        const resources = data.references.resources;
+        status.textContent = resources.length ? `${resources.length} linked resource${resources.length === 1 ? "" : "s"}` : "No resources linked to this Tag.";
+        resources.forEach((link) => {
+            const item = document.createElement("article");
+            item.className = "resource-item";
+            const type = document.createElement("strong");
+            type.textContent = link.relation_type;
+            const name = document.createElement("span");
+            name.textContent = link.resource.display_name;
+            item.append(type, name);
+            list.append(item);
+        });
+    } catch (error) {
+        if (selectedKnowledgeTag !== node) return;
+        status.textContent = error.message || "Unable to load Reference Resources.";
+        status.className = "error-message";
+    }
 }
 
 async function loadTagKnowledge(node) {

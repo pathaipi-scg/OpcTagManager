@@ -8,7 +8,7 @@ from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from config.config import (
     APP_HOST,
@@ -30,6 +30,7 @@ from config.config import (
     LOG_LEVEL,
     KM_TAG_ROOT,
     KM_TAG_WRITE_ENABLED,
+    KM_RESOURCE_WRITE_ENABLED,
     PRODUCTION_LINE,
     SQL_DB,
     SQL_DRIVER,
@@ -44,6 +45,7 @@ from services.kepware_config_api import (
     KepwareConfigSettings,
 )
 from services.tag_knowledge import TagKnowledgeError, TagKnowledgeStore
+from services.shared_resources import SharedResourceError, SharedResourceStore
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -69,6 +71,11 @@ tag_knowledge_store = TagKnowledgeStore(
     timezone_name=APP_TIMEZONE,
     write_enabled=KM_TAG_WRITE_ENABLED,
 )
+shared_resource_store = SharedResourceStore(
+    tag_root=KM_TAG_ROOT,
+    timezone_name=APP_TIMEZONE,
+    write_enabled=KM_RESOURCE_WRITE_ENABLED,
+)
 
 
 class CreateKepwareTagRequest(BaseModel):
@@ -84,6 +91,7 @@ class CreateKepwareTagRequest(BaseModel):
 
 
 class TagKnowledgeIdentityRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     channel: str
     device: str
     group_path: list[str] = Field(default_factory=list)
@@ -98,6 +106,15 @@ class SaveTagKnowledgeRequest(TagKnowledgeIdentityRequest):
     safety_warning: str = ""
     additional_notes: str = ""
     preview_created_at: str | None = None
+
+
+class TagResourceLinkRequest(TagKnowledgeIdentityRequest):
+    resource_id: str
+    relation_type: str
+
+
+class TagResourceUnlinkRequest(TagKnowledgeIdentityRequest):
+    resource_id: str
 
 
 def get_conn():
@@ -162,6 +179,7 @@ def home(request: Request):
             "kepware_tag_default_scan_rate": KEPWARE_TAG_DEFAULT_SCAN_RATE_MS,
             "kepware_tag_default_access": KEPWARE_TAG_DEFAULT_ACCESS,
             "km_tag_write_enabled": KM_TAG_WRITE_ENABLED,
+            "km_resource_write_enabled": KM_RESOURCE_WRITE_ENABLED,
         },
     )
 
@@ -271,6 +289,11 @@ def _knowledge_error(exc: Exception, write: bool = False):
     return JSONResponse({"success": False, "error": str(exc)}, status_code=status_code)
 
 
+def _resource_error(exc: Exception, write: bool = False):
+    status_code = 403 if write and not KM_RESOURCE_WRITE_ENABLED else 400
+    return JSONResponse({"success": False, "error": str(exc)}, status_code=status_code)
+
+
 @app.post("/api/tag-knowledge/load")
 def load_tag_knowledge(payload: TagKnowledgeIdentityRequest):
     try:
@@ -313,6 +336,55 @@ def save_tag_knowledge(payload: SaveTagKnowledgeRequest):
         }
     except (KepwareConfigError, TagKnowledgeError) as exc:
         return _knowledge_error(exc, write=True)
+
+
+@app.get("/api/resources")
+def list_resources():
+    try:
+        return {"success": True, "resources": shared_resource_store.list_resources()}
+    except SharedResourceError as exc:
+        return _resource_error(exc)
+
+
+@app.get("/api/resources/{resource_id}")
+def get_resource(resource_id: str):
+    try:
+        return {"success": True, "resource": shared_resource_store.read_index(resource_id)}
+    except SharedResourceError as exc:
+        return _resource_error(exc)
+
+
+@app.get("/api/tag-resources")
+def get_tag_resources(
+    channel: str = Query(min_length=1),
+    device: str = Query(min_length=1),
+    tag: str = Query(min_length=1),
+    tag_groups: list[str] = Query(default=[]),
+):
+    try:
+        payload = TagKnowledgeIdentityRequest(channel=channel, device=device, group_path=tag_groups, tag_name=tag)
+        identity, node = _validated_knowledge_identity(payload)
+        return {"success": True, "tag": node, "references": shared_resource_store.references_with_resources(identity)}
+    except (KepwareConfigError, TagKnowledgeError, SharedResourceError) as exc:
+        return _resource_error(exc)
+
+
+@app.post("/api/tag-resources/link")
+def link_tag_resource(payload: TagResourceLinkRequest):
+    try:
+        identity, _node = _validated_knowledge_identity(payload)
+        return {"success": True, "references": shared_resource_store.link(identity, payload.resource_id, payload.relation_type)}
+    except (KepwareConfigError, TagKnowledgeError, SharedResourceError) as exc:
+        return _resource_error(exc, write=True)
+
+
+@app.post("/api/tag-resources/unlink")
+def unlink_tag_resource(payload: TagResourceUnlinkRequest):
+    try:
+        identity, _node = _validated_knowledge_identity(payload)
+        return {"success": True, "references": shared_resource_store.unlink(identity, payload.resource_id)}
+    except (KepwareConfigError, TagKnowledgeError, SharedResourceError) as exc:
+        return _resource_error(exc, write=True)
 
 
 if __name__ == "__main__":

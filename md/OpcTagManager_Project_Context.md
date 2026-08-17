@@ -2,7 +2,7 @@
 
 ## Current baseline
 
-OpcTagManager is a FastAPI application with two separate tag views. Runtime browsing remains read-only; Kepware Tag creation and KM Tag Knowledge saving are independently gated operations.
+OpcTagManager is a FastAPI application with two separate tag views. Runtime browsing remains read-only; Kepware Tag creation, KM Tag Knowledge saving, and Shared Resource linking are independently gated operations.
 
 ### OPC Runtime Tree
 
@@ -37,6 +37,22 @@ Alarm mapping, audio playback, alarm CRUD, and alarm refresh behavior are not pa
 - Historical Markdown versions are retained. Factory-KM filtering of retired versions must be completed before production search indexes every Tag version.
 - Images, documents, attachments, automated training, and Ask KM integration are not included.
 
+### Shared Resources (Phase 4.4)
+
+- Shared files are represented once beneath `KM_TAG_ROOT\_Resources\<ResourceType>\<ResourceId>\` and are never copied into each Tag folder.
+- Supported types are Manuals, Drawings, Suppliers, Quotations, Purchases, Photos, and GeneralDocuments.
+- `resource.index.json` is the versionable metadata contract. It includes stable `resource_id`, type, display and optional part identity fields, the active version/file, timestamps, and per-version filename/original filename/SHA-256 metadata.
+- A Tag stores `references.json` in its server-calculated Tag directory. Links contain stable ResourceId, relation type, and linked timestamp; KepwarePath remains canonical identity.
+- `KM_RESOURCE_WRITE_ENABLED` is independent of both existing write gates and defaults to disabled.
+- Reads, index validation, atomic JSON replacement, SHA-256 calculation, duplicate-hash lookup, link, and unlink foundations are implemented. File upload and interactive linking are not.
+- APIs accept structured Kepware identity only. They never accept a client filesystem path, and write APIs re-fetch the Tag from Kepware before calculating the Tag directory.
+
+### Ownership boundary
+
+Factory-KM owns Chat, Task, Conversation, task closure/summary, actual repair history, parts changed and photos from actual work, and Maintenance Events. OpcTagManager owns Kepware Tag identity, curated/versioned Tag Knowledge, Shared Resources, Tag-to-Resource linking, and future review/promotion of Factory-KM feedback.
+
+Factory-KM records what actually happened. OpcTagManager manages what should be used as standard knowledge. `KepwarePath` is the canonical bridge.
+
 ## Entry point
 
 - Python module: `OpcTagManager.py`
@@ -51,6 +67,7 @@ Alarm mapping, audio playback, alarm CRUD, and alarm refresh behavior are not pa
 - `config/config.py`
 - `services/kepware_config_api.py`
 - `services/tag_knowledge.py`
+- `services/shared_resources.py`
 - `templates/base.html`
 - `templates/opc_tag_manager.html`
 - `static/app.css`
@@ -62,10 +79,8 @@ All deployment-specific configuration is loaded from `config/.env` through `conf
 
 ## Deferred work
 
-Tag editing/deletion, scaling-property cloning, bulk imports, Tag Knowledge attachments, and broader Factory-KM integration are intentionally deferred to a later phase.
+Tag editing/deletion, scaling-property cloning, bulk imports, resource uploads, and broader Factory-KM integration are intentionally deferred to a later phase. Phase 4.5 will add Upload New Resource, Link Existing Resource, file versioning workflows, duplicate warnings, and multi-Tag linking. Richer Supplier/Contact, Quotation/Purchase, maintenance history, Factory-KM feedback/promotion, and external Inventory/ERP lookup remain later work. Stock remains external live data keyed in future by fields such as PartNo and MaterialCode.
 
 ## Current milestone and next validation
 
-Phase 4.3 is complete and its automated filesystem tests used temporary KM roots. No real Knowledge save has yet been made beneath `D:\KM\Vault\Tags`.
-
-The next task is a manually approved first Knowledge save for `LP2 / MIX / Cement_FML`, followed by a second-version test. Phase 4.4 must not begin until those live checks succeed.
+Phase 4.4 foundation is complete. One earlier manually approved live Knowledge V1 was saved for `LP2.MIX.OTM_TEST_Cement_FML`. Phase 4.4 automated filesystem tests use temporary KM roots only and do not write to the real Vault.

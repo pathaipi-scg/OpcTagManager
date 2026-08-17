@@ -384,6 +384,21 @@ textarea {
     overflow-wrap: anywhere;
 }
 
+.resource-list {
+    display: grid;
+    gap: 0.65rem;
+    margin: 0.75rem 0;
+}
+
+.resource-item {
+    display: grid;
+    gap: 0.2rem;
+    padding: 0.7rem;
+    border: 1px solid #d7dde5;
+    border-radius: 6px;
+    background: #f8fafc;
+}
+
 .success-message {
     border-left: 3px solid #16a34a;
     background: #193b25;

@@ -57,6 +57,7 @@
             class="tree-view hidden"
             data-write-enabled="{{ 'true' if kepware_write_enabled else 'false' }}"
             data-km-write-enabled="{{ 'true' if km_tag_write_enabled else 'false' }}"
+            data-km-resource-write-enabled="{{ 'true' if km_resource_write_enabled else 'false' }}"
             data-default-data-type="{{ kepware_tag_default_data_type }}"
             data-default-scan-rate="{{ kepware_tag_default_scan_rate }}"
             data-default-access="{{ kepware_tag_default_access }}"
@@ -231,6 +232,13 @@
                     </div>
                 </div>
                 <p id="knowledge-result" class="create-result hidden"></p>
+            </section>
+            <section id="tag-resources-panel" class="add-tag-panel hidden">
+                <h3>Reference Resources</h3>
+                <p id="tag-resources-status" class="tree-counts">Loading Reference Resources…</p>
+                <div id="tag-resources-list" class="resource-list"></div>
+                <button type="button" id="link-existing-resource" disabled>Link Existing Resource</button>
+                <p class="tree-counts">Resource linking UI will be added in Phase 4.5.</p>
             </section>
         </div>
     </section>
