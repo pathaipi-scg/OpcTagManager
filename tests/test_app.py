@@ -5,6 +5,7 @@ import io
 from pathlib import Path
 import tempfile
 import unittest
+from urllib.parse import urlsplit
 from unittest.mock import patch
 
 import OpcTagManager
@@ -13,6 +14,7 @@ from services.kepware_config_api import KepwareConfigError
 from services.shared_resources import SharedResourceStore
 from services.supplier_profiles import SupplierProfileStore
 from services.equipment_parts import EquipmentPartStore
+from services.resource_relationships import ResourceRelationshipStore
 
 
 class FakeCursor:
@@ -34,6 +36,7 @@ class FakeConnection:
 class OpcTagManagerAppTests(unittest.TestCase):
     @staticmethod
     def request(method, path, body=None):
+        target = urlsplit(path)
         messages = []
         request_body = json.dumps(body).encode() if body is not None else b""
         received = False
@@ -54,9 +57,9 @@ class OpcTagManagerAppTests(unittest.TestCase):
             "http_version": "1.1",
             "method": method,
             "scheme": "http",
-            "path": path,
-            "raw_path": path.encode(),
-            "query_string": b"",
+            "path": target.path,
+            "raw_path": target.path.encode(),
+            "query_string": target.query.encode(),
             "root_path": "",
             "headers": (
                 [(b"content-type", b"application/json")] if body is not None else []
@@ -295,7 +298,7 @@ class OpcTagManagerAppTests(unittest.TestCase):
             self.assertEqual(json.loads(body)["detail"][0]["type"], "extra_forbidden")
 
     def test_supplier_routes_create_read_edit_search_and_respect_gate(self):
-        supplier_payload = {"supplier_name": "API Supplier", "supplier_code": "API-1", "contacts": [{
+        supplier_payload = {"supplier_name": "API Supplier", "supplier_code": "API-1", "tax_id": "001-22-333", "contacts": [{
             "contact_name": "Support Person", "contact_type": "Support", "phone": "+66 1", "email": "support@example.com"
         }]}
         with tempfile.TemporaryDirectory() as temporary:
@@ -306,6 +309,9 @@ class OpcTagManagerAppTests(unittest.TestCase):
                 self.assertEqual(status, 200); created = json.loads(body); resource_id = created["supplier"]["resource_id"]
                 self.assertTrue(resource_id.startswith("SUP_"))
                 self.assertEqual(self.request("GET", f"/api/suppliers/{resource_id}")[0], 200)
+                status, body = self.request("GET", "/api/suppliers/matches?tax_id=00122333")
+                self.assertEqual(status, 200)
+                self.assertEqual(json.loads(body)["suppliers"][0]["resource_id"], resource_id)
                 self.assertEqual(len(suppliers.list("Support")), 1)
                 edited = dict(supplier_payload); edited["general_phone"] = "+66 2"
                 edited["contacts"] = created["supplier"]["contacts"]
@@ -335,6 +341,54 @@ class OpcTagManagerAppTests(unittest.TestCase):
             with patch.object(OpcTagManager, "equipment_part_store", catalog), patch.object(OpcTagManager, "KM_RESOURCE_WRITE_ENABLED", False):
                 status, body = self.request("POST", "/api/equipment-parts", base)
                 self.assertEqual(status, 403); self.assertIn("write mode is disabled", json.loads(body)["error"])
+
+
+    def test_resource_relationship_api_uses_logical_ids_and_temp_root(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            resources = SharedResourceStore(Path(temporary) / "Tags", "Asia/Bangkok", True)
+            graph = ResourceRelationshipStore(resources)
+            ept = resources.upload_new("EquipmentPart", "Drive", "drive.pdf", io.BytesIO(b"ept"))["resource"]
+            manual = resources.upload_new("Manual", "Drive Manual", "manual.pdf", io.BytesIO(b"manual"))["resource"]
+            payload = {"source_resource_id": ept["resource_id"], "target_resource_id": manual["resource_id"]}
+            with patch.object(OpcTagManager, "resource_relationship_store", graph), patch.object(OpcTagManager, "KM_RESOURCE_WRITE_ENABLED", True):
+                status, body = self.request("POST", "/api/resource-relationships/link", payload)
+                self.assertEqual(status, 200); self.assertEqual(json.loads(body)["status"], "linked")
+                status, body = self.request("GET", f"/api/resource-relationships/{ept['resource_id']}")
+                self.assertEqual(status, 200); self.assertEqual(json.loads(body)["relationships"][0]["target_resource_id"], manual["resource_id"])
+                status, body = self.request("POST", "/api/resource-relationships/unlink", payload)
+                self.assertEqual(status, 200); self.assertEqual(json.loads(body)["status"], "unlinked")
+            bad = {"source_resource_id": ept["resource_id"], "target_resource_id": r"D:\KM\Vault\manual.pdf"}
+            with patch.object(OpcTagManager, "resource_relationship_store", graph), patch.object(OpcTagManager, "KM_RESOURCE_WRITE_ENABLED", True):
+                status, _body = self.request("POST", "/api/resource-relationships/link", bad)
+                self.assertEqual(status, 400)
+
+    def test_candidate_apis_are_read_only_evidence_contracts_without_paths(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            resources = SharedResourceStore(Path(temporary) / "Tags", "Asia/Bangkok", True)
+            suppliers = SupplierProfileStore(resources); catalog = EquipmentPartStore(resources)
+            supplier = suppliers.create({"supplier_name": "ABC Co", "supplier_code": "ABC", "tax_id": "001-22",
+                "website": "https://abc.example.com", "general_phone": "+66 123", "contacts": [{"contact_name": "Jane Doe", "contact_type": "Sales", "email": "jane@example.com", "phone": "+66 999"}]})["supplier"]
+            part = catalog.create({"display_name": "ABC Motor", "item_kind": "Equipment", "manufacturer": "ABC", "model": "M1",
+                "part_no": "P1", "material_code": "0007", "aliases": ["Main Motor"], "supplier_links": [{"supplier_resource_id": supplier["resource_id"], "relationship": "Manufacturer"}]})["equipment_part"]
+            patches = (patch.object(OpcTagManager, "supplier_profile_store", suppliers), patch.object(OpcTagManager, "equipment_part_store", catalog))
+            with patches[0], patches[1]:
+                calls = [
+                    "/api/suppliers/candidates?tax_id=00122&supplier_code=ABC",
+                    f"/api/contacts/candidates?supplier_resource_id={supplier['resource_id']}&email=jane%40example.com",
+                    "/api/equipment-parts/candidates?material_code=0007&manufacturer=ABC&part_no=P1",
+                    f"/api/suppliers/{supplier['resource_id']}/equipment-parts",
+                ]
+                bodies = []
+                for url in calls:
+                    status, body = self.request("GET", url); self.assertEqual(status, 200); bodies.append(json.loads(body))
+                self.assertEqual(bodies[0]["auto_selected_resource_id"], None)
+                self.assertEqual(bodies[1]["candidates"][0]["contact_id"], supplier["contacts"][0]["contact_id"])
+                self.assertEqual(bodies[2]["candidates"][0]["resource_id"], part["resource_id"])
+                self.assertEqual(bodies[3]["equipment_parts"][0]["resource_id"], part["resource_id"])
+                self.assertNotIn(str(Path(temporary)), json.dumps(bodies))
+                self.assertNotIn("filesystem_path", json.dumps(bodies))
+            self.assertEqual(suppliers.read(supplier["resource_id"])["resource"]["active_version"], 1)
+            self.assertEqual(catalog.read(part["resource_id"])["resource"]["active_version"], 1)
 
 
 if __name__ == "__main__":

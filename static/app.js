@@ -850,7 +850,7 @@ document.getElementById("confirm-resource-version").addEventListener("click", as
 function showResourceResult(message, error = false, warning = false) { const result = document.getElementById("resource-workflow-result"); result.textContent = message; result.className = `create-result ${error ? "error-message" : warning ? "warning-message" : "success-message"}`; }
 
 let supplierBeingEdited = null;
-const supplierFieldNames = ["supplier_name", "supplier_code", "company_name", "website", "address", "general_phone", "general_email", "brands_products", "models_equipment", "support_notes", "additional_notes"];
+const supplierFieldNames = ["supplier_name", "supplier_code", "tax_id", "company_name", "website", "address", "general_phone", "general_email", "brands_products", "models_equipment", "support_notes", "additional_notes"];
 
 document.getElementById("supplier-search").addEventListener("input", searchSuppliers);
 document.getElementById("add-supplier-contact").addEventListener("click", () => addSupplierContact());
@@ -878,12 +878,14 @@ async function showSupplier(resourceId) {
 function renderSupplierDetail(supplier, resource) {
     const detail = document.getElementById("supplier-detail"); detail.replaceChildren(); detail.classList.remove("hidden");
     const title = document.createElement("strong"); title.textContent = supplier.supplier_name; detail.append(title);
-    const company = document.createElement("span"); company.textContent = [supplier.supplier_code, supplier.company_name, supplier.website,
+    const company = document.createElement("span"); company.textContent = [supplier.supplier_code, supplier.tax_id && `Tax ID ${supplier.tax_id}`, supplier.company_name, supplier.website,
         supplier.address, supplier.general_phone, supplier.general_email].filter(Boolean).join(" · "); detail.append(company);
     appendSupplierSection(detail, "Brands / Products", supplier.brands_products);
     appendSupplierSection(detail, "Models / Equipment", supplier.models_equipment);
     appendSupplierSection(detail, "Support Notes", supplier.support_notes);
     supplier.contacts.forEach((contact) => appendContactSummary(detail, contact));
+    appendSupplierEquipmentParts(detail, supplier.resource_id);
+    appendManagedResourceRelationships(detail, supplier.resource_id, [{type: "Quotation", heading: "Quotations"}]);
     const actions = document.createElement("div"); actions.className = "preview-actions";
     const edit = document.createElement("button"); edit.type = "button"; edit.textContent = "Edit"; edit.disabled = !kmResourceWriteEnabled; edit.onclick = () => openSupplierForm(supplier);
     const link = document.createElement("button"); link.type = "button"; link.textContent = "Link to Current Tag"; link.disabled = !kmResourceWriteEnabled || !selectedKnowledgeTag; link.onclick = () => beginTargetSelection(resource);
@@ -973,6 +975,70 @@ async function showEquipmentPart(resourceId) {
     renderEquipmentPartDetail(data.equipment_part, data.resource);
 }
 
+async function appendResourceRelationships(parent, sourceResourceId, headingText = "Linked Resources") {
+    try {
+        const response = await fetch(`/api/resource-relationships/${encodeURIComponent(sourceResourceId)}`); const data = await response.json();
+        if (!data.success || !data.relationships.length) return;
+        const heading = document.createElement("strong"); heading.textContent = headingText; parent.append(heading);
+        data.relationships.forEach((link) => {
+            const row = document.createElement("span");
+            row.textContent = `${link.relationship_type}: ${link.resource.display_name} (${link.target_resource_id})`;
+            parent.append(row);
+        });
+    } catch (_error) { /* Base canonical details remain available. */ }
+}
+
+async function appendSupplierEquipmentParts(parent, supplierResourceId) {
+    try {
+        const response = await fetch(`/api/suppliers/${encodeURIComponent(supplierResourceId)}/equipment-parts`); const data = await response.json();
+        const heading = document.createElement("strong"); heading.textContent = "Equipment / Parts"; parent.append(heading);
+        if (!data.success || !data.equipment_parts.length) { const empty = document.createElement("span"); empty.textContent = "None linked through EPT Supplier relationships."; parent.append(empty); return; }
+        data.equipment_parts.forEach((item) => { const row = document.createElement("span"); row.textContent = `${item.display_name} (${item.resource_id})`; parent.append(row); });
+    } catch (_error) { /* Supplier details remain usable. */ }
+}
+
+async function appendManagedResourceRelationships(parent, sourceResourceId, sections) {
+    let links = [];
+    try { const response = await fetch(`/api/resource-relationships/${encodeURIComponent(sourceResourceId)}`); const data = await response.json(); if (data.success) links = data.relationships; }
+    catch (_error) { /* Render empty management sections. */ }
+    sections.forEach((section) => {
+        const group = document.createElement("div"); group.className = "relationship-section";
+        const heading = document.createElement("strong"); heading.textContent = section.heading; group.append(heading);
+        const matching = links.filter((link) => link.relationship_type === section.type);
+        if (!matching.length) { const empty = document.createElement("span"); empty.textContent = "No linked resources."; group.append(empty); }
+        matching.forEach((link) => {
+            const row = document.createElement("div"); row.className = "preview-actions";
+            const open = document.createElement("a"); open.target = "_blank"; open.href = `/api/resources/${encodeURIComponent(link.target_resource_id)}/file`; open.textContent = `${link.resource.display_name} (${link.target_resource_id})`;
+            const unlink = document.createElement("button"); unlink.type = "button"; unlink.className = "danger-button"; unlink.textContent = "Unlink"; unlink.disabled = !kmResourceWriteEnabled;
+            unlink.onclick = async () => { if (!confirm(`Unlink ${link.resource.display_name}?`)) return; await mutateResourceRelationship("unlink", sourceResourceId, link.target_resource_id); };
+            row.append(open, unlink); group.append(row);
+        });
+        const add = document.createElement("button"); add.type = "button"; add.textContent = `+ Link Existing ${section.heading.replace(/s$/, "")}`; add.disabled = !kmResourceWriteEnabled;
+        add.onclick = () => openExistingResourceLinker(group, sourceResourceId, section.type); group.append(add); parent.append(group);
+    });
+}
+
+async function openExistingResourceLinker(group, sourceResourceId, resourceType) {
+    group.querySelector(".existing-resource-linker")?.remove();
+    const panel = document.createElement("div"); panel.className = "existing-resource-linker resource-item";
+    const search = document.createElement("input"); search.type = "search"; search.placeholder = `Search existing ${resourceType}`;
+    const results = document.createElement("div"); results.className = "resource-list"; panel.append(search, results); group.append(panel);
+    const load = async () => {
+        const response = await fetch(`/api/resources?resource_type=${encodeURIComponent(resourceType)}&q=${encodeURIComponent(search.value)}`); const data = await response.json(); results.replaceChildren();
+        if (!data.success) return;
+        data.resources.forEach((resource) => { const select = document.createElement("button"); select.type = "button"; select.textContent = `${resource.display_name} (${resource.resource_id})`;
+            select.onclick = async () => { if (!confirm(`Link existing ${resourceType} ${resource.display_name}?`)) return; await mutateResourceRelationship("link", sourceResourceId, resource.resource_id); }; results.append(select); });
+    };
+    search.addEventListener("input", load); await load(); search.focus();
+}
+
+async function mutateResourceRelationship(operation, sourceResourceId, targetResourceId) {
+    const response = await fetch(`/api/resource-relationships/${operation}`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({source_resource_id: sourceResourceId, target_resource_id: targetResourceId})});
+    const data = await response.json(); if (!data.success) return showResourceResult(data.error || `Unable to ${operation} Resource.`, true);
+    showResourceResult(operation === "link" ? "Relationship linked." : "Relationship unlinked.");
+    if (sourceResourceId.startsWith("EPT_")) await showEquipmentPart(sourceResourceId); else await showSupplier(sourceResourceId);
+}
+
 function renderEquipmentPartDetail(item, resource) {
     const detail = document.getElementById("equipment-part-detail"); detail.replaceChildren(); detail.classList.remove("hidden");
     const title = document.createElement("strong"); title.textContent = item.display_name; detail.append(title);
@@ -985,6 +1051,10 @@ function renderEquipmentPartDetail(item, resource) {
         item.supplier_links.forEach((link) => { const row = document.createElement("span"); const supplier = equipmentPartSupplierOptions.find((value) => value.resource_id === link.supplier_resource_id);
             row.textContent = [supplier?.supplier_name || link.supplier_resource_id, link.relationship, link.supplier_part_no].filter(Boolean).join(" · "); detail.append(row); });
     }
+    appendManagedResourceRelationships(detail, item.resource_id, [
+        {type: "Manual", heading: "Manuals"}, {type: "Drawing", heading: "Drawings"},
+        {type: "Quotation", heading: "Quotations"}, {type: "GeneralDocument", heading: "Documents"},
+    ]);
     const actions = document.createElement("div"); actions.className = "preview-actions";
     const edit = document.createElement("button"); edit.type = "button"; edit.textContent = "Edit"; edit.disabled = !kmResourceWriteEnabled; edit.onclick = () => openEquipmentPartForm(item);
     const link = document.createElement("button"); link.type = "button"; link.textContent = "Link to Current Tag"; link.disabled = !kmResourceWriteEnabled || !selectedKnowledgeTag; link.onclick = () => beginTargetSelection(resource);
@@ -998,6 +1068,12 @@ async function appendLinkedEquipmentPartSummary(parent, resourceId) {
         const item = data.equipment_part; const summary = document.createElement("span");
         summary.textContent = [item.manufacturer && `Manufacturer: ${item.manufacturer}`, item.model && `Model: ${item.model}`,
             item.part_no && `Part No: ${item.part_no}`, item.material_code && `Material Code: ${item.material_code}`].filter(Boolean).join(" · "); parent.append(summary);
+        if (item.supplier_links.length) {
+            const suppliers = document.createElement("span"); suppliers.textContent = `Suppliers: ${item.supplier_links.map((link) => {
+                const supplier = equipmentPartSupplierOptions.find((value) => value.resource_id === link.supplier_resource_id); return supplier?.supplier_name || link.supplier_resource_id;
+            }).join(", ")}`; parent.append(suppliers);
+        }
+        await appendResourceRelationships(parent, resourceId, "Equipment Resources");
     } catch (_error) { /* Keep the base Resource card usable. */ }
 }
 

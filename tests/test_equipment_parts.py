@@ -109,6 +109,20 @@ def test_search_identity_and_alias_fields(catalog_setup, query):
     assert len(catalog.list(query)) == 1
 
 
+def test_candidate_lookup_returns_explicit_evidence_and_ambiguous_results(catalog_setup):
+    catalog, _resources, _suppliers, _root, _supplier, _ = catalog_setup
+    first = catalog.create(part_payload())["equipment_part"]
+    other_payload = part_payload(); other_payload.update(display_name="ABB ACS550 Spare", material_code="OTHER", aliases=["Shared Drive"])
+    warning = catalog.create(other_payload); other = catalog.create(other_payload, confirm_separate_token=warning["decision_token"])["equipment_part"]
+    candidates = catalog.find_candidates(manufacturer="ABB", part_no="ACS550-01-05A4-4", model="ACS550-01-05A4-4")
+    assert {item["resource_id"] for item in candidates} == {first["resource_id"], other["resource_id"]}
+    assert {"manufacturer_part_no", "manufacturer_model", "part_no", "model"} <= {entry["signal"] for entry in candidates[0]["match_evidence"]}
+    assert catalog.find_candidates(material_code="001000123456")[0]["resource_id"] == first["resource_id"]
+    assert catalog.find_candidates(display_name="ABB ACS550 Inverter")[0]["resource_id"] == first["resource_id"]
+    assert catalog.find_candidates(alias="Shared Drive")[0]["resource_id"] == other["resource_id"]
+    assert catalog.read(first["resource_id"])["resource"]["active_version"] == 1
+
+
 @pytest.mark.parametrize("signal,changes", [
     ("material_code", {"display_name": "Different", "manufacturer": "Other", "model": "Other", "part_no": "Other"}),
     ("manufacturer_part_no", {"display_name": "Different", "model": "Different", "material_code": "Other"}),

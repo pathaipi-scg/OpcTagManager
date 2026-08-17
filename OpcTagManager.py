@@ -50,6 +50,10 @@ from services.tag_knowledge import TagKnowledgeError, TagKnowledgeStore
 from services.shared_resources import SharedResourceError, SharedResourceStore
 from services.supplier_profiles import SupplierProfileError, SupplierProfileStore
 from services.equipment_parts import EquipmentPartError, EquipmentPartStore
+from services.resource_relationships import (
+    ResourceRelationshipError,
+    ResourceRelationshipStore,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -83,6 +87,7 @@ shared_resource_store = SharedResourceStore(
 )
 supplier_profile_store = SupplierProfileStore(shared_resource_store)
 equipment_part_store = EquipmentPartStore(shared_resource_store)
+resource_relationship_store = ResourceRelationshipStore(shared_resource_store)
 
 
 class CreateKepwareTagRequest(BaseModel):
@@ -123,6 +128,12 @@ class TagResourceUnlinkRequest(TagKnowledgeIdentityRequest):
     resource_id: str
 
 
+class ResourceRelationshipRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_resource_id: str
+    target_resource_id: str
+
+
 class BatchTagIdentity(BaseModel):
     model_config = ConfigDict(extra="forbid")
     channel: str
@@ -153,6 +164,7 @@ class SupplierProfileRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     supplier_name: str
     supplier_code: str = ""
+    tax_id: str = ""
     company_name: str = ""
     website: str = ""
     address: str = ""
@@ -452,6 +464,47 @@ def create_supplier(payload: SupplierProfileRequest):
         return _resource_error(exc, write=True)
 
 
+@app.get("/api/suppliers/matches")
+def match_suppliers_by_tax_id(tax_id: str = Query(min_length=1, max_length=100)):
+    try:
+        return {
+            "success": True,
+            "match_signal": "tax_id",
+            "suppliers": supplier_profile_store.find_tax_id_matches(tax_id),
+        }
+    except (SupplierProfileError, SharedResourceError) as exc:
+        return _resource_error(exc)
+
+
+@app.get("/api/suppliers/candidates")
+def supplier_candidates(tax_id: str = "", supplier_code: str = "", name: str = "",
+                        website: str = "", phone: str = "", address: str = ""):
+    try:
+        return {"success": True, "candidates": supplier_profile_store.find_candidates(
+            tax_id=tax_id, supplier_code=supplier_code, name=name, website=website, phone=phone, address=address
+        ), "auto_selected_resource_id": None}
+    except (SupplierProfileError, SharedResourceError) as exc:
+        return _resource_error(exc)
+
+
+@app.get("/api/contacts/candidates")
+def contact_candidates(supplier_resource_id: str = "", name: str = "", email: str = "", phone: str = ""):
+    try:
+        return {"success": True, "candidates": supplier_profile_store.find_contacts(
+            supplier_resource_id=supplier_resource_id, name=name, email=email, phone=phone
+        ), "auto_selected_contact_id": None}
+    except (SupplierProfileError, SharedResourceError) as exc:
+        return _resource_error(exc)
+
+
+@app.get("/api/suppliers/{resource_id}/equipment-parts")
+def supplier_equipment_parts(resource_id: str):
+    try:
+        return {"success": True, "equipment_parts": equipment_part_store.for_supplier(resource_id)}
+    except (EquipmentPartError, SharedResourceError) as exc:
+        return _resource_error(exc)
+
+
 @app.get("/api/suppliers/{resource_id}")
 def get_supplier(resource_id: str):
     try:
@@ -486,6 +539,18 @@ def create_equipment_part(payload: CreateEquipmentPartRequest):
         return _resource_error(exc, write=True)
 
 
+@app.get("/api/equipment-parts/candidates")
+def equipment_part_candidates(material_code: str = "", manufacturer: str = "", part_no: str = "",
+                              model: str = "", display_name: str = "", alias: str = ""):
+    try:
+        return {"success": True, "candidates": equipment_part_store.find_candidates(
+            material_code=material_code, manufacturer=manufacturer, part_no=part_no,
+            model=model, display_name=display_name, alias=alias
+        ), "auto_selected_resource_id": None}
+    except (EquipmentPartError, SharedResourceError) as exc:
+        return _resource_error(exc)
+
+
 @app.get("/api/equipment-parts/{resource_id}")
 def get_equipment_part(resource_id: str):
     try:
@@ -508,6 +573,34 @@ def get_resource(resource_id: str):
         return {"success": True, "resource": shared_resource_store.read_index(resource_id)}
     except SharedResourceError as exc:
         return _resource_error(exc)
+
+
+@app.get("/api/resource-relationships/{source_resource_id}")
+def get_resource_relationships(source_resource_id: str):
+    try:
+        return {"success": True, **resource_relationship_store.with_resources(source_resource_id)}
+    except (ResourceRelationshipError, SharedResourceError) as exc:
+        return _resource_error(exc)
+
+
+@app.post("/api/resource-relationships/link")
+def link_resource_relationship(payload: ResourceRelationshipRequest):
+    try:
+        return {"success": True, **resource_relationship_store.link(
+            payload.source_resource_id, payload.target_resource_id
+        )}
+    except (ResourceRelationshipError, SharedResourceError) as exc:
+        return _resource_error(exc, write=True)
+
+
+@app.post("/api/resource-relationships/unlink")
+def unlink_resource_relationship(payload: ResourceRelationshipRequest):
+    try:
+        return {"success": True, **resource_relationship_store.unlink(
+            payload.source_resource_id, payload.target_resource_id
+        )}
+    except (ResourceRelationshipError, SharedResourceError) as exc:
+        return _resource_error(exc, write=True)
 
 
 @app.post("/api/resources/upload")

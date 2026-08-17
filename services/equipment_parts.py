@@ -125,6 +125,34 @@ class EquipmentPartStore:
         for candidate in candidates: candidate.pop("_score")
         return candidates
 
+    def find_candidates(self, *, material_code: str = "", manufacturer: str = "", part_no: str = "",
+                        model: str = "", display_name: str = "", alias: str = "") -> list[dict[str, Any]]:
+        requested = {key: normalize_resource_identity(value) for key, value in {
+            "material_code": material_code, "manufacturer": manufacturer, "part_no": part_no,
+            "model": model, "display_name": display_name, "alias": alias}.items()}
+        results = []
+        for item in self.list():
+            current = {key: normalize_resource_identity(item.get(key, "")) for key in ("material_code", "manufacturer", "part_no", "model", "display_name")}
+            aliases = {normalize_resource_identity(value) for value in item["aliases"]}; evidence = []
+            def add(signal, weight): evidence.append({"signal": signal, "match": "exact", "weight": weight})
+            if requested["material_code"] and requested["material_code"] == current["material_code"]: add("material_code", 100)
+            if requested["manufacturer"] and requested["part_no"] and requested["manufacturer"] == current["manufacturer"] and requested["part_no"] == current["part_no"]: add("manufacturer_part_no", 80)
+            if requested["manufacturer"] and requested["model"] and requested["manufacturer"] == current["manufacturer"] and requested["model"] == current["model"]: add("manufacturer_model", 70)
+            if requested["part_no"] and requested["part_no"] == current["part_no"]: add("part_no", 60)
+            if requested["model"] and requested["model"] == current["model"]: add("model", 50)
+            if requested["display_name"] and requested["display_name"] == current["display_name"]: add("display_name", 40)
+            if requested["alias"] and requested["alias"] in aliases: add("alias", 30)
+            if evidence:
+                results.append({key: item[key] for key in ("resource_id", "display_name", "item_kind", "manufacturer", "model", "part_no", "material_code", "aliases")} |
+                               {"match_evidence": evidence, "_score": sum(entry["weight"] for entry in evidence)})
+        results.sort(key=lambda value: (-value["_score"], value["display_name"].casefold(), value["resource_id"]))
+        for result in results: result.pop("_score")
+        return results
+
+    def for_supplier(self, supplier_resource_id: str) -> list[dict[str, Any]]:
+        self.resources.read_index(supplier_resource_id)
+        return [item for item in self.list() if any(link["supplier_resource_id"] == supplier_resource_id for link in item["supplier_links"])]
+
     def render_markdown(self, profile: dict[str, Any], version: int) -> str:
         metadata = {"KnowledgeType": "EquipmentPartProfile", "ResourceId": profile["resource_id"],
                     "ResourceType": "EquipmentPart", "Status": "Active", "Version": version,

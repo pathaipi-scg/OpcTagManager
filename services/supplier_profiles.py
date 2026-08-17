@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import urlsplit
 import uuid
 
-from services.shared_resources import RESOURCE_INDEX_FILENAME, SharedResourceError, SharedResourceStore
+from services.shared_resources import RESOURCE_INDEX_FILENAME, SharedResourceError, SharedResourceStore, normalize_resource_identity
 
 
 PROFILE_FILENAME = "supplier.profile.json"
@@ -22,6 +22,7 @@ EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 PROFILE_LIMITS = {
     "supplier_name": 200,
     "supplier_code": 100,
+    "tax_id": 100,
     "company_name": 300,
     "website": 500,
     "address": 2000,
@@ -101,8 +102,14 @@ class SupplierProfileStore:
                 # but only structured Phase 4.6 profiles belong in this directory.
                 continue
             profile = item["supplier"]
-            if query and query.strip() and query.strip().casefold() not in self._search_text(profile):
-                continue
+            if query and query.strip():
+                raw_match = query.strip().casefold() in self._search_text(profile)
+                tax_match = (
+                    bool(profile.get("tax_id"))
+                    and self.normalize_tax_id(query) == self.normalize_tax_id(profile["tax_id"])
+                )
+                if not raw_match and not tax_match:
+                    continue
             suppliers.append({**profile, "active_version": index["active_version"]})
         return sorted(suppliers, key=lambda item: item["supplier_name"].casefold())
 
@@ -142,11 +149,13 @@ class SupplierProfileStore:
             "KnowledgeType": "SupplierProfile", "ResourceId": profile["resource_id"],
             "ResourceType": "Supplier", "Status": "Active", "Version": version,
             "SupplierName": profile["supplier_name"], "SupplierCode": profile["supplier_code"],
+            "TaxId": profile["tax_id"],
             "UpdatedAt": profile["updated_at"],
         }
         lines = ["---"] + [f"{key}: {json.dumps(value, ensure_ascii=False)}" for key, value in yaml_values.items()] + ["---", ""]
         lines += [f"# {self._md(profile['supplier_name'])}", "", "## Company Information", "",
                   f"Supplier Code: {self._md(profile['supplier_code'])}",
+                  f"Tax ID: {self._md(profile['tax_id'])}",
                   f"Company / Legal Name: {self._md(profile['company_name'])}",
                   f"Website: {self._md(profile['website'])}", f"Address: {self._md(profile['address'])}",
                   f"General Phone: {self._md(profile['general_phone'])}",
@@ -227,10 +236,87 @@ class SupplierProfileStore:
 
     @staticmethod
     def _search_text(profile: dict[str, Any]) -> str:
-        fields = [profile[key] for key in ("supplier_name", "supplier_code", "company_name", "brands_products", "models_equipment")]
+        fields = [profile[key] for key in ("supplier_name", "supplier_code", "tax_id", "company_name", "brands_products", "models_equipment")]
         for contact in profile["contacts"]:
             fields += [contact[key] for key in ("contact_name", "email", "phone", "mobile")]
         return " ".join(fields).casefold()
+
+    @staticmethod
+    def normalize_tax_id(value: str) -> str:
+        """Normalize Tax ID only for matching; stored text remains trimmed."""
+        return re.sub(r"[\s-]+", "", value).casefold()
+
+    def find_tax_id_matches(self, tax_id: str, exclude_resource_id: str | None = None) -> list[dict[str, Any]]:
+        normalized = self.normalize_tax_id(tax_id.strip())
+        if not normalized:
+            return []
+        return [
+            item for item in self.list()
+            if item["resource_id"] != exclude_resource_id
+            and self.normalize_tax_id(item.get("tax_id", "")) == normalized
+        ]
+
+    def find_candidates(self, *, tax_id: str = "", supplier_code: str = "", name: str = "",
+                        website: str = "", phone: str = "", address: str = "") -> list[dict[str, Any]]:
+        """Return all matching Suppliers with evidence; never select or mutate one."""
+        requested = {
+            "tax_id": self.normalize_tax_id(tax_id),
+            "supplier_code": normalize_resource_identity(supplier_code),
+            "name": normalize_resource_identity(name),
+            "website_domain": self.normalize_domain(website),
+            "phone": self.normalize_phone(phone),
+            "address": normalize_resource_identity(address),
+        }
+        results = []
+        weights = {"tax_id": 100, "supplier_code": 80, "name": 60, "website_domain": 40, "phone": 30, "address": 10}
+        for item in self.list():
+            names = {normalize_resource_identity(item.get("supplier_name", "")), normalize_resource_identity(item.get("company_name", ""))}
+            phones = {self.normalize_phone(item.get("general_phone", ""))} | {
+                self.normalize_phone(contact.get(field, "")) for contact in item["contacts"] for field in ("phone", "mobile")
+            }
+            evidence = []
+            checks = {
+                "tax_id": requested["tax_id"] and requested["tax_id"] == self.normalize_tax_id(item.get("tax_id", "")),
+                "supplier_code": requested["supplier_code"] and requested["supplier_code"] == normalize_resource_identity(item.get("supplier_code", "")),
+                "name": requested["name"] and requested["name"] in names,
+                "website_domain": requested["website_domain"] and requested["website_domain"] == self.normalize_domain(item.get("website", "")),
+                "phone": requested["phone"] and requested["phone"] in phones,
+                "address": requested["address"] and requested["address"] == normalize_resource_identity(item.get("address", "")),
+            }
+            for signal, matched in checks.items():
+                if matched: evidence.append({"signal": signal, "match": "exact", "weight": weights[signal]})
+            if evidence:
+                results.append({key: item.get(key, "") for key in ("resource_id", "supplier_name", "supplier_code", "tax_id", "company_name", "website", "general_phone", "general_email")} |
+                               {"match_evidence": evidence, "_score": sum(entry["weight"] for entry in evidence)})
+        results.sort(key=lambda value: (-value["_score"], value["supplier_name"].casefold(), value["resource_id"]))
+        for result in results: result.pop("_score")
+        return results
+
+    def find_contacts(self, *, supplier_resource_id: str = "", name: str = "", email: str = "", phone: str = "") -> list[dict[str, Any]]:
+        requested_name = normalize_resource_identity(name); requested_email = email.strip().casefold(); requested_phone = self.normalize_phone(phone)
+        suppliers = [self.read(supplier_resource_id)["supplier"]] if supplier_resource_id else self.list()
+        results = []
+        for supplier in suppliers:
+            for contact in supplier["contacts"]:
+                evidence = []
+                if requested_name and requested_name == normalize_resource_identity(contact["contact_name"]): evidence.append({"signal": "contact_name", "match": "exact"})
+                if requested_email and requested_email == contact["email"].strip().casefold(): evidence.append({"signal": "email", "match": "exact"})
+                if requested_phone and requested_phone in {self.normalize_phone(contact["phone"]), self.normalize_phone(contact["mobile"])}: evidence.append({"signal": "phone", "match": "exact"})
+                if evidence or (supplier_resource_id and not any((requested_name, requested_email, requested_phone))):
+                    results.append({key: contact[key] for key in ("contact_id", "contact_name", "contact_type", "department_role", "phone", "mobile", "email")} |
+                                   {"supplier_resource_id": supplier["resource_id"], "supplier_name": supplier["supplier_name"], "match_evidence": evidence})
+        return sorted(results, key=lambda value: (value["supplier_name"].casefold(), value["contact_name"].casefold(), value["contact_id"]))
+
+    @staticmethod
+    def normalize_domain(value: str) -> str:
+        candidate = value.strip()
+        if not candidate: return ""
+        parsed = urlsplit(candidate if "://" in candidate else f"https://{candidate}")
+        return (parsed.hostname or "").casefold().removeprefix("www.")
+
+    @staticmethod
+    def normalize_phone(value: str) -> str:
+        return re.sub(r"\D+", "", value)
 
     def _build_index(self, profile: dict[str, Any], filename: str, content: bytes, created_at: datetime) -> dict[str, Any]:
         return {"schema_version": 1, "resource_id": profile["resource_id"], "resource_type": "Supplier",

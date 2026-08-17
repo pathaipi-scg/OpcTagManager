@@ -127,4 +127,4 @@ Tag editing/deletion, scaling-property cloning, bulk imports, and broader Factor
 
 ## Current milestone and next validation
 
-Phase 4.7 is complete pending review. No live Equipment/Part or Supplier was created, and the existing live Knowledge V1 for `LP2.MIX.OTM_TEST_Cement_FML` was not modified. Automated filesystem tests use temporary KM roots only.
+Phase 4.9 engineering relationship management and canonical lookup is complete pending review. Engineers can manage compatible existing EPT-to-Resource and Supplier-to-Quotation edges with explicit confirmation/unlink, while existing versioned EPT Supplier links remain canonical. Read-only Supplier, Supplier-owned Contact, and Equipment/Part candidate APIs return logical identities and match evidence without automatic selection or physical paths. No live Equipment/Part, Supplier, or relationship was created, and the existing live Knowledge V1 for `LP2.MIX.OTM_TEST_Cement_FML` was not modified. Automated filesystem tests use temporary KM roots only.

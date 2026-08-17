@@ -144,10 +144,39 @@ Phase 4.6 awaits review. Do not enable a write gate or perform a live Supplier w
 - [x] Reuse current and multi-Tag Resource linking without rewriting Tag references on profile edits.
 - [x] Keep all automated filesystem writes beneath temporary KM roots and existing write gates.
 
-Future Quotation/Purchase may reference Quotation ResourceId + Supplier ResourceId + EquipmentPart ResourceId. Future Factory-KM replacement summaries may reference `EPT_<uuid>` plus human-readable Part No./Material Code snapshots, quantity, and replacement time. Future Inventory stays external and may be resolved through Material Code. Future Part-to-Manual/Drawing/Photo/General Document relationships remain TODO; no generic Resource graph is implemented now.
+Future Quotation/Purchase may reference Quotation ResourceId + Supplier ResourceId + EquipmentPart ResourceId. Future Factory-KM replacement summaries may reference `EPT_<uuid>` plus human-readable Part No./Material Code snapshots, quantity, and replacement time. Future Inventory stays external and may be resolved through Material Code. Controlled EPT-to-Manual/Drawing/Quotation/General Document relationships are implemented in Phase 4.8; broader graph directions remain deferred.
 
 The approved shared-service direction remains `OpcTagManager + Factory-KM -> KM Vault Manager -> D:\KM\Vault`; current generic filesystem adapters may migrate behind it later. `md/KM_Vault_Manager_Shared_Service_Architecture_20260817.md` remains the documentation contract. No KM Vault Manager service is implemented in Phase 4.7.
 
 Phase 4.7 awaits review. Do not enable a write gate or perform a live Equipment/Part write before separate approval.
+
+## Phase 4.8 canonical engineering relationships
+
+- [x] Add optional versioned Supplier Tax ID with normalized matching and no automatic merge.
+- [x] Preserve existing Supplier records without Tax ID.
+- [x] Reuse Tag `references.json` for many-to-many KepwarePath-to-EPT relationships.
+- [x] Add controlled EPT-to-Manual/Drawing/Quotation/GeneralDocument relationships.
+- [x] Add controlled Supplier-to-Quotation relationships.
+- [x] Persist ResourceId-only edges atomically behind a relationship service.
+- [x] Add read/link/unlink APIs without exposing physical paths.
+- [x] Enrich Tag, Supplier, and Equipment/Part detail displays with graph relationships.
+- [x] Keep all automated writes beneath temporary KM roots.
+
+Phase 4.8 is approved. Live relationship writes still require the existing write gate and operational authorization.
+
+## Phase 4.9 engineering relationship management and canonical lookup
+
+- [x] Add EPT management UI for existing Manual, Drawing, Quotation, and Document relationships.
+- [x] Reuse versioned EPT `supplier_links` for Supplier management.
+- [x] Show Supplier Contacts, related EPT profiles, and managed Quotation relationships.
+- [x] Expand Tag-linked EPT summaries with Suppliers and categorized engineering Resources.
+- [x] Add reusable filtered search/select/confirm/link and explicit unlink workflow.
+- [x] Add read-only Supplier candidate lookup with explicit evidence and no automatic selection.
+- [x] Add Supplier-scoped/read-only Contact lookup preserving `CNT_` ownership.
+- [x] Add read-only EPT candidate lookup with explicit evidence and ambiguous results preserved.
+- [x] Exclude filesystem paths from integration responses.
+- [x] Keep relationship mutations behind `KM_RESOURCE_WRITE_ENABLED` and tests under temporary roots.
+
+Phase 4.9 is complete pending review. No live relationship writes or Factory-KM integration were performed.
 
 Later phases retain Quotation/Purchase workflows, installed asset instances, Equipment/Part deletion, Maintenance History Reader, Factory-KM Feedback Reader and Knowledge Promotion, and Inventory/ERP integration. Stock remains external live data.

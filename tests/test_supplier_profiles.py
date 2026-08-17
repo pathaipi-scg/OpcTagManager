@@ -84,6 +84,62 @@ def test_semantically_identical_edit_is_noop(supplier_setup):
     assert len(list(directory.glob("*.md"))) == 1
 
 
+def test_tax_id_create_read_normalize_version_and_noop(supplier_setup):
+    store, resources, _root = supplier_setup
+    submitted = payload(); submitted["tax_id"] = "  001-234-567-8901  "
+    created = store.create(submitted); supplier = created["supplier"]
+    assert supplier["tax_id"] == "001-234-567-8901"
+    assert store.read(supplier["resource_id"])["supplier"]["tax_id"] == "001-234-567-8901"
+    assert store.normalize_tax_id(" 001 234-567-8901 ") == "0012345678901"
+    assert store.list("0012345678901")[0]["resource_id"] == supplier["resource_id"]
+    unchanged = {key: supplier[key] for key in payload()} | {"tax_id": "001-234-567-8901"}
+    assert store.edit(supplier["resource_id"], unchanged)["status"] == "unchanged"
+    changed = dict(unchanged); changed["tax_id"] = "009-999"
+    edited = store.edit(supplier["resource_id"], changed)
+    assert edited["resource"]["active_version"] == 2
+    directory = resources.directory_for_resource("Supplier", supplier["resource_id"])
+    assert len(list(directory.glob("*.md"))) == 2
+
+
+def test_existing_supplier_without_tax_id_and_duplicate_tax_id_remain_valid(supplier_setup):
+    store, _resources, _root = supplier_setup
+    first = create(store)["supplier"]
+    assert first["tax_id"] == ""
+    second_payload = payload(); second_payload.update(supplier_name="Second Supplier", supplier_code="SECOND", tax_id="001-22")
+    second = store.create(second_payload)["supplier"]
+    third_payload = payload(); third_payload.update(supplier_name="Third Supplier", supplier_code="THIRD", tax_id="001 22")
+    third = store.create(third_payload)["supplier"]
+    assert second["resource_id"] != third["resource_id"]
+    matches = store.find_tax_id_matches("00122")
+    assert {item["resource_id"] for item in matches} == {second["resource_id"], third["resource_id"]}
+
+
+def test_supplier_candidates_return_ranked_evidence_without_merging(supplier_setup):
+    store, _resources, _root = supplier_setup
+    first_payload = payload(); first_payload["tax_id"] = "001-22"; first = store.create(first_payload)["supplier"]
+    second_payload = payload(); second_payload.update(supplier_name="SICK Alternate", supplier_code="ALT", tax_id="001 22")
+    second = store.create(second_payload)["supplier"]
+    candidates = store.find_candidates(tax_id="00122", supplier_code="SUP-TH-01", name="SICK (Thailand) Co., Ltd.",
+                                       website="sick.com", phone="+66 2 645 0009", address="Bangkok Thailand")
+    assert {item["resource_id"] for item in candidates} == {first["resource_id"], second["resource_id"]}
+    evidence = {entry["signal"] for entry in candidates[0]["match_evidence"]}
+    assert {"tax_id", "supplier_code", "name", "website_domain", "phone", "address"} <= evidence
+    assert store.read(first["resource_id"])["resource"]["active_version"] == 1
+    assert store.read(second["resource_id"])["resource"]["active_version"] == 1
+
+
+def test_contact_candidates_are_cnt_scoped_read_only_and_match_name_email_phone(supplier_setup):
+    store, _resources, _root = supplier_setup
+    supplier = create(store)["supplier"]; contact = supplier["contacts"][0]
+    scoped = store.find_contacts(supplier_resource_id=supplier["resource_id"])
+    assert {item["contact_id"] for item in scoped} == {value["contact_id"] for value in supplier["contacts"]}
+    for query in ({"name": "Person A"}, {"email": "TECH@example.co.th"}, {"phone": "+66812345678"}):
+        matches = store.find_contacts(**query)
+        assert matches[0]["contact_id"] == contact["contact_id"] and matches[0]["supplier_resource_id"] == supplier["resource_id"]
+        assert matches[0]["match_evidence"]
+    assert store.read(supplier["resource_id"])["resource"]["active_version"] == 1
+
+
 def test_one_supplier_links_to_many_tags_and_profile_edit_does_not_rewrite_references(supplier_setup):
     store, resources, _root = supplier_setup
     created = create(store); resource_id = created["supplier"]["resource_id"]
