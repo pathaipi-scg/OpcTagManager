@@ -666,6 +666,20 @@ async function loadTagResources(node) {
                 `v${link.resource.active_version}`, link.resource.updated_at].filter(Boolean).join(" · ");
             const actions = document.createElement("div"); actions.className = "preview-actions";
             actions.innerHTML = `<a href="/api/resources/${encodeURIComponent(link.resource_id)}/file" target="_blank">Open</a>`;
+            if (link.relation_type === "Supplier") {
+                actions.firstElementChild.remove();
+                const view = document.createElement("button"); view.type = "button"; view.textContent = "View Supplier";
+                view.addEventListener("click", () => showSupplier(link.resource_id)); actions.append(view);
+                appendLinkedSupplierSummary(item, link.resource_id);
+            }
+            if (link.relation_type === "EquipmentPart") {
+                actions.firstElementChild.remove();
+                type.textContent = "Equipment / Part";
+                const view = document.createElement("button"); view.type = "button"; view.textContent = "View"; view.onclick = () => showEquipmentPart(link.resource_id); actions.append(view);
+                const edit = document.createElement("button"); edit.type = "button"; edit.textContent = "Edit"; edit.disabled = !kmResourceWriteEnabled;
+                edit.onclick = async () => { const response = await fetch(`/api/equipment-parts/${encodeURIComponent(link.resource_id)}`); const data = await response.json(); if (data.success) openEquipmentPartForm(data.equipment_part); }; actions.append(edit);
+                appendLinkedEquipmentPartSummary(item, link.resource_id);
+            }
             const versions = document.createElement("button"); versions.type = "button"; versions.textContent = "Versions";
             versions.addEventListener("click", () => showResourceVersions(link.resource));
             const unlink = document.createElement("button"); unlink.type = "button"; unlink.textContent = "Unlink"; unlink.disabled = !kmResourceWriteEnabled;
@@ -675,7 +689,10 @@ async function loadTagResources(node) {
             more.addEventListener("click", () => beginTargetSelection(link.resource));
             const newVersion = document.createElement("button"); newVersion.type = "button"; newVersion.textContent = "Upload New Version"; newVersion.disabled = !kmResourceWriteEnabled;
             newVersion.addEventListener("click", () => showVersionUpload(link.resource));
-            actions.append(versions, unlink, more, newVersion); item.append(type, name, details, actions);
+            if (link.relation_type !== "EquipmentPart") actions.append(versions);
+            actions.append(unlink, more);
+            if (!["Supplier", "EquipmentPart"].includes(link.relation_type)) actions.append(newVersion);
+            item.append(type, name, details, actions);
             list.append(item);
         });
     } catch (error) {
@@ -687,13 +704,17 @@ async function loadTagResources(node) {
 
 function showWorkflow(viewId) {
     document.getElementById("resource-workflow").classList.remove("hidden");
-    ["resource-search-view", "resource-upload-form", "resource-version-view", "resource-target-view"].forEach((id) =>
+    ["resource-search-view", "resource-upload-form", "resource-version-view", "resource-target-view", "supplier-directory-view", "supplier-form", "equipment-part-directory-view", "equipment-part-form"].forEach((id) =>
         document.getElementById(id).classList.toggle("hidden", id !== viewId));
     document.getElementById("resource-workflow-result").classList.add("hidden");
 }
 
 document.getElementById("link-existing-resource").addEventListener("click", async () => { showWorkflow("resource-search-view"); await searchResources(); });
 document.getElementById("upload-new-resource").addEventListener("click", () => showWorkflow("resource-upload-form"));
+document.getElementById("new-supplier").addEventListener("click", () => openSupplierForm());
+document.getElementById("find-supplier").addEventListener("click", async () => { showWorkflow("supplier-directory-view"); await searchSuppliers(); });
+document.getElementById("new-equipment-part").addEventListener("click", () => openEquipmentPartForm());
+document.getElementById("find-equipment-part").addEventListener("click", async () => { showWorkflow("equipment-part-directory-view"); await searchEquipmentParts(); });
 document.getElementById("close-resource-workflow").addEventListener("click", () => { resourceTagSelectionMode = false; document.getElementById("resource-workflow").classList.add("hidden"); });
 document.getElementById("resource-search").addEventListener("input", searchResources);
 
@@ -827,6 +848,222 @@ document.getElementById("confirm-resource-version").addEventListener("click", as
 });
 
 function showResourceResult(message, error = false, warning = false) { const result = document.getElementById("resource-workflow-result"); result.textContent = message; result.className = `create-result ${error ? "error-message" : warning ? "warning-message" : "success-message"}`; }
+
+let supplierBeingEdited = null;
+const supplierFieldNames = ["supplier_name", "supplier_code", "company_name", "website", "address", "general_phone", "general_email", "brands_products", "models_equipment", "support_notes", "additional_notes"];
+
+document.getElementById("supplier-search").addEventListener("input", searchSuppliers);
+document.getElementById("add-supplier-contact").addEventListener("click", () => addSupplierContact());
+document.getElementById("cancel-supplier-edit").addEventListener("click", async () => { showWorkflow("supplier-directory-view"); await searchSuppliers(); });
+
+async function searchSuppliers() {
+    const response = await fetch(`/api/suppliers?q=${encodeURIComponent(document.getElementById("supplier-search").value)}`);
+    const data = await response.json(); const list = document.getElementById("supplier-search-results"); list.replaceChildren();
+    if (!data.success) return showResourceResult(data.error || "Unable to load Suppliers.", true);
+    data.suppliers.forEach((supplier) => {
+        const button = document.createElement("button"); button.type = "button";
+        button.textContent = [supplier.supplier_name, supplier.supplier_code, supplier.company_name, supplier.general_phone,
+            supplier.general_email, `${supplier.contacts.length} contact${supplier.contacts.length === 1 ? "" : "s"}`, supplier.updated_at].filter(Boolean).join(" — ");
+        button.addEventListener("click", () => showSupplier(supplier.resource_id)); list.append(button);
+    });
+}
+
+async function showSupplier(resourceId) {
+    showWorkflow("supplier-directory-view");
+    const response = await fetch(`/api/suppliers/${encodeURIComponent(resourceId)}`); const data = await response.json();
+    if (!data.success) return showResourceResult(data.error || "Unable to load Supplier.", true);
+    renderSupplierDetail(data.supplier, data.resource);
+}
+
+function renderSupplierDetail(supplier, resource) {
+    const detail = document.getElementById("supplier-detail"); detail.replaceChildren(); detail.classList.remove("hidden");
+    const title = document.createElement("strong"); title.textContent = supplier.supplier_name; detail.append(title);
+    const company = document.createElement("span"); company.textContent = [supplier.supplier_code, supplier.company_name, supplier.website,
+        supplier.address, supplier.general_phone, supplier.general_email].filter(Boolean).join(" · "); detail.append(company);
+    appendSupplierSection(detail, "Brands / Products", supplier.brands_products);
+    appendSupplierSection(detail, "Models / Equipment", supplier.models_equipment);
+    appendSupplierSection(detail, "Support Notes", supplier.support_notes);
+    supplier.contacts.forEach((contact) => appendContactSummary(detail, contact));
+    const actions = document.createElement("div"); actions.className = "preview-actions";
+    const edit = document.createElement("button"); edit.type = "button"; edit.textContent = "Edit"; edit.disabled = !kmResourceWriteEnabled; edit.onclick = () => openSupplierForm(supplier);
+    const link = document.createElement("button"); link.type = "button"; link.textContent = "Link to Current Tag"; link.disabled = !kmResourceWriteEnabled || !selectedKnowledgeTag; link.onclick = () => beginTargetSelection(resource);
+    const more = document.createElement("button"); more.type = "button"; more.textContent = "Link to More Tags"; more.disabled = !kmResourceWriteEnabled; more.onclick = () => beginTargetSelection(resource);
+    actions.append(edit, link, more); detail.append(actions);
+}
+
+function appendSupplierSection(parent, heading, value) {
+    if (!value) return; const strong = document.createElement("strong"); strong.textContent = heading;
+    const content = document.createElement("span"); content.textContent = value; parent.append(strong, content);
+}
+
+function appendContactSummary(parent, contact) {
+    const block = document.createElement("div"); block.className = "supplier-contact-summary";
+    const heading = document.createElement("strong"); heading.textContent = `${contact.contact_type}: ${contact.contact_name || "Contact"}`; block.append(heading);
+    const details = document.createElement("span"); details.textContent = [contact.department_role, contact.phone && `Tel ${contact.phone}`, contact.mobile && `Mobile ${contact.mobile}`].filter(Boolean).join(" · "); block.append(details);
+    if (contact.email) { const email = document.createElement("a"); email.textContent = contact.email; email.href = `mailto:${encodeURIComponent(contact.email)}`; block.append(email); }
+    parent.append(block);
+}
+
+async function appendLinkedSupplierSummary(parent, resourceId) {
+    try {
+        const response = await fetch(`/api/suppliers/${encodeURIComponent(resourceId)}`); const data = await response.json();
+        if (!data.success) return;
+        const preferred = data.supplier.contacts.find((contact) => ["Technical", "Support"].includes(contact.contact_type)) || data.supplier.contacts[0];
+        if (preferred) appendContactSummary(parent, preferred);
+    } catch (_error) { /* The Resource card remains usable if profile enrichment is unavailable. */ }
+}
+
+function openSupplierForm(supplier = null) {
+    supplierBeingEdited = supplier?.resource_id || null; showWorkflow("supplier-form");
+    const form = document.getElementById("supplier-form"); form.reset();
+    document.getElementById("supplier-form-title").textContent = supplier ? `Edit ${supplier.supplier_name}` : "New Supplier";
+    supplierFieldNames.forEach((name) => { form.elements[name].value = supplier?.[name] || ""; });
+    const contacts = document.getElementById("supplier-contacts"); contacts.replaceChildren();
+    (supplier?.contacts || []).forEach(addSupplierContact); if (!supplier?.contacts?.length) addSupplierContact();
+}
+
+function addSupplierContact(contact = {}) {
+    const row = document.createElement("fieldset"); row.className = "supplier-contact"; row.dataset.contactId = contact.contact_id || "";
+    const fields = [["contact_name", "Contact Name"], ["department_role", "Department / Role"], ["phone", "Phone"], ["mobile", "Mobile"], ["email", "Email"], ["notes", "Notes"]];
+    const typeLabel = document.createElement("label"); typeLabel.textContent = "Contact Type"; const type = document.createElement("select"); type.name = "contact_type";
+    ["Sales", "Technical", "Service", "Support", "Other"].forEach((value) => { const option = document.createElement("option"); option.value = option.textContent = value; type.append(option); }); type.value = contact.contact_type || "Other"; typeLabel.append(type); row.append(typeLabel);
+    fields.forEach(([name, labelText]) => { const label = document.createElement("label"); label.textContent = labelText; const input = name === "notes" ? document.createElement("textarea") : document.createElement("input"); input.name = name; input.value = contact[name] || ""; if (name === "email") input.type = "email"; label.append(input); row.append(label); });
+    const remove = document.createElement("button"); remove.type = "button"; remove.textContent = "Remove Contact"; remove.className = "danger-button"; remove.onclick = () => row.remove(); row.append(remove);
+    document.getElementById("supplier-contacts").append(row);
+}
+
+document.getElementById("supplier-form").addEventListener("submit", async (event) => {
+    event.preventDefault(); const form = event.currentTarget; const payload = {};
+    supplierFieldNames.forEach((name) => { payload[name] = form.elements[name].value; });
+    payload.contacts = [...document.querySelectorAll("#supplier-contacts .supplier-contact")].map((row) => {
+        const contact = {}; ["contact_name", "department_role", "contact_type", "phone", "mobile", "email", "notes"].forEach((name) => { contact[name] = row.querySelector(`[name="${name}"]`).value; });
+        if (row.dataset.contactId) contact.contact_id = row.dataset.contactId; return contact;
+    });
+    const url = supplierBeingEdited ? `/api/suppliers/${encodeURIComponent(supplierBeingEdited)}` : "/api/suppliers";
+    const response = await fetch(url, {method: supplierBeingEdited ? "PUT" : "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)}); const data = await response.json();
+    if (!data.success) return showResourceResult(data.error || "Unable to save Supplier.", true);
+    showResourceResult(data.status === "unchanged" ? "Supplier is unchanged; no new version was created." : `Saved ${data.supplier.supplier_name} as version ${data.resource.active_version}.`);
+    supplierBeingEdited = data.supplier.resource_id; renderSupplierDetail(data.supplier, data.resource);
+});
+
+let equipmentPartBeingEdited = null;
+let equipmentPartSupplierOptions = [];
+const equipmentPartFields = ["display_name", "item_kind", "category", "manufacturer", "brand", "model", "part_no", "material_code", "unit_of_measure", "description", "technical_specification", "notes"];
+
+document.getElementById("equipment-part-search").addEventListener("input", searchEquipmentParts);
+document.getElementById("add-equipment-part-supplier").addEventListener("click", () => addEquipmentPartSupplier());
+document.getElementById("cancel-equipment-part-edit").addEventListener("click", async () => { showWorkflow("equipment-part-directory-view"); await searchEquipmentParts(); });
+
+async function searchEquipmentParts() {
+    const response = await fetch(`/api/equipment-parts?q=${encodeURIComponent(document.getElementById("equipment-part-search").value)}`);
+    const data = await response.json(); const list = document.getElementById("equipment-part-search-results"); list.replaceChildren();
+    if (!data.success) return showResourceResult(data.error || "Unable to load Equipment / Parts.", true);
+    data.equipment_parts.forEach((item) => {
+        const button = document.createElement("button"); button.type = "button";
+        button.textContent = [item.display_name, item.item_kind, item.manufacturer, item.model, item.part_no, item.material_code, item.updated_at].filter(Boolean).join(" — ");
+        button.onclick = () => showEquipmentPart(item.resource_id); list.append(button);
+    });
+}
+
+async function showEquipmentPart(resourceId) {
+    showWorkflow("equipment-part-directory-view");
+    const response = await fetch(`/api/equipment-parts/${encodeURIComponent(resourceId)}`); const data = await response.json();
+    if (!data.success) return showResourceResult(data.error || "Unable to load Equipment / Part.", true);
+    await loadEquipmentPartSupplierOptions();
+    renderEquipmentPartDetail(data.equipment_part, data.resource);
+}
+
+function renderEquipmentPartDetail(item, resource) {
+    const detail = document.getElementById("equipment-part-detail"); detail.replaceChildren(); detail.classList.remove("hidden");
+    const title = document.createElement("strong"); title.textContent = item.display_name; detail.append(title);
+    const identity = document.createElement("span"); identity.textContent = [item.item_kind, item.category, item.manufacturer, item.brand, item.model,
+        item.part_no && `Part No. ${item.part_no}`, item.material_code && `Material Code ${item.material_code}`, item.unit_of_measure].filter(Boolean).join(" · "); detail.append(identity);
+    appendSupplierSection(detail, "Description", item.description); appendSupplierSection(detail, "Technical Specification", item.technical_specification);
+    appendSupplierSection(detail, "Aliases / Alternate Names", item.aliases.join(" · ")); appendSupplierSection(detail, "Notes", item.notes);
+    if (item.supplier_links.length) {
+        const heading = document.createElement("strong"); heading.textContent = "Suppliers"; detail.append(heading);
+        item.supplier_links.forEach((link) => { const row = document.createElement("span"); const supplier = equipmentPartSupplierOptions.find((value) => value.resource_id === link.supplier_resource_id);
+            row.textContent = [supplier?.supplier_name || link.supplier_resource_id, link.relationship, link.supplier_part_no].filter(Boolean).join(" · "); detail.append(row); });
+    }
+    const actions = document.createElement("div"); actions.className = "preview-actions";
+    const edit = document.createElement("button"); edit.type = "button"; edit.textContent = "Edit"; edit.disabled = !kmResourceWriteEnabled; edit.onclick = () => openEquipmentPartForm(item);
+    const link = document.createElement("button"); link.type = "button"; link.textContent = "Link to Current Tag"; link.disabled = !kmResourceWriteEnabled || !selectedKnowledgeTag; link.onclick = () => beginTargetSelection(resource);
+    const more = document.createElement("button"); more.type = "button"; more.textContent = "Link to More Tags"; more.disabled = !kmResourceWriteEnabled; more.onclick = () => beginTargetSelection(resource);
+    actions.append(edit, link, more); detail.append(actions);
+}
+
+async function appendLinkedEquipmentPartSummary(parent, resourceId) {
+    try {
+        const response = await fetch(`/api/equipment-parts/${encodeURIComponent(resourceId)}`); const data = await response.json(); if (!data.success) return;
+        const item = data.equipment_part; const summary = document.createElement("span");
+        summary.textContent = [item.manufacturer && `Manufacturer: ${item.manufacturer}`, item.model && `Model: ${item.model}`,
+            item.part_no && `Part No: ${item.part_no}`, item.material_code && `Material Code: ${item.material_code}`].filter(Boolean).join(" · "); parent.append(summary);
+    } catch (_error) { /* Keep the base Resource card usable. */ }
+}
+
+async function loadEquipmentPartSupplierOptions() {
+    const response = await fetch("/api/suppliers"); const data = await response.json();
+    equipmentPartSupplierOptions = data.success ? data.suppliers : [];
+}
+
+async function openEquipmentPartForm(item = null) {
+    equipmentPartBeingEdited = item?.resource_id || null; showWorkflow("equipment-part-form"); await loadEquipmentPartSupplierOptions();
+    const form = document.getElementById("equipment-part-form"); form.reset();
+    document.getElementById("equipment-part-form-title").textContent = item ? `Edit ${item.display_name}` : "New Equipment / Part";
+    equipmentPartFields.forEach((name) => { form.elements[name].value = item?.[name] || ""; });
+    form.elements.aliases.value = (item?.aliases || []).join("\n");
+    const links = document.getElementById("equipment-part-suppliers"); links.replaceChildren();
+    (item?.supplier_links || []).forEach(addEquipmentPartSupplier);
+}
+
+function addEquipmentPartSupplier(link = {}) {
+    const row = document.createElement("fieldset"); row.className = "supplier-contact equipment-part-supplier";
+    const searchLabel = document.createElement("label"); searchLabel.textContent = "Search Supplier"; const search = document.createElement("input"); search.type = "search"; search.placeholder = "Name, code or company"; searchLabel.append(search); row.append(searchLabel);
+    const supplierLabel = document.createElement("label"); supplierLabel.textContent = "Existing Supplier"; const supplier = document.createElement("select"); supplier.name = "supplier_resource_id"; supplier.required = true;
+    const prompt = document.createElement("option"); prompt.value = ""; prompt.textContent = "Select Supplier"; supplier.append(prompt);
+    equipmentPartSupplierOptions.forEach((item) => { const option = document.createElement("option"); option.value = item.resource_id; option.textContent = [item.supplier_name, item.supplier_code, item.company_name].filter(Boolean).join(" — "); supplier.append(option); });
+    supplier.value = link.supplier_resource_id || ""; supplierLabel.append(supplier); row.append(supplierLabel);
+    search.addEventListener("input", () => { const needle = search.value.trim().toLocaleLowerCase(); [...supplier.options].forEach((option, index) => { if (index) option.hidden = Boolean(needle) && !option.textContent.toLocaleLowerCase().includes(needle); }); });
+    const relationshipLabel = document.createElement("label"); relationshipLabel.textContent = "Relationship"; const relationship = document.createElement("select"); relationship.name = "relationship";
+    ["Manufacturer", "Distributor", "Dealer", "Service", "Repair", "Fabricator", "Contractor", "Other"].forEach((value) => { const option = document.createElement("option"); option.value = option.textContent = value; relationship.append(option); }); relationship.value = link.relationship || "Other"; relationshipLabel.append(relationship); row.append(relationshipLabel);
+    [["supplier_part_no", "Supplier Part No."], ["notes", "Relationship Notes"]].forEach(([name, text]) => { const label = document.createElement("label"); label.textContent = text; const input = name === "notes" ? document.createElement("textarea") : document.createElement("input"); input.name = name; input.value = link[name] || ""; label.append(input); row.append(label); });
+    const remove = document.createElement("button"); remove.type = "button"; remove.textContent = "Remove Supplier"; remove.className = "danger-button"; remove.onclick = () => row.remove(); row.append(remove);
+    document.getElementById("equipment-part-suppliers").append(row);
+}
+
+function equipmentPartPayload() {
+    const form = document.getElementById("equipment-part-form"); const payload = {};
+    equipmentPartFields.forEach((name) => { payload[name] = form.elements[name].value; });
+    payload.aliases = form.elements.aliases.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+    payload.supplier_links = [...document.querySelectorAll("#equipment-part-suppliers .equipment-part-supplier")].map((row) => ({
+        supplier_resource_id: row.querySelector('[name="supplier_resource_id"]').value,
+        relationship: row.querySelector('[name="relationship"]').value,
+        supplier_part_no: row.querySelector('[name="supplier_part_no"]').value,
+        notes: row.querySelector('[name="notes"]').value,
+    })); return payload;
+}
+
+document.getElementById("equipment-part-form").addEventListener("submit", async (event) => { event.preventDefault(); await saveEquipmentPart(); });
+
+async function saveEquipmentPart(confirmSeparateToken = null) {
+    const payload = equipmentPartPayload(); if (confirmSeparateToken) payload.confirm_separate_token = confirmSeparateToken;
+    const url = equipmentPartBeingEdited ? `/api/equipment-parts/${encodeURIComponent(equipmentPartBeingEdited)}` : "/api/equipment-parts";
+    const response = await fetch(url, {method: equipmentPartBeingEdited ? "PUT" : "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)}); const data = await response.json();
+    if (!data.success) return showResourceResult(data.error || "Unable to save Equipment / Part.", true);
+    if (data.status === "similar_equipment_part_found") return renderEquipmentPartCandidates(data, payload.display_name);
+    showResourceResult(data.status === "unchanged" ? "Equipment / Part is unchanged; no new version was created." : `Saved ${data.equipment_part.display_name} as version ${data.resource.active_version}.`);
+    equipmentPartBeingEdited = data.equipment_part.resource_id; renderEquipmentPartDetail(data.equipment_part, data.resource);
+}
+
+function renderEquipmentPartCandidates(data, requestedName) {
+    const result = document.getElementById("resource-workflow-result"); result.replaceChildren(); result.className = "create-result warning-message";
+    const message = document.createElement("p"); message.textContent = `A likely matching Equipment / Part exists for ${requestedName}. Choose explicitly.`; result.append(message);
+    data.candidates.forEach((candidate) => { const row = document.createElement("div"); row.className = "resource-item";
+        const details = document.createElement("span"); details.textContent = [candidate.display_name, candidate.manufacturer, candidate.model, candidate.part_no, candidate.material_code, candidate.matched_on.join(", ")].filter(Boolean).join(" · ");
+        const use = document.createElement("button"); use.type = "button"; use.textContent = "Use Existing"; use.onclick = () => showEquipmentPart(candidate.resource_id); row.append(details, use); result.append(row); });
+    const separate = document.createElement("button"); separate.type = "button"; separate.textContent = "Create Separate Equipment / Part"; separate.onclick = () => saveEquipmentPart(data.decision_token);
+    const cancel = document.createElement("button"); cancel.type = "button"; cancel.textContent = "Cancel"; cancel.onclick = () => result.classList.add("hidden"); result.append(separate, cancel);
+}
 
 async function loadTagKnowledge(node) {
     selectedKnowledgeTag = node;

@@ -11,6 +11,8 @@ import OpcTagManager
 from starlette.datastructures import UploadFile
 from services.kepware_config_api import KepwareConfigError
 from services.shared_resources import SharedResourceStore
+from services.supplier_profiles import SupplierProfileStore
+from services.equipment_parts import EquipmentPartStore
 
 
 class FakeCursor:
@@ -123,6 +125,18 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertIn("Upload as New Version", javascript)
         self.assertIn("Create Separate Resource", javascript)
         self.assertIn("Confirm Separate Resource", javascript)
+        self.assertIn('id="new-supplier"', html)
+        self.assertIn('id="find-supplier"', html)
+        self.assertIn('id="supplier-directory-view"', html)
+        self.assertIn('id="supplier-form"', html)
+        self.assertIn('View Supplier', javascript)
+        self.assertIn('id="new-equipment-part"', html)
+        self.assertIn('id="find-equipment-part"', html)
+        self.assertIn('id="equipment-part-directory-view"', html)
+        self.assertIn('id="equipment-part-form"', html)
+        self.assertIn("similar_equipment_part_found", javascript)
+        self.assertIn("Create Separate Equipment / Part", javascript)
+        self.assertIn('beginTargetSelection(resource)', javascript)
         self.assertIn("The selected file has different content.", javascript)
         self.assertEqual(self.request("GET", "/static/app.js")[0], 200)
         self.assertEqual(self.request("GET", "/static/app.css")[0], 200)
@@ -272,6 +286,55 @@ class OpcTagManagerAppTests(unittest.TestCase):
                 bad_version = OpcTagManager.open_resource_file(created["resource_id"], 99)
             self.assertEqual(bad_id.status_code, 400)
             self.assertEqual(bad_version.status_code, 400)
+
+    def test_supplier_create_rejects_client_resource_id_and_filesystem_path(self):
+        base = {"supplier_name": "Safe Supplier", "contacts": []}
+        for injected in ({"resource_id": "SUP_" + "A" * 32}, {"filesystem_path": "D:\\KM\\Vault\\outside"}):
+            status, body = self.request("POST", "/api/suppliers", {**base, **injected})
+            self.assertEqual(status, 422)
+            self.assertEqual(json.loads(body)["detail"][0]["type"], "extra_forbidden")
+
+    def test_supplier_routes_create_read_edit_search_and_respect_gate(self):
+        supplier_payload = {"supplier_name": "API Supplier", "supplier_code": "API-1", "contacts": [{
+            "contact_name": "Support Person", "contact_type": "Support", "phone": "+66 1", "email": "support@example.com"
+        }]}
+        with tempfile.TemporaryDirectory() as temporary:
+            resources = SharedResourceStore(Path(temporary) / "Tags", "Asia/Bangkok", True)
+            suppliers = SupplierProfileStore(resources)
+            with patch.object(OpcTagManager, "supplier_profile_store", suppliers), patch.object(OpcTagManager, "KM_RESOURCE_WRITE_ENABLED", True):
+                status, body = self.request("POST", "/api/suppliers", supplier_payload)
+                self.assertEqual(status, 200); created = json.loads(body); resource_id = created["supplier"]["resource_id"]
+                self.assertTrue(resource_id.startswith("SUP_"))
+                self.assertEqual(self.request("GET", f"/api/suppliers/{resource_id}")[0], 200)
+                self.assertEqual(len(suppliers.list("Support")), 1)
+                edited = dict(supplier_payload); edited["general_phone"] = "+66 2"
+                edited["contacts"] = created["supplier"]["contacts"]
+                status, body = self.request("PUT", f"/api/suppliers/{resource_id}", edited)
+                self.assertEqual(status, 200); self.assertEqual(json.loads(body)["resource"]["active_version"], 2)
+            resources.write_enabled = False
+            with patch.object(OpcTagManager, "supplier_profile_store", suppliers), patch.object(OpcTagManager, "KM_RESOURCE_WRITE_ENABLED", False):
+                status, body = self.request("POST", "/api/suppliers", supplier_payload)
+                self.assertEqual(status, 403); self.assertIn("write mode is disabled", json.loads(body)["error"])
+
+    def test_equipment_part_api_rejects_identity_path_and_runs_temp_root_crud(self):
+        base = {"display_name": "SKF Bearing", "item_kind": "Spare Part", "manufacturer": "SKF",
+                "model": "6205", "part_no": "6205-2RS", "material_code": "0006205", "aliases": ["Bearing"], "supplier_links": []}
+        for injected in ({"resource_id": "EPT_" + "A" * 32}, {"filesystem_path": "D:\\KM\\Vault\\outside"}, {"final_filename": "outside.md"}):
+            status, body = self.request("POST", "/api/equipment-parts", {**base, **injected})
+            self.assertEqual(status, 422); self.assertEqual(json.loads(body)["detail"][0]["type"], "extra_forbidden")
+        with tempfile.TemporaryDirectory() as temporary:
+            resources = SharedResourceStore(Path(temporary) / "Tags", "Asia/Bangkok", True); catalog = EquipmentPartStore(resources)
+            with patch.object(OpcTagManager, "equipment_part_store", catalog), patch.object(OpcTagManager, "KM_RESOURCE_WRITE_ENABLED", True):
+                status, body = self.request("POST", "/api/equipment-parts", base); self.assertEqual(status, 200)
+                created = json.loads(body); resource_id = created["equipment_part"]["resource_id"]
+                self.assertTrue(resource_id.startswith("EPT_")); self.assertEqual(self.request("GET", f"/api/equipment-parts/{resource_id}")[0], 200)
+                edited = dict(base); edited["description"] = "Updated"
+                status, body = self.request("PUT", f"/api/equipment-parts/{resource_id}", edited)
+                self.assertEqual(status, 200); self.assertEqual(json.loads(body)["resource"]["active_version"], 2)
+            resources.write_enabled = False
+            with patch.object(OpcTagManager, "equipment_part_store", catalog), patch.object(OpcTagManager, "KM_RESOURCE_WRITE_ENABLED", False):
+                status, body = self.request("POST", "/api/equipment-parts", base)
+                self.assertEqual(status, 403); self.assertIn("write mode is disabled", json.loads(body)["error"])
 
 
 if __name__ == "__main__":

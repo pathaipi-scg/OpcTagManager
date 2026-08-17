@@ -246,6 +246,10 @@
                 <div id="tag-resources-list" class="resource-list"></div>
                 {% if not km_resource_write_enabled %}<p class="write-disabled-message">Shared Resource Write Disabled</p>{% endif %}
                 <div class="preview-actions">
+                    <button type="button" id="new-supplier" {{ 'disabled' if not km_resource_write_enabled else '' }}>New Supplier</button>
+                    <button type="button" id="find-supplier">Find Supplier</button>
+                    <button type="button" id="new-equipment-part" {{ 'disabled' if not km_resource_write_enabled else '' }}>New Equipment / Part</button>
+                    <button type="button" id="find-equipment-part">Find Equipment / Part</button>
                     <button type="button" id="link-existing-resource" {{ 'disabled' if not km_resource_write_enabled else '' }}>Link Existing Resource</button>
                     <button type="button" id="upload-new-resource" {{ 'disabled' if not km_resource_write_enabled else '' }}>Upload New Resource</button>
                 </div>
@@ -275,6 +279,57 @@
                         <button type="button" id="select-more-tags">Select More Tags</button>
                         <button type="button" id="link-resource-targets" class="refresh-button">Link to Selected Tags</button>
                     </div>
+                    <div id="supplier-directory-view" class="hidden">
+                        <h4>Supplier Directory</h4>
+                        <input id="supplier-search" type="search" placeholder="Search supplier, code, company, product, model or contact">
+                        <div id="supplier-search-results" class="resource-list"></div>
+                        <div id="supplier-detail" class="resource-item hidden"></div>
+                    </div>
+                    <form id="supplier-form" class="hidden">
+                        <h4 id="supplier-form-title">New Supplier</h4>
+                        <div class="supplier-fields">
+                            <div class="field-group"><label>Supplier Name *</label><input name="supplier_name" maxlength="200" required></div>
+                            <div class="field-group"><label>Supplier Code</label><input name="supplier_code" maxlength="100"></div>
+                            <div class="field-group"><label>Company / Legal Name</label><input name="company_name" maxlength="300"></div>
+                            <div class="field-group"><label>Website</label><input name="website" maxlength="500" placeholder="https://"></div>
+                            <div class="field-group"><label>Address</label><textarea name="address" maxlength="2000" rows="3"></textarea></div>
+                            <div class="field-group"><label>General Phone</label><input name="general_phone" maxlength="100"></div>
+                            <div class="field-group"><label>General Email</label><input name="general_email" type="email" maxlength="320"></div>
+                            <div class="field-group"><label>Brands / Products Supported</label><textarea name="brands_products" maxlength="5000" rows="3"></textarea></div>
+                            <div class="field-group"><label>Models / Equipment Supported</label><textarea name="models_equipment" maxlength="5000" rows="3"></textarea></div>
+                            <div class="field-group"><label>Support Notes</label><textarea name="support_notes" maxlength="10000" rows="3"></textarea></div>
+                            <div class="field-group"><label>Additional Notes</label><textarea name="additional_notes" maxlength="10000" rows="3"></textarea></div>
+                        </div>
+                        <h4>Contacts</h4><div id="supplier-contacts"></div>
+                        <div class="preview-actions"><button type="button" id="add-supplier-contact">Add Contact</button><button type="button" id="cancel-supplier-edit">Cancel</button><button type="submit" class="refresh-button">Save Supplier</button></div>
+                    </form>
+                    <div id="equipment-part-directory-view" class="hidden">
+                        <h4>Equipment / Part Directory</h4>
+                        <input id="equipment-part-search" type="search" placeholder="Search name, category, manufacturer, model, part, material code or alias">
+                        <div id="equipment-part-search-results" class="resource-list"></div>
+                        <div id="equipment-part-detail" class="resource-item hidden"></div>
+                    </div>
+                    <form id="equipment-part-form" class="hidden">
+                        <h4 id="equipment-part-form-title">New Equipment / Part</h4>
+                        <div class="supplier-fields">
+                            <div class="field-group"><label>Display Name *</label><input name="display_name" maxlength="300" required></div>
+                            <div class="field-group"><label>Item Kind *</label><select name="item_kind" required><option>Equipment</option><option>Spare Part</option><option>Component</option><option>Assembly</option><option>Consumable</option><option>Fabricated Part</option><option>Other</option></select></div>
+                            <div class="field-group"><label>Equipment / Part Category</label><input name="category" maxlength="300"></div>
+                            <div class="field-group"><label>Manufacturer</label><input name="manufacturer" maxlength="300"></div>
+                            <div class="field-group"><label>Brand</label><input name="brand" maxlength="300"></div>
+                            <div class="field-group"><label>Model</label><input name="model" maxlength="300"></div>
+                            <div class="field-group"><label>Part No.</label><input name="part_no" maxlength="300"></div>
+                            <div class="field-group"><label>Material Code</label><input name="material_code" maxlength="300"></div>
+                            <div class="field-group"><label>Unit of Measure</label><input name="unit_of_measure" maxlength="100"></div>
+                            <div class="field-group"><label>Description</label><textarea name="description" maxlength="10000" rows="3"></textarea></div>
+                            <div class="field-group"><label>Technical Specification</label><textarea name="technical_specification" maxlength="20000" rows="4"></textarea></div>
+                            <div class="field-group"><label>Aliases / Alternate Names</label><textarea name="aliases" rows="3" placeholder="One alias per line"></textarea></div>
+                            <div class="field-group"><label>Notes</label><textarea name="notes" maxlength="10000" rows="3"></textarea></div>
+                        </div>
+                        <h4>Suppliers</h4><p class="tree-counts">Select existing Supplier profiles. Create missing Suppliers through New Supplier first.</p>
+                        <div id="equipment-part-suppliers"></div>
+                        <div class="preview-actions"><button type="button" id="add-equipment-part-supplier">Add Supplier</button><button type="button" id="cancel-equipment-part-edit">Cancel</button><button type="submit" class="refresh-button">Save Equipment / Part</button></div>
+                    </form>
                     <p id="resource-workflow-result" class="create-result hidden"></p>
                     <button type="button" id="close-resource-workflow">Close</button>
                 </div>

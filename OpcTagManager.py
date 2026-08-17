@@ -48,6 +48,8 @@ from services.kepware_config_api import (
 from services.kepware_enums import TAG_ACCESS_LEVELS, TAG_DATA_TYPES
 from services.tag_knowledge import TagKnowledgeError, TagKnowledgeStore
 from services.shared_resources import SharedResourceError, SharedResourceStore
+from services.supplier_profiles import SupplierProfileError, SupplierProfileStore
+from services.equipment_parts import EquipmentPartError, EquipmentPartStore
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -79,6 +81,8 @@ shared_resource_store = SharedResourceStore(
     write_enabled=KM_RESOURCE_WRITE_ENABLED,
     max_upload_mb=KM_RESOURCE_MAX_UPLOAD_MB,
 )
+supplier_profile_store = SupplierProfileStore(shared_resource_store)
+equipment_part_store = EquipmentPartStore(shared_resource_store)
 
 
 class CreateKepwareTagRequest(BaseModel):
@@ -131,6 +135,64 @@ class LinkManyResourcesRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     resource_id: str
     tags: list[BatchTagIdentity] = Field(min_length=1, max_length=200)
+
+
+class SupplierContactRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    contact_id: str | None = None
+    contact_name: str = ""
+    department_role: str = ""
+    contact_type: str = "Other"
+    phone: str = ""
+    mobile: str = ""
+    email: str = ""
+    notes: str = ""
+
+
+class SupplierProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    supplier_name: str
+    supplier_code: str = ""
+    company_name: str = ""
+    website: str = ""
+    address: str = ""
+    general_phone: str = ""
+    general_email: str = ""
+    brands_products: str = ""
+    models_equipment: str = ""
+    support_notes: str = ""
+    additional_notes: str = ""
+    contacts: list[SupplierContactRequest] = Field(default_factory=list, max_length=100)
+
+
+class EquipmentPartSupplierLinkRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    supplier_resource_id: str
+    relationship: str = "Other"
+    supplier_part_no: str = ""
+    notes: str = ""
+
+
+class EquipmentPartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    display_name: str
+    item_kind: str
+    category: str = ""
+    manufacturer: str = ""
+    brand: str = ""
+    model: str = ""
+    part_no: str = ""
+    material_code: str = ""
+    unit_of_measure: str = ""
+    description: str = ""
+    technical_specification: str = ""
+    aliases: list[str] = Field(default_factory=list, max_length=100)
+    notes: str = ""
+    supplier_links: list[EquipmentPartSupplierLinkRequest] = Field(default_factory=list, max_length=100)
+
+
+class CreateEquipmentPartRequest(EquipmentPartRequest):
+    confirm_separate_token: str | None = None
 
 
 def get_conn():
@@ -312,6 +374,16 @@ def _resource_error(exc: Exception, write: bool = False):
     return JSONResponse({"success": False, "error": str(exc)}, status_code=status_code)
 
 
+def _supplier_payload(payload: SupplierProfileRequest) -> dict:
+    return payload.model_dump()
+
+
+def _equipment_part_payload(payload: EquipmentPartRequest) -> dict:
+    data = payload.model_dump()
+    data.pop("confirm_separate_token", None)
+    return data
+
+
 @app.post("/api/tag-knowledge/load")
 def load_tag_knowledge(payload: TagKnowledgeIdentityRequest):
     try:
@@ -362,6 +434,72 @@ def list_resources(resource_type: str | None = None, q: str | None = None):
         return {"success": True, "resources": shared_resource_store.list_resources(resource_type, q)}
     except SharedResourceError as exc:
         return _resource_error(exc)
+
+
+@app.get("/api/suppliers")
+def list_suppliers(q: str | None = None):
+    try:
+        return {"success": True, "suppliers": supplier_profile_store.list(q)}
+    except (SupplierProfileError, SharedResourceError) as exc:
+        return _resource_error(exc)
+
+
+@app.post("/api/suppliers")
+def create_supplier(payload: SupplierProfileRequest):
+    try:
+        return {"success": True, **supplier_profile_store.create(_supplier_payload(payload))}
+    except (SupplierProfileError, SharedResourceError) as exc:
+        return _resource_error(exc, write=True)
+
+
+@app.get("/api/suppliers/{resource_id}")
+def get_supplier(resource_id: str):
+    try:
+        return {"success": True, **supplier_profile_store.read(resource_id)}
+    except (SupplierProfileError, SharedResourceError) as exc:
+        return _resource_error(exc)
+
+
+@app.put("/api/suppliers/{resource_id}")
+def edit_supplier(resource_id: str, payload: SupplierProfileRequest):
+    try:
+        return {"success": True, **supplier_profile_store.edit(resource_id, _supplier_payload(payload))}
+    except (SupplierProfileError, SharedResourceError) as exc:
+        return _resource_error(exc, write=True)
+
+
+@app.get("/api/equipment-parts")
+def list_equipment_parts(q: str | None = None):
+    try:
+        return {"success": True, "equipment_parts": equipment_part_store.list(q)}
+    except (EquipmentPartError, SharedResourceError) as exc:
+        return _resource_error(exc)
+
+
+@app.post("/api/equipment-parts")
+def create_equipment_part(payload: CreateEquipmentPartRequest):
+    try:
+        return {"success": True, **equipment_part_store.create(
+            _equipment_part_payload(payload), confirm_separate_token=payload.confirm_separate_token
+        )}
+    except (EquipmentPartError, SharedResourceError) as exc:
+        return _resource_error(exc, write=True)
+
+
+@app.get("/api/equipment-parts/{resource_id}")
+def get_equipment_part(resource_id: str):
+    try:
+        return {"success": True, **equipment_part_store.read(resource_id)}
+    except (EquipmentPartError, SharedResourceError) as exc:
+        return _resource_error(exc)
+
+
+@app.put("/api/equipment-parts/{resource_id}")
+def edit_equipment_part(resource_id: str, payload: EquipmentPartRequest):
+    try:
+        return {"success": True, **equipment_part_store.edit(resource_id, _equipment_part_payload(payload))}
+    except (EquipmentPartError, SharedResourceError) as exc:
+        return _resource_error(exc, write=True)
 
 
 @app.get("/api/resources/{resource_id}")

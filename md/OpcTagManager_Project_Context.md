@@ -43,7 +43,7 @@ Alarm mapping, audio playback, alarm CRUD, and alarm refresh behavior are not pa
 ### Shared Resources (Phase 4.4)
 
 - Shared files are represented once beneath `KM_TAG_ROOT\_Resources\<ResourceType>\<ResourceId>\` and are never copied into each Tag folder.
-- Supported types are Manuals, Drawings, Suppliers, Quotations, Purchases, Photos, and GeneralDocuments.
+- Supported types are Manuals, Drawings, Suppliers, Equipment Parts, Quotations, Purchases, Photos, and GeneralDocuments.
 - `resource.index.json` is the versionable metadata contract. It includes stable `resource_id`, type, display and optional part identity fields, the active version/file, timestamps, and per-version filename/original filename/SHA-256 metadata.
 - A Tag stores `references.json` in its server-calculated Tag directory. Links contain stable ResourceId, relation type, and linked timestamp; KepwarePath remains canonical identity.
 - `KM_RESOURCE_WRITE_ENABLED` is independent of both existing write gates and defaults to disabled.
@@ -64,6 +64,32 @@ Alarm mapping, audio playback, alarm CRUD, and alarm refresh behavior are not pa
 - Link relation type is derived from resource type. Batch linking validates every Kepware Tag before mutation and reports retry-safe per-Tag outcomes.
 - The UI supports upload, duplicate reuse, search/link, lazy-tree multi-Tag selection, open/history/unlink, and explicit new-version confirmation.
 - OpcTagManager stores originals and identity/version/link metadata. Factory-KM owns future AI extraction, transformation, training, and reading.
+
+### Supplier and Contact profiles (Phase 4.6)
+
+- A Supplier remains one Shared Resource with stable server-generated `SUP_<uuid>` identity beneath `_Resources\Suppliers\SUP_<uuid>\`.
+- `supplier.profile.json` is the atomic current structured profile for the UI. It stores Supplier fields and server-generated stable `CNT_<uuid>` contact identities, but does not duplicate active-version responsibilities from `resource.index.json`.
+- Every meaningful edit creates a deterministic, AI-readable Markdown version, calculates its SHA-256, retains older Markdown files, and atomically advances the existing Resource index. A semantic no-op creates no version.
+- Supplier search covers company identity, products/models, and contact names, phones, and emails. The Supplier Directory supports create, find, inspect, edit, and linking through the existing Phase 4.5 current/multi-Tag workflow.
+- Tags continue to store only ResourceId relation data in `references.json`. Updating a contact changes the one active Supplier profile without rewriting or relinking every Tag.
+- Supplier create, edit, and link use `KM_RESOURCE_WRITE_ENABLED`; browser input cannot provide ResourceId or filesystem paths.
+
+Factory-KM may later resolve Tag → Supplier ResourceId → active Supplier Markdown → Contacts for Q&A. OpcTagManager remains the curated profile owner; Factory-KM remains the AI/Q&A owner.
+
+The future shared storage direction is `OpcTagManager + Factory-KM → KM Vault Manager → D:\KM\Vault`. Generic Supplier filesystem operations should eventually move behind that service. Phase 4.6 preserves the current tested local adapter and logical `ResourceId`, `KepwarePath`, and future `TaskId` identities; it does not implement KM Vault Manager or use absolute paths as cross-module identity.
+
+### Equipment / Part catalog (Phase 4.7)
+
+- `EquipmentPart` is a generic technical/catalog identity for equipment, spare parts, components, assemblies, consumables, and fabricated parts. It is not an installed physical asset or serial-instance registry.
+- Each catalog profile has a stable server-generated `EPT_<uuid>` identity beneath `_Resources\EquipmentParts\EPT_<uuid>\`, an atomic current `equipment_part.profile.json`, deterministic versioned Markdown, and the existing `resource.index.json` history/SHA-256 contract.
+- Display Name and generic Item Kind are required. Manufacturer, Brand, Model, Part No., string-valued Material Code, Unit, technical text, aliases, and notes remain independent optional attributes.
+- Equipment/Part-to-Supplier is many-to-many. The catalog profile stores only validated `SUP_<uuid>` links plus relationship, Supplier Part No., and relationship notes; Supplier company/contact data remains owned by the Supplier profile.
+- Deterministic candidate detection warns on matching Material Code, Manufacturer + Part No., Manufacturer + Model, normalized name, Part No., or Model. It never merges automatically, and creating a separate identity requires a short-lived confirmation bound to the submitted profile and candidates.
+- Equipment/Part profiles reuse existing ResourceId-based current/multi-Tag linking. Tag references and Supplier profiles are not rewritten when a catalog version changes.
+
+Future Quotation/Purchase records may reference both `SUP_<uuid>` and `EPT_<uuid>` without adding price fields to the catalog. Factory-KM maintenance summaries may later prefer `EquipmentPartResourceId` while retaining Part No./Material Code snapshots, quantities, and replacement timestamps. Future Inventory remains an external live service reached through Material Code or Part No. A future Part-to-Manual/Drawing/Photo/Document relationship is deferred.
+
+Equipment/Part filesystem operations remain isolated for later migration behind the documented shared KM Vault Manager architecture: `OpcTagManager + Factory-KM -> KM Vault Manager -> D:\KM\Vault`. Phase 4.7 does not implement that service and does not introduce absolute paths as identities.
 
 ### Ownership boundary
 
@@ -97,8 +123,8 @@ All deployment-specific configuration is loaded from `config/.env` through `conf
 
 ## Deferred work
 
-Tag editing/deletion, scaling-property cloning, bulk imports, and broader Factory-KM integration are intentionally deferred. Richer Supplier/Contact, Quotation/Purchase, maintenance history, Factory-KM feedback/promotion, and external Inventory/ERP lookup remain later work. Stock remains external live data keyed in future by fields such as PartNo and MaterialCode.
+Tag editing/deletion, scaling-property cloning, bulk imports, and broader Factory-KM integration are intentionally deferred. Quotation/Purchase, installed asset instances, Supplier or Equipment/Part deletion/retirement, maintenance history, Factory-KM feedback/promotion, Part-to-Resource linking, KM Vault Manager, and external Inventory/ERP lookup remain later work. Stock remains external live data keyed in future by fields such as PartNo and MaterialCode.
 
 ## Current milestone and next validation
 
-Phase 4.5 is complete pending review. The existing live Knowledge V1 for `LP2.MIX.OTM_TEST_Cement_FML` was not modified. Automated filesystem tests use temporary KM roots only.
+Phase 4.7 is complete pending review. No live Equipment/Part or Supplier was created, and the existing live Knowledge V1 for `LP2.MIX.OTM_TEST_Cement_FML` was not modified. Automated filesystem tests use temporary KM roots only.

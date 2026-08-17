@@ -16,11 +16,11 @@ RESOURCE_CATEGORIES = {
     "Manual": ("Manuals", "MAN"), "Drawing": ("Drawings", "DWG"),
     "Supplier": ("Suppliers", "SUP"), "Quotation": ("Quotations", "QUO"),
     "Purchase": ("Purchases", "PUR"), "Photo": ("Photos", "PHO"),
-    "GeneralDocument": ("GeneralDocuments", "DOC"),
+    "GeneralDocument": ("GeneralDocuments", "DOC"), "EquipmentPart": ("EquipmentParts", "EPT"),
 }
 RESOURCE_TYPES = tuple(RESOURCE_CATEGORIES)
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".pptx", ".txt", ".md", ".csv", ".png", ".jpg", ".jpeg", ".webp", ".dwg", ".dxf"}
-RESOURCE_ID_PATTERN = re.compile(r"^(MAN|DWG|SUP|QUO|PUR|PHO|DOC)_[0-9A-F]{32}$")
+RESOURCE_ID_PATTERN = re.compile(r"^(MAN|DWG|SUP|QUO|PUR|PHO|DOC|EPT)_[0-9A-F]{32}$")
 CHUNK_SIZE = 1024 * 1024
 DECISION_TTL_SECONDS = 10 * 60
 

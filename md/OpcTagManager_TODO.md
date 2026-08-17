@@ -115,4 +115,39 @@ The second-version live validation remains a separately approved manual operatio
 
 Phase 4.5 awaits review. Do not enable a write gate or perform a live Resource upload before separate approval.
 
-Later phases retain Supplier/Contact richer UI, Quotation/Purchase workflows, Maintenance History Reader, Factory-KM Feedback Reader and Knowledge Promotion, and Inventory/ERP integration. Stock remains external live data.
+## Phase 4.6 Supplier and Contact profiles
+
+- [x] Model each Supplier as one stable `SUP_<uuid>` Shared Resource.
+- [x] Store an atomic current `supplier.profile.json` with stable server-generated `CNT_<uuid>` contacts.
+- [x] Generate deterministic AI-readable Markdown and SHA-256 metadata for every meaningful version.
+- [x] Preserve historical Markdown, ResourceId, Tag references, and ContactIds across edits.
+- [x] Skip semantically identical edits without creating an empty version.
+- [x] Add narrow create, read, search, and edit Supplier APIs under the existing Resource write gate.
+- [x] Add Supplier Directory create/find/detail/edit UI using existing theme components.
+- [x] Reuse Phase 4.5 current-Tag and multi-Tag Resource linking without copying contact data to `references.json`.
+- [x] Validate lengths, optional email and website formats, controls, identity injection, and filesystem-path input.
+- [x] Test all filesystem writes against temporary KM roots only.
+
+Future storage direction (documentation only): `OpcTagManager + Factory-KM → KM Vault Manager → D:\KM\Vault`. Preserve `ResourceId`, `KepwarePath`, and future `TaskId` as logical identities. Generic Supplier filesystem operations may migrate behind KM Vault Manager later; no service or integration is implemented in Phase 4.6.
+
+Phase 4.6 awaits review. Do not enable a write gate or perform a live Supplier write before separate approval.
+
+## Phase 4.7 Equipment / Part catalog
+
+- [x] Add generic `EquipmentPart` Shared Resources with server-generated `EPT_<uuid>` identity.
+- [x] Store atomic current structured profiles and deterministic versioned AI-readable Markdown using the existing Resource index and SHA-256 contract.
+- [x] Distinguish technical/catalog identity from future installed physical asset instances.
+- [x] Support generic Item Kinds, independent Part No./string Material Code, technical fields, and structured aliases.
+- [x] Implement validated many-to-many Supplier ResourceId relationships without copying Supplier details.
+- [x] Add deterministic duplicate candidate warnings and explicit, bound Create Separate confirmation.
+- [x] Add narrow create/read/search/edit APIs and an Equipment / Part Directory UI.
+- [x] Reuse current and multi-Tag Resource linking without rewriting Tag references on profile edits.
+- [x] Keep all automated filesystem writes beneath temporary KM roots and existing write gates.
+
+Future Quotation/Purchase may reference Quotation ResourceId + Supplier ResourceId + EquipmentPart ResourceId. Future Factory-KM replacement summaries may reference `EPT_<uuid>` plus human-readable Part No./Material Code snapshots, quantity, and replacement time. Future Inventory stays external and may be resolved through Material Code. Future Part-to-Manual/Drawing/Photo/General Document relationships remain TODO; no generic Resource graph is implemented now.
+
+The approved shared-service direction remains `OpcTagManager + Factory-KM -> KM Vault Manager -> D:\KM\Vault`; current generic filesystem adapters may migrate behind it later. `md/KM_Vault_Manager_Shared_Service_Architecture_20260817.md` remains the documentation contract. No KM Vault Manager service is implemented in Phase 4.7.
+
+Phase 4.7 awaits review. Do not enable a write gate or perform a live Equipment/Part write before separate approval.
+
+Later phases retain Quotation/Purchase workflows, installed asset instances, Equipment/Part deletion, Maintenance History Reader, Factory-KM Feedback Reader and Knowledge Promotion, and Inventory/ERP integration. Stock remains external live data.
