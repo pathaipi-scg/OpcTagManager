@@ -1,5 +1,36 @@
 const runtimeTags = document.querySelectorAll(".tag-click");
 
+const themeStorageKey = "opcTagManagerTheme";
+const themeToggle = document.getElementById("theme-toggle");
+
+function validTheme(value) {
+    return value === "dark" || value === "light" ? value : "dark";
+}
+
+function updateThemeControl(theme) {
+    const nextTheme = theme === "dark" ? "Light" : "Dark";
+    themeToggle.textContent = theme === "dark" ? "☀ Light" : "🌙 Dark";
+    themeToggle.setAttribute("aria-label", `Switch to ${nextTheme} theme`);
+}
+
+function applyTheme(theme, persist = false) {
+    const safeTheme = validTheme(theme);
+    document.documentElement.dataset.theme = safeTheme;
+    updateThemeControl(safeTheme);
+    if (persist) {
+        try {
+            localStorage.setItem(themeStorageKey, safeTheme);
+        } catch (_error) {
+            // The selected theme still applies when browser storage is unavailable.
+        }
+    }
+}
+
+applyTheme(document.documentElement.dataset.theme);
+themeToggle.addEventListener("click", () => {
+    applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark", true);
+});
+
 const splitterStorageKey = "opcTagManager.mainPanelRatio";
 const minimumPanelWidth = 350;
 const workspace = document.querySelector(".workspace");
@@ -156,6 +187,9 @@ viewTabs.forEach((tab) => {
         }
     });
 });
+
+// Tag Configuration is intentionally the default on every full page load/refresh.
+document.querySelector('.view-tab[data-view="kepware"]').click();
 
 document.getElementById("refresh-kepware").addEventListener("click", async () => {
     await loadKepwareChannels(true);
@@ -376,10 +410,29 @@ function displayKepwareObject(node) {
 
     const tagDetails = node.tag_details || {};
     setTagProperty("kepware-tag-address", tagDetails.address);
-    setTagProperty("kepware-tag-data-type", tagDetails.data_type);
+    setTagProperty("kepware-tag-data-type", friendlyEnumValue("new-tag-data-type", tagDetails.data_type));
     setTagProperty("kepware-tag-scan-rate", tagDetails.scan_rate);
     setTagProperty("kepware-tag-description", tagDetails.description);
-    setTagProperty("kepware-tag-access", tagDetails.access);
+    setTagProperty("kepware-tag-access", friendlyEnumValue("new-tag-access", tagDetails.access));
+}
+
+function friendlyEnumValue(selectId, value) {
+    const numeric = Number(value);
+    const option = [...document.getElementById(selectId).options]
+        .find((item) => Number(item.value) === numeric);
+    return option ? `${option.textContent} (${numeric})` : `Unknown (${value})`;
+}
+
+function selectEnumValue(selectId, value) {
+    const select = document.getElementById(selectId);
+    const numeric = Number(value);
+    let option = [...select.options].find((item) => Number(item.value) === numeric);
+    if (!option) {
+        option = new Option(`Unknown (${value})`, String(value));
+        option.dataset.unknown = "true";
+        select.add(option);
+    }
+    select.value = option.value;
 }
 
 function destinationPath(node) {
@@ -413,12 +466,10 @@ function prepareAddTagPanel(node, details, children, templateTag) {
     document.getElementById("add-kepware-tag-form").reset();
     document.getElementById("new-tag-name").value = "";
     document.getElementById("new-tag-address").value = "";
-    document.getElementById("new-tag-data-type").value =
-        templateTag?.tag_details?.data_type ?? configuredTagDefaults.dataType;
+    selectEnumValue("new-tag-data-type", templateTag?.tag_details?.data_type ?? configuredTagDefaults.dataType);
     document.getElementById("new-tag-scan-rate").value =
         templateTag?.tag_details?.scan_rate ?? configuredTagDefaults.scanRate;
-    document.getElementById("new-tag-access").value =
-        templateTag?.tag_details?.access ?? configuredTagDefaults.access;
+    selectEnumValue("new-tag-access", templateTag?.tag_details?.access ?? configuredTagDefaults.access);
     document.getElementById("new-tag-description").value =
         templateTag?.properties?.["common.ALLTYPES_DESCRIPTION"] ?? "";
     templateSourcePath = templateTag?.full_path || "";
@@ -476,9 +527,9 @@ document.getElementById("add-kepware-tag-form").addEventListener("submit", (even
     document.getElementById("preview-destination").textContent = destination;
     document.getElementById("preview-tag-name").textContent = name;
     document.getElementById("preview-address").textContent = address;
-    document.getElementById("preview-data-type").textContent = String(dataType);
-    document.getElementById("preview-scan-rate").textContent = String(scanRate);
-    document.getElementById("preview-access").textContent = String(access);
+    document.getElementById("preview-data-type").textContent = friendlyEnumValue("new-tag-data-type", dataType);
+    document.getElementById("preview-scan-rate").textContent = `${scanRate} ms`;
+    document.getElementById("preview-access").textContent = friendlyEnumValue("new-tag-access", access);
     document.getElementById("preview-description").textContent = description || "(not provided)";
     document.getElementById("preview-full-path").textContent = `${destination}/${name}`;
     document.getElementById("preview-template-source").textContent =
@@ -617,6 +668,7 @@ async function loadTagResources(node) {
             const versions = document.createElement("button"); versions.type = "button"; versions.textContent = "Versions";
             versions.addEventListener("click", () => showResourceVersions(link.resource));
             const unlink = document.createElement("button"); unlink.type = "button"; unlink.textContent = "Unlink"; unlink.disabled = !kmResourceWriteEnabled;
+            unlink.className = "danger-button";
             unlink.addEventListener("click", () => unlinkResource(link.resource_id));
             const more = document.createElement("button"); more.type = "button"; more.textContent = "Link to More Tags"; more.disabled = !kmResourceWriteEnabled;
             more.addEventListener("click", () => beginTargetSelection(link.resource));
@@ -733,9 +785,9 @@ async function loadTagKnowledge(node) {
         const details = data.tag.tag_details || {};
         document.getElementById("knowledge-kepware-path").textContent = knowledge.kepware_path;
         document.getElementById("knowledge-address").textContent = details.address ?? "";
-        document.getElementById("knowledge-data-type").textContent = details.data_type ?? "";
+        document.getElementById("knowledge-data-type").textContent = friendlyEnumValue("new-tag-data-type", details.data_type);
         document.getElementById("knowledge-scan-rate").textContent = details.scan_rate ?? "";
-        document.getElementById("knowledge-access").textContent = details.access ?? "";
+        document.getElementById("knowledge-access").textContent = friendlyEnumValue("new-tag-access", details.access);
         document.getElementById("knowledge-directory").textContent = knowledge.km_directory;
         document.getElementById("knowledge-version").textContent = knowledge.exists ? String(knowledge.version) : "—";
         document.getElementById("knowledge-updated").textContent = knowledge.updated_at || "—";

@@ -71,6 +71,9 @@ class OpcTagManagerAppTests(unittest.TestCase):
         )
         return status, content
 
+    @patch.object(OpcTagManager, "KM_RESOURCE_WRITE_ENABLED", False)
+    @patch.object(OpcTagManager, "KM_TAG_WRITE_ENABLED", False)
+    @patch.object(OpcTagManager, "KEPWARE_CONFIG_WRITE_ENABLED", False)
     @patch.object(OpcTagManager, "get_conn", return_value=FakeConnection())
     def test_home_and_static_assets_render_without_external_services(self, _get_conn):
         status, body = self.request("GET", "/")
@@ -82,8 +85,40 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertIn('id="use-tag-template"', html)
         self.assertIn('id="tag-knowledge-panel"', html)
         self.assertIn('id="tag-resources-panel"', html)
+        self.assertIn('<html lang="en" data-theme="dark">', html)
+        self.assertIn('id="theme-toggle"', html)
+        self.assertIn('opcTagManagerTheme', html)
+        self.assertIn('saved === "light" || saved === "dark" ? saved : "dark"', html)
         self.assertIn('data-km-write-enabled="false"', html)
         self.assertIn('data-km-resource-write-enabled="false"', html)
+        self.assertIn('class="view-tab active" data-view="kepware">Tag Configuration</button>', html)
+        self.assertIn('class="view-tab" data-view="runtime">OPC Tag List</button>', html)
+        self.assertLess(html.index(">Tag Configuration</button>"), html.index(">OPC Tag List</button>"))
+        self.assertIn('<h2>Tag Configuration Tree</h2>', html)
+        self.assertIn('<h2>OPC Tag List</h2>', html)
+        self.assertIn("Refresh Configuration", html)
+        self.assertIn('<select id="new-tag-data-type"', html)
+        self.assertIn('<option value="5">Word</option>', html)
+        self.assertIn('<option value="25">Word Array</option>', html)
+        self.assertIn('<select id="new-tag-access"', html)
+        self.assertIn('<option value="1">Read/Write</option>', html)
+        self.assertNotIn(">OPC Runtime</button>", html)
+        javascript = Path("static/app.js").read_text(encoding="utf-8")
+        self.assertIn('document.querySelector(\'.view-tab[data-view="kepware"]\').click();', javascript)
+        self.assertIn('Number(document.getElementById("new-tag-data-type").value)', javascript)
+        self.assertIn('selectEnumValue("new-tag-data-type", templateTag?.tag_details?.data_type', javascript)
+        self.assertIn('friendlyEnumValue("new-tag-data-type", dataType)', javascript)
+        self.assertIn('friendlyEnumValue("new-tag-access", access)', javascript)
+        self.assertIn('`Unknown (${value})`', javascript)
+        self.assertIn('value === "dark" || value === "light" ? value : "dark"', javascript)
+        self.assertIn('localStorage.setItem(themeStorageKey, safeTheme)', javascript)
+        self.assertIn('applyTheme(document.documentElement.dataset.theme)', javascript)
+        self.assertLess(javascript.index('applyTheme(document.documentElement.dataset.theme)'), javascript.index('document.querySelector(\'.view-tab[data-view="kepware"]\').click();'))
+        stylesheet = Path("static/app.css").read_text(encoding="utf-8")
+        self.assertIn('[data-theme="dark"]', stylesheet)
+        self.assertIn('[data-theme="light"]', stylesheet)
+        self.assertIn('background: var(--bg-card)', stylesheet)
+        self.assertNotIn('background: #f8fafc', stylesheet)
         self.assertEqual(self.request("GET", "/static/app.js")[0], 200)
         self.assertEqual(self.request("GET", "/static/app.css")[0], 200)
 
@@ -103,6 +138,7 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertEqual(missing, {"data_type", "scan_rate", "access"})
 
     @patch.object(OpcTagManager.tag_knowledge_store, "save")
+    @patch.object(OpcTagManager, "KM_TAG_WRITE_ENABLED", False)
     @patch.object(
         OpcTagManager.kepware_config_api,
         "get_tag",
@@ -126,6 +162,7 @@ class OpcTagManagerAppTests(unittest.TestCase):
         save.assert_not_called()
 
     @patch.object(OpcTagManager.shared_resource_store, "link")
+    @patch.object(OpcTagManager, "KM_RESOURCE_WRITE_ENABLED", False)
     @patch.object(OpcTagManager.kepware_config_api, "get_tag", return_value={
         "name": "Cement_FML", "full_path": "LP2.MIX.Cement_FML",
         "context": {"channel": "LP2", "device": "MIX", "group_path": []},
@@ -150,10 +187,13 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertEqual(json.loads(body)["detail"][0]["type"], "extra_forbidden")
 
     def test_physical_upload_routes_reject_while_gate_disabled(self):
-        response = OpcTagManager.upload_resource("Manual", "Manual", UploadFile(io.BytesIO(b"data"), filename="manual.pdf"))
-        self.assertEqual(response.status_code, 403)
-        response = OpcTagManager.upload_resource_version("MAN_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", UploadFile(io.BytesIO(b"data"), filename="v2.pdf"))
-        self.assertEqual(response.status_code, 403)
+        with tempfile.TemporaryDirectory() as temporary:
+            disabled = SharedResourceStore(Path(temporary) / "Tags", "Asia/Bangkok", False)
+            with patch.object(OpcTagManager, "shared_resource_store", disabled), patch.object(OpcTagManager, "KM_RESOURCE_WRITE_ENABLED", False):
+                response = OpcTagManager.upload_resource("Manual", "Manual", UploadFile(io.BytesIO(b"data"), filename="manual.pdf"))
+                self.assertEqual(response.status_code, 403)
+                response = OpcTagManager.upload_resource_version("MAN_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", UploadFile(io.BytesIO(b"data"), filename="v2.pdf"))
+                self.assertEqual(response.status_code, 403)
 
     def test_upload_ignores_injected_creation_identity_and_generates_resource_id(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -195,6 +235,37 @@ class OpcTagManagerAppTests(unittest.TestCase):
             status, body = self.request("POST", "/api/tag-resources/link-many", payload)
         self.assertEqual(status, 200)
         self.assertEqual([item["status"] for item in json.loads(body)["results"]], ["already_linked", "failed"])
+
+    def test_active_and_historical_pdf_files_are_inline(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = SharedResourceStore(Path(temporary) / "Tags", "Asia/Bangkok", True)
+            created = store.upload_new("Manual", "AS550 Manual", "manual.pdf", io.BytesIO(b"pdf-v1"))["resource"]
+            store.upload_version(created["resource_id"], "manual-v2.pdf", io.BytesIO(b"pdf-v2"))
+            with patch.object(OpcTagManager, "shared_resource_store", store):
+                active = OpcTagManager.open_resource_file(created["resource_id"], None)
+                historical = OpcTagManager.open_resource_file(created["resource_id"], 1)
+            for response in (active, historical):
+                self.assertEqual(response.media_type, "application/pdf")
+                self.assertTrue(response.headers["content-disposition"].startswith('inline; filename="AS550_Manual_v'))
+
+    def test_supported_image_file_is_inline_with_correct_content_type(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = SharedResourceStore(Path(temporary) / "Tags", "Asia/Bangkok", True)
+            created = store.upload_new("Photo", "Motor Photo", "motor.webp", io.BytesIO(b"image"))["resource"]
+            with patch.object(OpcTagManager, "shared_resource_store", store):
+                response = OpcTagManager.open_resource_file(created["resource_id"], None)
+            self.assertEqual(response.media_type, "image/webp")
+            self.assertTrue(response.headers["content-disposition"].startswith('inline; filename="Motor_Photo_v001_'))
+
+    def test_file_route_keeps_invalid_resource_and_version_protected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = SharedResourceStore(Path(temporary) / "Tags", "Asia/Bangkok", True)
+            created = store.upload_new("Manual", "Manual", "manual.pdf", io.BytesIO(b"pdf"))["resource"]
+            with patch.object(OpcTagManager, "shared_resource_store", store):
+                bad_id = OpcTagManager.open_resource_file("../escape", None)
+                bad_version = OpcTagManager.open_resource_file(created["resource_id"], 99)
+            self.assertEqual(bad_id.status_code, 400)
+            self.assertEqual(bad_version.status_code, 400)
 
 
 if __name__ == "__main__":

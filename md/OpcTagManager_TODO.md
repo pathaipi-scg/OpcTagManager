@@ -18,6 +18,8 @@ The following are intentionally outside Phase 2:
 - Image or document upload
 - Troubleshooting knowledge fields
 
+The standalone Alarm System may later be consolidated into OpcTagManager under the general `OPC Tag List` workspace. That workspace remains broader than alarms because its runtime Tag names are also reused by InfluxDB, Grafana, and other applications. No consolidation work is included in the current UI cleanup.
+
 ## Phase 3 read-only Kepware integration
 
 - [x] Keep the SQL/TagMaster OPC Runtime Tree separate and unchanged.

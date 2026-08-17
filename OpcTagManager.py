@@ -45,6 +45,7 @@ from services.kepware_config_api import (
     KepwareConfigError,
     KepwareConfigSettings,
 )
+from services.kepware_enums import TAG_ACCESS_LEVELS, TAG_DATA_TYPES
 from services.tag_knowledge import TagKnowledgeError, TagKnowledgeStore
 from services.shared_resources import SharedResourceError, SharedResourceStore
 
@@ -195,6 +196,8 @@ def home(request: Request):
             "kepware_tag_default_access": KEPWARE_TAG_DEFAULT_ACCESS,
             "km_tag_write_enabled": KM_TAG_WRITE_ENABLED,
             "km_resource_write_enabled": KM_RESOURCE_WRITE_ENABLED,
+            "kepware_tag_data_types": TAG_DATA_TYPES,
+            "kepware_tag_access_levels": TAG_ACCESS_LEVELS,
         },
     )
 
@@ -397,7 +400,20 @@ def upload_resource_version(resource_id: str, file: UploadFile = File()):
 def open_resource_file(resource_id: str, version: int | None = Query(default=None, ge=1)):
     try:
         path, _index, item = shared_resource_store.resolve_file(resource_id, version)
-        return FileResponse(path, filename=item["original_filename"])
+        inline_media_types = {
+            ".pdf": "application/pdf",
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".webp": "image/webp",
+        }
+        media_type = inline_media_types.get(path.suffix.lower())
+        return FileResponse(
+            path,
+            filename=item["filename"],
+            media_type=media_type,
+            content_disposition_type="inline" if media_type else "attachment",
+        )
     except SharedResourceError as exc:
         return _resource_error(exc)
 

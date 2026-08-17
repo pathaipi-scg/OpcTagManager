@@ -30,20 +30,23 @@
 <header class="header-bar">
     <h1>OpcTagManager</h1>
 
-    <form method="post" action="/refresh" id="refresh-form">
-        <button type="submit" class="refresh-button">Refresh OPC Tree</button>
-    </form>
+    <div class="header-actions">
+        <form method="post" action="/refresh" id="refresh-form" class="hidden">
+            <button type="submit" class="refresh-button">Refresh OPC Tree</button>
+        </form>
+        <button type="button" id="theme-toggle" class="theme-toggle" aria-label="Switch to Light theme">☀ Light</button>
+    </div>
 </header>
 
 <nav class="view-tabs" aria-label="Tag tree source">
-    <button type="button" class="view-tab active" data-view="runtime">OPC Runtime</button>
-    <button type="button" class="view-tab" data-view="kepware">Kepware Configuration</button>
+    <button type="button" class="view-tab active" data-view="kepware">Tag Configuration</button>
+    <button type="button" class="view-tab" data-view="runtime">OPC Tag List</button>
 </nav>
 
 <main class="workspace">
     <section class="panel tree-panel" aria-label="Tag tree">
-        <div id="runtime-tree-view" class="tree-view">
-            <h2>OPC Runtime Tree</h2>
+        <div id="runtime-tree-view" class="tree-view hidden">
+            <h2>OPC Tag List</h2>
 
             {% if tree %}
                 {{ render_tree(tree) }}
@@ -54,7 +57,7 @@
 
         <div
             id="kepware-tree-view"
-            class="tree-view hidden"
+            class="tree-view"
             data-write-enabled="{{ 'true' if kepware_write_enabled else 'false' }}"
             data-km-write-enabled="{{ 'true' if km_tag_write_enabled else 'false' }}"
             data-km-resource-write-enabled="{{ 'true' if km_resource_write_enabled else 'false' }}"
@@ -63,7 +66,7 @@
             data-default-access="{{ kepware_tag_default_access }}"
         >
             <div class="kepware-heading">
-                <h2>Kepware Configuration Tree</h2>
+                <h2>Tag Configuration Tree</h2>
                 <div class="kepware-controls">
                 <span id="kepware-status" class="connection-status pending">
                     Kepware API: Checking…
@@ -72,7 +75,7 @@
                     Write Mode: {{ 'Enabled' if kepware_write_enabled else 'Disabled' }}
                 </span>
                 <button type="button" id="refresh-kepware" class="refresh-button">
-                    Refresh Kepware
+                    Refresh Configuration
                 </button>
                 </div>
             </div>
@@ -92,7 +95,7 @@
     ></div>
 
     <section class="panel details-panel" aria-label="Selected object details">
-        <div id="runtime-details-view" class="details-view">
+        <div id="runtime-details-view" class="details-view hidden">
             <h2>Tag Details</h2>
 
             <div class="field-group">
@@ -108,9 +111,9 @@
             <p class="placeholder-message">Tag configuration will be added in a later phase.</p>
         </div>
 
-        <div id="kepware-details-view" class="details-view hidden">
+        <div id="kepware-details-view" class="details-view">
             <h2>Selected Kepware Object</h2>
-            <p id="kepware-no-selection">Select an object in the Kepware Configuration Tree.</p>
+            <p id="kepware-no-selection">Select an object in the Tag Configuration Tree.</p>
 
             <div id="kepware-object-details" class="hidden">
                 <dl class="object-properties">
@@ -152,7 +155,9 @@
                     </div>
                     <div class="field-group">
                         <label for="new-tag-data-type">Data Type</label>
-                        <input id="new-tag-data-type" type="number" required {{ 'disabled' if not kepware_write_enabled else '' }}>
+                        <select id="new-tag-data-type" required {{ 'disabled' if not kepware_write_enabled else '' }}>
+                            {% for value, label in kepware_tag_data_types %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+                        </select>
                     </div>
                     <div class="field-group">
                         <label for="new-tag-scan-rate">Scan Rate (ms)</label>
@@ -160,7 +165,9 @@
                     </div>
                     <div class="field-group">
                         <label for="new-tag-access">Access</label>
-                        <input id="new-tag-access" type="number" required {{ 'disabled' if not kepware_write_enabled else '' }}>
+                        <select id="new-tag-access" required {{ 'disabled' if not kepware_write_enabled else '' }}>
+                            {% for value, label in kepware_tag_access_levels %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+                        </select>
                     </div>
                     <div class="field-group">
                         <label for="new-tag-description">Description</label>

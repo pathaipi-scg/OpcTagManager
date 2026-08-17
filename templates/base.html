@@ -1,10 +1,20 @@
 
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>OpcTagManager</title>
+    <script>
+        (() => {
+            try {
+                const saved = localStorage.getItem("opcTagManagerTheme");
+                document.documentElement.dataset.theme = saved === "light" || saved === "dark" ? saved : "dark";
+            } catch (_error) {
+                document.documentElement.dataset.theme = "dark";
+            }
+        })();
+    </script>
     <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}">
     <script src="{{ url_for('static', path='/app.js') }}" defer></script>
 </head>
