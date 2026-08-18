@@ -294,3 +294,10 @@ Revert Git Commit
 - Successful committed reconcile now records a registry generation and requests a full rebuild only when a supervised worker is enabled/running.
 - Added read-only runtime status API and minimal legacy-ownership UI.
 - Production historian ownership remains legacy `opc_service`; its source and startup are unchanged.
+# 2026-08-18 — Phase 4.11A Slice 3: Controlled Historian Cutover Preparation
+
+- Added a pure NO-WRITE historian contract capture/self-check harness.
+- Added a read-only cutover preflight endpoint with configuration, TagMaster, module, generation, and rollback-launcher checks.
+- Made rebuild synchronization generation-aware; pending clears only after the current generation is reloaded and acknowledged.
+- Added explicit legacy ownership expected/process unknown status rather than process-name guessing.
+- Added a Windows single-writer cutover and rollback runbook; no live cutover or process control was performed.

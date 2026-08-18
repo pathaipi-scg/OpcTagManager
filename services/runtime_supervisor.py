@@ -38,9 +38,15 @@ class HistorianSupervisor:
             "last_stop_time": None,
             "last_error": None,
             "registry_generation": 0,
+            "acknowledged_generation": 0,
             "rebuild_pending": False,
+            "legacy_historian_ownership": "expected",
+            "legacy_historian_process_state": "unknown",
             "active_tag_count": None,
+            "requested_subscription_count": None,
             "subscribed_tag_count": None,
+            "failed_subscription_count": None,
+            "subscription_complete": False,
             "opc_state": "unknown",
             "influx_state": "unknown",
             "last_write_time": None,
@@ -72,10 +78,17 @@ class HistorianSupervisor:
             last_error=None,
             opc_state="unknown",
             influx_state="unknown",
+            active_tag_count=None,
+            requested_subscription_count=None,
+            subscribed_tag_count=None,
+            failed_subscription_count=None,
+            subscription_complete=False,
         )
         monitor = threading.Thread(target=self._monitor, args=(process,), daemon=True)
         self._monitor_thread = monitor
         monitor.start()
+        if self._status["rebuild_pending"]:
+            self._send("rebuild", generation=self._status["registry_generation"])
         return True
 
     def start(self) -> bool:
@@ -96,12 +109,29 @@ class HistorianSupervisor:
             self._status["active_tag_count"] = message.get("active_tag_count")
         elif event == "opc_state":
             self._status["opc_state"] = message.get("state", "unknown")
+            if self._status["opc_state"] != "connected":
+                self._status["requested_subscription_count"] = None
+                self._status["subscribed_tag_count"] = None
+                self._status["failed_subscription_count"] = None
+                self._status["subscription_complete"] = False
             if message.get("error"):
                 self._status["last_error"] = message["error"]
-        elif event == "subscriptions_ready":
+        elif event in {"subscriptions_progress", "subscriptions_ready"}:
             self._status["worker_state"] = "running"
+            self._status["requested_subscription_count"] = message.get("requested_subscription_count")
             self._status["subscribed_tag_count"] = message.get("subscribed_tag_count")
-            self._status["rebuild_pending"] = False
+            self._status["failed_subscription_count"] = message.get("failed_subscription_count")
+            self._status["subscription_complete"] = bool(message.get("complete")) if event == "subscriptions_ready" else False
+        elif event == "rebuild_ack":
+            generation = message.get("generation")
+            if isinstance(generation, int):
+                if message.get("complete"):
+                    self._status["acknowledged_generation"] = max(
+                        self._status["acknowledged_generation"], generation
+                    )
+                if message.get("complete") and generation >= self._status["registry_generation"]:
+                    self._status["rebuild_pending"] = False
+                    self._status["worker_state"] = "running"
         elif event == "rebuild_started":
             self._status["worker_state"] = "rebuilding"
         elif event == "influx_write":
@@ -129,7 +159,16 @@ class HistorianSupervisor:
         with self._lock:
             if process is not self._process:
                 return
-            self._status.update(worker_pid=None, last_stop_time=utc_now(), opc_state="unknown")
+            self._status.update(
+                worker_pid=None,
+                last_stop_time=utc_now(),
+                opc_state="unknown",
+                active_tag_count=None,
+                requested_subscription_count=None,
+                subscribed_tag_count=None,
+                failed_subscription_count=None,
+                subscription_complete=False,
+            )
             should_restart = self.enabled and not self._intentional_stop and not self._shutdown.is_set()
             if should_restart:
                 self._status["worker_state"] = "exited"
@@ -142,12 +181,12 @@ class HistorianSupervisor:
                     self._status["restart_count"] += 1
                     self._spawn()
 
-    def _send(self, command: str) -> bool:
+    def _send(self, command: str, **values) -> bool:
         process = self._process
         if process is None or process.poll() is not None or process.stdin is None:
             return False
         try:
-            process.stdin.write(json.dumps({"command": command}) + "\n")
+            process.stdin.write(json.dumps({"command": command, **values}) + "\n")
             process.stdin.flush()
             return True
         except (BrokenPipeError, OSError, ValueError) as exc:
@@ -160,7 +199,7 @@ class HistorianSupervisor:
             self._status["rebuild_pending"] = True
             if not self.enabled:
                 return False
-            requested = self._send("rebuild")
+            requested = self._send("rebuild", generation=self._status["registry_generation"])
             if requested:
                 self._status["worker_state"] = "rebuilding"
             return requested

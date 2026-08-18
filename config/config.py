@@ -22,8 +22,23 @@ def get_configured(name: str) -> str:
     return value
 
 
+def get_optional(name: str) -> str:
+    value = os.getenv(name)
+    return value.strip() if value else ""
+
+
 def get_int(name: str) -> int:
     value = get_required(name)
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise RuntimeError(f"Configuration {name} must be an integer") from exc
+
+
+def get_int_default(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
     try:
         return int(value)
     except ValueError as exc:
@@ -59,6 +74,9 @@ APP_TIMEZONE = get_required("APP_TIMEZONE")
 
 # OPC
 OPC_URL = get_required("OPC_URL")
+OPC_SUBSCRIPTION_BATCH_SIZE = get_int_default("OPC_SUBSCRIPTION_BATCH_SIZE", 100)
+if OPC_SUBSCRIPTION_BATCH_SIZE < 1 or OPC_SUBSCRIPTION_BATCH_SIZE > 1000:
+    raise RuntimeError("Configuration OPC_SUBSCRIPTION_BATCH_SIZE must be between 1 and 1000")
 BROWSER_SCRIPT = get_required("BROWSER_SCRIPT")
 PRODUCTION_LINE = get_required("PRODUCTION_LINE")
 
@@ -69,6 +87,9 @@ SQL_DB = get_required("SQL_DB")
 SQL_USER = get_required("SQL_USER")
 SQL_PASS = get_required("SQL_PASS")
 SQL_TRUST_SERVER_CERTIFICATE = get_bool("SQL_TRUST_SERVER_CERTIFICATE")
+SQL_ENCRYPT = get_optional("SQL_ENCRYPT").lower()
+if SQL_ENCRYPT not in {"", "yes", "no"}:
+    raise RuntimeError("Configuration SQL_ENCRYPT must be blank, yes, or no")
 
 # Kepware Configuration API (reserved for a future phase)
 KEPWARE_CONFIG_API_SCHEME = get_required("KEPWARE_CONFIG_API_SCHEME")
@@ -102,6 +123,7 @@ INFLUX_PASS = get_configured("INFLUX_PASS")
 # Poller
 POLL_INTERVAL = get_int("POLL_INTERVAL")
 OPC_RUNTIME_SUPERVISOR_ENABLED = get_bool_default("OPC_RUNTIME_SUPERVISOR_ENABLED", False)
+LEGACY_POLLER_LAUNCHER = get_optional("LEGACY_POLLER_LAUNCHER")
 
 # Kepware Modbus
 KEPWARE_MODBUS_HOST = get_required("KEPWARE_MODBUS_HOST")

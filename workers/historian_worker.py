@@ -10,9 +10,10 @@ import threading
 import time
 from typing import Callable
 
-import pyodbc
-from asyncua import Client
+from asyncua import Client, ua
 from influxdb import InfluxDBClient
+
+from services.sql_connection import connect_sql
 
 
 ACTIVE_TAG_QUERY = """SELECT TagId, Path, NodeId, DataType
@@ -36,8 +37,10 @@ class HistorianSettings:
     influx_db: str
     influx_user: str
     influx_password: str
+    sql_encrypt: str = ""
     reconnect_delay: float = 10.0
     healthcheck_interval: float = 60.0
+    subscription_batch_size: int = 100
 
 
 def utc_now() -> str:
@@ -46,6 +49,35 @@ def utc_now() -> str:
 
 def safe_error(context: str, exc: Exception) -> str:
     return f"{context}: {type(exc).__name__}"
+
+
+def subscription_failure_category(value) -> str:
+    if isinstance(value, asyncio.TimeoutError):
+        return "timeout"
+    if isinstance(value, (ConnectionError, OSError)):
+        return "connection_lost"
+    if isinstance(value, ua.StatusCode):
+        name = value.name or "BadStatusCode"
+    else:
+        name = type(value).__name__
+        status = getattr(value, "code", None)
+        name = getattr(status, "name", None) or name
+    lowered = name.lower()
+    if "nodeidunknown" in lowered:
+        return "bad_node_id_unknown"
+    if "nodeid" in lowered or "invalid" in lowered:
+        return "invalid_node_id"
+    if "timeout" in lowered:
+        return "timeout"
+    if "connection" in lowered or "socket" in lowered:
+        return "connection_lost"
+    if lowered.startswith("bad") or "statuscode" in lowered:
+        return "server_rejection"
+    return "other_opc_status"
+
+
+def is_connection_failure(exc: Exception) -> bool:
+    return subscription_failure_category(exc) in {"connection_lost", "timeout"}
 
 
 class StatusReporter:
@@ -82,13 +114,14 @@ def normalize_value(value):
 
 
 def make_sql_connection(settings: HistorianSettings):
-    return pyodbc.connect(
-        f"DRIVER={{{settings.sql_driver}}};"
-        f"SERVER={settings.sql_server};"
-        f"DATABASE={settings.sql_db};"
-        f"UID={settings.sql_user};"
-        f"PWD={settings.sql_password};"
-        f"TrustServerCertificate={'yes' if settings.sql_trust_server_certificate else 'no'};"
+    return connect_sql(
+        driver=settings.sql_driver,
+        server=settings.sql_server,
+        database=settings.sql_db,
+        username=settings.sql_user,
+        password=settings.sql_password,
+        trust_server_certificate=settings.sql_trust_server_certificate,
+        encrypt=settings.sql_encrypt,
     )
 
 
@@ -144,14 +177,23 @@ class InfluxWriter:
 
 
 class HistorianHandler:
-    def __init__(self, node_path_map: dict[str, str], writer: InfluxWriter) -> None:
+    def __init__(self, node_path_map: dict[str, str], writer: InfluxWriter, reporter=None) -> None:
         self.node_path_map = node_path_map
         self.writer = writer
+        self.reporter = reporter or StatusReporter()
 
     def datachange_notification(self, node, value, _data) -> None:
         path = self.node_path_map.get(node.nodeid.to_string())
         if path:
             self.writer.write(path, value)
+
+    def status_change_notification(self, status) -> None:
+        code = getattr(status, "Status", status)
+        self.reporter.send(
+            "subscription_status_change",
+            category=subscription_failure_category(code),
+            status=getattr(code, "name", type(code).__name__),
+        )
 
 
 class HistorianWorker:
@@ -170,6 +212,98 @@ class HistorianWorker:
         self.connection_factory = connection_factory or (lambda: make_sql_connection(settings))
         self.opc_client_factory = opc_client_factory
         self.writer = InfluxWriter(settings, influx_client_factory, reporter)
+        self.pending_generation: int | None = None
+
+    def _report_subscription_failure(self, tag: dict, failure) -> None:
+        self.reporter.send(
+            "subscription_error",
+            tag_id=tag.get("TagId"),
+            category=subscription_failure_category(failure),
+            error=safe_error("Tag subscription failed", failure)
+            if isinstance(failure, Exception) else f"Tag subscription failed: {getattr(failure, 'name', 'StatusCode')}",
+        )
+
+    async def _subscribe_individually(self, subscription, nodes_and_tags) -> tuple[int, int]:
+        subscribed = 0
+        failed = 0
+        for node, tag in nodes_and_tags:
+            try:
+                await subscription.subscribe_data_change(node)
+                subscribed += 1
+            except Exception as exc:
+                if is_connection_failure(exc):
+                    raise
+                failed += 1
+                self._report_subscription_failure(tag, exc)
+        return subscribed, failed
+
+    async def _build_subscriptions(self, subscription, opc, tags: list[dict]) -> tuple[int, int, str | None]:
+        started = time.monotonic()
+        subscribed = 0
+        failed = 0
+        batch_size = self.settings.subscription_batch_size
+        self.reporter.send(
+            "subscriptions_build_started",
+            requested_subscription_count=len(tags),
+            batch_size=batch_size,
+        )
+        for offset in range(0, len(tags), batch_size):
+            batch = tags[offset:offset + batch_size]
+            nodes_and_tags = []
+            for tag in batch:
+                try:
+                    nodes_and_tags.append((opc.get_node(tag["NodeId"]), tag))
+                except Exception as exc:
+                    failed += 1
+                    self._report_subscription_failure(tag, exc)
+            if nodes_and_tags:
+                try:
+                    results = await subscription.subscribe_data_change([item[0] for item in nodes_and_tags])
+                except Exception as exc:
+                    if is_connection_failure(exc):
+                        self.reporter.send(
+                            "subscriptions_connection_lost",
+                            requested_subscription_count=len(tags),
+                            subscribed_tag_count=subscribed,
+                            failed_subscription_count=failed,
+                            category=subscription_failure_category(exc),
+                        )
+                        raise
+                    batch_subscribed, batch_failed = await self._subscribe_individually(subscription, nodes_and_tags)
+                    subscribed += batch_subscribed
+                    failed += batch_failed
+                else:
+                    if not isinstance(results, list):
+                        results = [results]
+                    for (_node, tag), result in zip(nodes_and_tags, results, strict=True):
+                        if isinstance(result, ua.StatusCode):
+                            failed += 1
+                            self._report_subscription_failure(tag, result)
+                        else:
+                            subscribed += 1
+            self.reporter.send(
+                "subscriptions_progress",
+                requested_subscription_count=len(tags),
+                attempted_subscription_count=min(offset + len(batch), len(tags)),
+                subscribed_tag_count=subscribed,
+                failed_subscription_count=failed,
+            )
+            command = self._command()
+            command_name = command.get("command") if isinstance(command, dict) else command
+            if command_name in {"stop", "rebuild"}:
+                if command_name == "rebuild" and isinstance(command, dict):
+                    self.pending_generation = command.get("generation")
+                return subscribed, failed, command_name
+        self.reporter.send(
+            "subscriptions_ready",
+            active_tag_count=len(tags),
+            requested_subscription_count=len(tags),
+            subscribed_tag_count=subscribed,
+            failed_subscription_count=failed,
+            complete=failed == 0,
+            build_duration_seconds=round(time.monotonic() - started, 3),
+        )
+        return subscribed, failed, None
 
     def _command(self):
         try:
@@ -183,25 +317,31 @@ class HistorianWorker:
         self.reporter.send("tag_snapshot", active_tag_count=len(tags))
         async with self.opc_client_factory(url=self.settings.opc_url) as opc:
             self.reporter.send("opc_state", state="connected")
-            handler = HistorianHandler(node_path_map, self.writer)
+            handler = HistorianHandler(node_path_map, self.writer, self.reporter)
             subscription = await opc.create_subscription(1000, handler)
-            subscribed = 0
-            for tag in tags:
-                try:
-                    await subscription.subscribe_data_change(opc.get_node(tag["NodeId"]))
-                    subscribed += 1
-                except Exception as exc:
-                    self.reporter.send(
-                        "subscription_error",
-                        error=safe_error("Tag subscription failed", exc),
-                    )
-            self.reporter.send("subscriptions_ready", subscribed_tag_count=subscribed)
+            subscribed, failed, interrupted = await self._build_subscriptions(subscription, opc, tags)
+            if interrupted:
+                self.reporter.send("session_stopping", reason=interrupted)
+                return interrupted
+            if self.pending_generation is not None:
+                self.reporter.send(
+                    "rebuild_ack",
+                    generation=self.pending_generation,
+                    complete=failed == 0,
+                    requested_subscription_count=len(tags),
+                    subscribed_tag_count=subscribed,
+                    failed_subscription_count=failed,
+                )
+                self.pending_generation = None
             last_healthcheck = time.monotonic()
             while True:
                 command = self._command()
-                if command in {"stop", "rebuild"}:
-                    self.reporter.send("session_stopping", reason=command)
-                    return command
+                command_name = command.get("command") if isinstance(command, dict) else command
+                if command_name in {"stop", "rebuild"}:
+                    if command_name == "rebuild":
+                        self.pending_generation = command.get("generation") if isinstance(command, dict) else None
+                    self.reporter.send("session_stopping", reason=command_name)
+                    return command_name
                 now = time.monotonic()
                 if now - last_healthcheck >= self.settings.healthcheck_interval:
                     await opc.check_connection()
@@ -224,10 +364,12 @@ class HistorianWorker:
                 deadline = time.monotonic() + self.settings.reconnect_delay
                 while time.monotonic() < deadline:
                     command = self._command()
-                    if command == "stop":
+                    command_name = command.get("command") if isinstance(command, dict) else command
+                    if command_name == "stop":
                         self.reporter.send("worker_stopped")
                         return
-                    if command == "rebuild":
+                    if command_name == "rebuild":
+                        self.pending_generation = command.get("generation") if isinstance(command, dict) else None
                         break
                     await asyncio.sleep(0.1)
 
@@ -241,9 +383,8 @@ def read_commands(command_queue: queue.Queue, stream=None) -> None:
         except (json.JSONDecodeError, AttributeError):
             continue
         if command in {"stop", "rebuild"}:
-            command_queue.put(command)
-    command_queue.put("stop")
-    command_queue.put("stop")
+            command_queue.put({"command": command, "generation": payload.get("generation")})
+    command_queue.put({"command": "stop"})
 
 
 def settings_from_config() -> HistorianSettings:
@@ -254,7 +395,9 @@ def settings_from_config() -> HistorianSettings:
         INFLUX_PORT,
         INFLUX_USER,
         OPC_URL,
+        OPC_SUBSCRIPTION_BATCH_SIZE,
         SQL_DB,
+        SQL_ENCRYPT,
         SQL_DRIVER,
         SQL_PASS,
         SQL_SERVER,
@@ -274,6 +417,8 @@ def settings_from_config() -> HistorianSettings:
         influx_db=INFLUX_DB,
         influx_user=INFLUX_USER,
         influx_password=INFLUX_PASS,
+        sql_encrypt=SQL_ENCRYPT,
+        subscription_batch_size=OPC_SUBSCRIPTION_BATCH_SIZE,
     )
 
 

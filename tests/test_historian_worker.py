@@ -2,6 +2,7 @@ import asyncio
 import io
 import queue
 
+from asyncua import ua
 from asyncua.ua import NodeClass
 
 from workers.historian_worker import (
@@ -14,6 +15,7 @@ from workers.historian_worker import (
     get_line_name,
     load_active_tags,
     normalize_value,
+    subscription_failure_category,
 )
 
 
@@ -106,21 +108,37 @@ class FakeNode:
 
 
 class FakeSubscription:
-    def __init__(self, handler, fail_node=None):
+    def __init__(self, handler, fail_node=None, connection_loss_batch=None):
         self.handler = handler
         self.fail_node = fail_node
+        self.connection_loss_batch = connection_loss_batch
         self.nodes = []
+        self.batch_sizes = []
 
-    async def subscribe_data_change(self, node):
-        if node.nodeid.to_string() == self.fail_node:
-            raise RuntimeError("subscribe failed")
-        self.nodes.append(node.nodeid.to_string())
+    async def subscribe_data_change(self, nodes):
+        is_batch = isinstance(nodes, list)
+        nodes = nodes if is_batch else [nodes]
+        self.batch_sizes.append(len(nodes))
+        if self.connection_loss_batch == len(self.batch_sizes):
+            raise ConnectionError("lost during subscription build")
+        results = []
+        for node in nodes:
+            node_id = node.nodeid.to_string()
+            if node_id == self.fail_node:
+                if is_batch:
+                    results.append(ua.StatusCode(ua.StatusCodes.BadNodeIdUnknown))
+                    continue
+                raise ua.UaStatusCodeError(ua.StatusCodes.BadNodeIdUnknown)
+            self.nodes.append(node_id)
+            results.append(len(self.nodes))
+        return results if is_batch else results[0]
 
 
 class FakeOpcClient:
-    def __init__(self, fail_node=None, health_error=None):
+    def __init__(self, fail_node=None, health_error=None, connection_loss_batch=None):
         self.fail_node = fail_node
         self.health_error = health_error
+        self.connection_loss_batch = connection_loss_batch
         self.subscription = None
 
     async def __aenter__(self):
@@ -131,7 +149,7 @@ class FakeOpcClient:
 
     async def create_subscription(self, interval, handler):
         assert interval == 1000
-        self.subscription = FakeSubscription(handler, self.fail_node)
+        self.subscription = FakeSubscription(handler, self.fail_node, self.connection_loss_batch)
         return self.subscription
 
     def get_node(self, node_id):
@@ -219,7 +237,7 @@ def test_worker_loads_maps_subscribes_and_individual_failure_is_nonfatal():
     opc = FakeOpcClient(fail_node="node-b")
     reporter = Reporter()
     worker = HistorianWorker(
-        settings(), ScriptedCommands(["rebuild"]), reporter,
+        settings(), ScriptedCommands([None, "rebuild"]), reporter,
         connection_factory=lambda: connection,
         opc_client_factory=lambda **_kwargs: opc,
         influx_client_factory=FakeInfluxClient,
@@ -230,8 +248,13 @@ def test_worker_loads_maps_subscribes_and_individual_failure_is_nonfatal():
     opc.subscription.handler.datachange_notification(FakeNode("node-a"), True, None)
     client = worker.writer.clients["history_Line"]
     assert client.points == [{"measurement": "Line/A", "fields": {"value": 1}}]
-    assert ("subscriptions_ready", {"subscribed_tag_count": 1}) in reporter.events
-    assert any(event == "subscription_error" for event, _values in reporter.events)
+    ready = next(values for event, values in reporter.events if event == "subscriptions_ready")
+    assert ready["requested_subscription_count"] == 2
+    assert ready["subscribed_tag_count"] == 1
+    assert ready["failed_subscription_count"] == 1
+    assert ready["complete"] is False
+    error = next(values for event, values in reporter.events if event == "subscription_error")
+    assert error["category"] == "bad_node_id_unknown"
 
 
 def test_rebuild_reloads_added_inactive_and_changed_node_snapshot():
@@ -250,8 +273,9 @@ def test_rebuild_reloads_added_inactive_and_changed_node_snapshot():
         clients.append(client)
         return client
 
+    reporter = Reporter()
     worker = HistorianWorker(
-        settings(), ScriptedCommands(["rebuild", "stop"]), Reporter(),
+        settings(), ScriptedCommands([None, {"command": "rebuild", "generation": 4}, None, "stop"]), reporter,
         connection_factory=connection_factory,
         opc_client_factory=opc_factory,
         influx_client_factory=FakeInfluxClient,
@@ -259,6 +283,9 @@ def test_rebuild_reloads_added_inactive_and_changed_node_snapshot():
     asyncio.run(worker.run())
     assert clients[0].subscription.nodes == ["old-node", "gone"]
     assert clients[1].subscription.nodes == ["new-node", "added"]
+    ack = next(values for event, values in reporter.events if event == "rebuild_ack")
+    assert ack["generation"] == 4
+    assert ack["complete"] is True
 
 
 def test_connection_loss_reconnects_and_reloads_tagmaster():
@@ -274,7 +301,7 @@ def test_connection_loss_reconnects_and_reloads_tagmaster():
         return client
 
     worker = HistorianWorker(
-        settings(healthcheck_interval=0), ScriptedCommands([None, "stop"]), Reporter(),
+        settings(healthcheck_interval=0), ScriptedCommands([None, None, None, "stop"]), Reporter(),
         connection_factory=lambda: connections.pop(0),
         opc_client_factory=opc_factory,
         influx_client_factory=FakeInfluxClient,
@@ -283,3 +310,104 @@ def test_connection_loss_reconnects_and_reloads_tagmaster():
     assert len(clients) == 2
     assert clients[0].subscription.nodes == ["first"]
     assert clients[1].subscription.nodes == ["second"]
+
+
+def test_large_tag_set_uses_bounded_batches_and_reports_complete_counts():
+    rows = [(index, f"Line/Tag{index}", f"node-{index}", "Float") for index in range(250)]
+    opc = FakeOpcClient()
+    reporter = Reporter()
+    worker = HistorianWorker(
+        settings(subscription_batch_size=100), ScriptedCommands([None, None, None, "stop"]), reporter,
+        connection_factory=lambda: FakeSqlConnection(rows),
+        opc_client_factory=lambda **_kwargs: opc,
+        influx_client_factory=FakeInfluxClient,
+    )
+    assert asyncio.run(worker.run_session()) == "stop"
+    assert opc.subscription.batch_sizes == [100, 100, 50]
+    ready = next(values for event, values in reporter.events if event == "subscriptions_ready")
+    assert ready["requested_subscription_count"] == 250
+    assert ready["subscribed_tag_count"] == 250
+    assert ready["failed_subscription_count"] == 0
+    assert ready["complete"] is True
+
+
+def test_connection_loss_mid_build_is_not_misreported_as_partial_success():
+    rows = [(index, f"Line/Tag{index}", f"node-{index}", "Float") for index in range(3)]
+    opc = FakeOpcClient(connection_loss_batch=2)
+    reporter = Reporter()
+    worker = HistorianWorker(
+        settings(subscription_batch_size=2), ScriptedCommands([None]), reporter,
+        connection_factory=lambda: FakeSqlConnection(rows),
+        opc_client_factory=lambda **_kwargs: opc,
+        influx_client_factory=FakeInfluxClient,
+    )
+    try:
+        asyncio.run(worker.run_session())
+        raise AssertionError("connection loss should propagate")
+    except ConnectionError:
+        pass
+    assert not any(event == "subscriptions_ready" for event, _values in reporter.events)
+    lost = next(values for event, values in reporter.events if event == "subscriptions_connection_lost")
+    assert lost["subscribed_tag_count"] == 2
+    assert lost["category"] == "connection_lost"
+
+
+def test_connection_loss_mid_build_reconnects_and_reloads_snapshot():
+    rows = [(index, f"Line/Tag{index}", f"node-{index}", "Float") for index in range(3)]
+    connections = [FakeSqlConnection(rows), FakeSqlConnection(rows)]
+    clients = []
+
+    def opc_factory(**_kwargs):
+        client = FakeOpcClient(connection_loss_batch=2 if not clients else None)
+        clients.append(client)
+        return client
+
+    reporter = Reporter()
+    worker = HistorianWorker(
+        settings(subscription_batch_size=2, reconnect_delay=0),
+        ScriptedCommands([None, None, None, "stop"]), reporter,
+        connection_factory=lambda: connections.pop(0),
+        opc_client_factory=opc_factory,
+        influx_client_factory=FakeInfluxClient,
+    )
+    asyncio.run(worker.run())
+    assert len(clients) == 2
+    assert clients[0].subscription.nodes == ["node-0", "node-1"]
+    assert clients[1].subscription.nodes == ["node-0", "node-1", "node-2"]
+    assert sum(event == "tag_snapshot" for event, _values in reporter.events) == 2
+
+
+def test_stop_command_interrupts_large_build_between_bounded_batches():
+    rows = [(index, f"Line/Tag{index}", f"node-{index}", "Float") for index in range(250)]
+    opc = FakeOpcClient()
+    reporter = Reporter()
+    worker = HistorianWorker(
+        settings(subscription_batch_size=100), ScriptedCommands(["stop"]), reporter,
+        connection_factory=lambda: FakeSqlConnection(rows),
+        opc_client_factory=lambda **_kwargs: opc,
+        influx_client_factory=FakeInfluxClient,
+    )
+    assert asyncio.run(worker.run_session()) == "stop"
+    assert opc.subscription.batch_sizes == [100]
+    assert not any(event == "subscriptions_ready" for event, _values in reporter.events)
+    assert ("session_stopping", {"reason": "stop"}) in reporter.events
+
+
+def test_status_callback_reports_safe_diagnostic_category():
+    reporter = Reporter()
+    worker = HistorianWorker(
+        settings(), ScriptedCommands([]), reporter,
+        connection_factory=lambda: FakeSqlConnection([]),
+        influx_client_factory=FakeInfluxClient,
+    )
+    from workers.historian_worker import HistorianHandler
+    handler = HistorianHandler({}, worker.writer, reporter)
+    handler.status_change_notification(ua.StatusCode(ua.StatusCodes.BadTimeout))
+    event = next(values for name, values in reporter.events if name == "subscription_status_change")
+    assert event["category"] == "timeout"
+
+
+def test_failure_categories_are_stable_and_sanitized():
+    assert subscription_failure_category(ConnectionError("secret detail")) == "connection_lost"
+    assert subscription_failure_category(asyncio.TimeoutError()) == "timeout"
+    assert subscription_failure_category(ua.StatusCode(ua.StatusCodes.BadNodeIdUnknown)) == "bad_node_id_unknown"

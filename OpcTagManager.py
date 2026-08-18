@@ -7,7 +7,6 @@ import sys
 from datetime import datetime
 from typing import Literal
 
-import pyodbc
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -31,7 +30,11 @@ from config.config import (
     KEPWARE_TAG_DEFAULT_ACCESS,
     KEPWARE_TAG_DEFAULT_DATA_TYPE,
     KEPWARE_TAG_DEFAULT_SCAN_RATE_MS,
+    LEGACY_POLLER_LAUNCHER,
     LOG_LEVEL,
+    INFLUX_DB,
+    INFLUX_HOST,
+    INFLUX_PORT,
     OPC_URL,
     OPC_RUNTIME_SUPERVISOR_ENABLED,
     KM_TAG_ROOT,
@@ -40,6 +43,7 @@ from config.config import (
     KM_RESOURCE_MAX_UPLOAD_MB,
     PRODUCTION_LINE,
     SQL_DB,
+    SQL_ENCRYPT,
     SQL_DRIVER,
     SQL_PASS,
     SQL_SERVER,
@@ -69,6 +73,8 @@ from services.tag_reconcile import (
 )
 from services.tag_registry import TagRegistry, TagRegistryError
 from services.runtime_supervisor import HistorianSupervisor
+from services.historian_cutover import HistorianCutoverPreflight
+from services.sql_connection import connect_sql
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -240,13 +246,14 @@ class CreateEquipmentPartRequest(EquipmentPartRequest):
 
 
 def get_conn():
-    return pyodbc.connect(
-        f"DRIVER={{{SQL_DRIVER}}};"
-        f"SERVER={SQL_SERVER};"
-        f"DATABASE={SQL_DB};"
-        f"UID={SQL_USER};"
-        f"PWD={SQL_PASS};"
-        f"TrustServerCertificate={'yes' if SQL_TRUST_SERVER_CERTIFICATE else 'no'};"
+    return connect_sql(
+        driver=SQL_DRIVER,
+        server=SQL_SERVER,
+        database=SQL_DB,
+        username=SQL_USER,
+        password=SQL_PASS,
+        trust_server_certificate=SQL_TRUST_SERVER_CERTIFICATE,
+        encrypt=SQL_ENCRYPT,
     )
 
 
@@ -254,6 +261,19 @@ tag_reconcile_service = TagReconcileService(
     discoverer=OpcTagDiscoverer(OPC_URL),
     registry=TagRegistry(get_conn),
     on_registry_changed=runtime_supervisor.notify_registry_changed,
+)
+historian_cutover_preflight = HistorianCutoverPreflight(
+    connection_factory=get_conn,
+    supervisor_status=runtime_supervisor.status,
+    contract_config={
+        "opc_url": OPC_URL,
+        "sql_server": SQL_SERVER,
+        "sql_db": SQL_DB,
+        "influx_host": INFLUX_HOST,
+        "influx_port": INFLUX_PORT,
+        "influx_db": INFLUX_DB,
+    },
+    legacy_poller_launcher=LEGACY_POLLER_LAUNCHER,
 )
 last_reconcile_result: dict | None = None
 
@@ -379,6 +399,11 @@ def runtime_status():
         status["tagmaster_active_count"] = None
     status["last_reconcile"] = last_reconcile_result
     return status
+
+
+@app.get("/api/runtime/historian-cutover-preflight")
+def historian_cutover_preflight_status():
+    return historian_cutover_preflight.run()
 
 
 @app.get("/api/kepware/status")

@@ -217,4 +217,6 @@ Keep deferred until separately approved:
 - [ ] Validate Slice 1 against approved non-production OPC/SQL fixtures before runtime ownership cutover.
 - [x] Slice 2: canonical historian worker, disabled-by-default supervisor, rebuild notification, and runtime status.
 - [ ] Controlled ownership cutover: prove single-writer transition, Grafana parity, restart behavior, and rollback before enabling production supervisor.
+- [x] Slice 3: NO-WRITE parity harness, read-only cutover preflight, generation-aware rebuild acknowledgement, and Windows runbook.
+- [ ] Obtain explicit LIVE cutover authorization only after preflight passes and all manual prerequisites are recorded.
 - [ ] Later: compatibility wrappers and startup ownership, only after explicit approval.

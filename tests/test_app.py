@@ -179,6 +179,19 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertEqual(payload["historian_ownership"], "legacy_opc_service")
         self.assertFalse(payload["supervisor_enabled"])
         self.assertEqual(payload["worker_state"], "disabled")
+        self.assertEqual(payload["legacy_historian_process_state"], "unknown")
+
+    def test_cutover_preflight_endpoint_is_read_only_and_never_claims_live_ready(self):
+        expected = {
+            "mode": "READ-ONLY",
+            "production_historian_ownership": "legacy_opc_service",
+            "ready_for_live_cutover": False,
+        }
+        with patch.object(OpcTagManager.historian_cutover_preflight, "run", return_value=expected) as run:
+            status, body = self.request("GET", "/api/runtime/historian-cutover-preflight")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), expected)
+        run.assert_called_once_with()
 
     def test_create_route_requires_all_explicit_operational_properties(self):
         status, body = self.request(

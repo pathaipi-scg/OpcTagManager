@@ -226,7 +226,9 @@ async function loadRuntimeStatus() {
         const response = await fetch("/api/runtime/status");
         const data = await response.json();
         document.getElementById("historian-ownership").textContent =
-            data.historian_ownership === "legacy_opc_service" ? "Legacy opc_service" : data.historian_ownership;
+            data.historian_ownership === "legacy_opc_service"
+                ? `Legacy expected / process ${data.legacy_historian_process_state || "unknown"}`
+                : data.historian_ownership;
         document.getElementById("supervisor-state").textContent = data.supervisor_enabled ? "Enabled" : "Disabled";
         document.getElementById("worker-state").textContent = data.worker_state || "unknown";
         document.getElementById("runtime-opc-state").textContent = data.opc_state || "unknown";
