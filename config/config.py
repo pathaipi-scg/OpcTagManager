@@ -45,6 +45,16 @@ def get_int_default(name: str, default: int) -> int:
         raise RuntimeError(f"Configuration {name} must be an integer") from exc
 
 
+def get_float_default(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise RuntimeError(f"Configuration {name} must be a number") from exc
+
+
 def get_bool(name: str) -> bool:
     value = get_required(name).strip().lower()
     if value in {"1", "true", "yes", "on"}:
@@ -77,6 +87,12 @@ OPC_URL = get_required("OPC_URL")
 OPC_SUBSCRIPTION_BATCH_SIZE = get_int_default("OPC_SUBSCRIPTION_BATCH_SIZE", 100)
 if OPC_SUBSCRIPTION_BATCH_SIZE < 1 or OPC_SUBSCRIPTION_BATCH_SIZE > 1000:
     raise RuntimeError("Configuration OPC_SUBSCRIPTION_BATCH_SIZE must be between 1 and 1000")
+OPC_FAST_SYNC_ATTEMPTS = get_int_default("OPC_FAST_SYNC_ATTEMPTS", 10)
+OPC_FAST_SYNC_RETRY_DELAY_SEC = get_float_default("OPC_FAST_SYNC_RETRY_DELAY_SEC", 0.5)
+if OPC_FAST_SYNC_ATTEMPTS < 1 or OPC_FAST_SYNC_ATTEMPTS > 100:
+    raise RuntimeError("Configuration OPC_FAST_SYNC_ATTEMPTS must be between 1 and 100")
+if OPC_FAST_SYNC_RETRY_DELAY_SEC < 0 or OPC_FAST_SYNC_RETRY_DELAY_SEC > 60:
+    raise RuntimeError("Configuration OPC_FAST_SYNC_RETRY_DELAY_SEC must be between 0 and 60")
 BROWSER_SCRIPT = get_required("BROWSER_SCRIPT")
 PRODUCTION_LINE = get_required("PRODUCTION_LINE")
 
@@ -90,6 +106,15 @@ SQL_TRUST_SERVER_CERTIFICATE = get_bool("SQL_TRUST_SERVER_CERTIFICATE")
 SQL_ENCRYPT = get_optional("SQL_ENCRYPT").lower()
 if SQL_ENCRYPT not in {"", "yes", "no"}:
     raise RuntimeError("Configuration SQL_ENCRYPT must be blank, yes, or no")
+
+# Alarm configuration. MP3_FOLDER is the server-visible browse/preview repository;
+# alarm_sound has its own playback-machine MP3_FOLDER configuration.
+ALARM_WRITE_ENABLED = get_bool_default("ALARM_WRITE_ENABLED", False)
+MP3_FOLDER = get_optional("MP3_FOLDER")
+ALARM_RELOAD_ENABLED = get_bool_default("ALARM_RELOAD_ENABLED", False)
+RELOAD_ALARM_ADDR = get_int_default("RELOAD_ALARM_ADDR", 0)
+if RELOAD_ALARM_ADDR < 0 or RELOAD_ALARM_ADDR > 65535:
+    raise RuntimeError("Configuration RELOAD_ALARM_ADDR must be between 0 and 65535")
 
 # Kepware Configuration API (reserved for a future phase)
 KEPWARE_CONFIG_API_SCHEME = get_required("KEPWARE_CONFIG_API_SCHEME")

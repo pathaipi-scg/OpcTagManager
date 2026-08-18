@@ -14,6 +14,8 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field
 
 from config.config import (
+    ALARM_RELOAD_ENABLED,
+    ALARM_WRITE_ENABLED,
     APP_HOST,
     APP_PORT,
     APP_TIMEZONE,
@@ -35,13 +37,19 @@ from config.config import (
     INFLUX_DB,
     INFLUX_HOST,
     INFLUX_PORT,
+    OPC_FAST_SYNC_ATTEMPTS,
+    OPC_FAST_SYNC_RETRY_DELAY_SEC,
     OPC_URL,
     OPC_RUNTIME_SUPERVISOR_ENABLED,
     KM_TAG_ROOT,
     KM_TAG_WRITE_ENABLED,
     KM_RESOURCE_WRITE_ENABLED,
     KM_RESOURCE_MAX_UPLOAD_MB,
+    KEPWARE_MODBUS_HOST,
+    KEPWARE_MODBUS_PORT,
+    MP3_FOLDER,
     PRODUCTION_LINE,
+    RELOAD_ALARM_ADDR,
     SQL_DB,
     SQL_ENCRYPT,
     SQL_DRIVER,
@@ -72,9 +80,13 @@ from services.tag_reconcile import (
     TagReconcileService,
 )
 from services.tag_registry import TagRegistry, TagRegistryError
+from services.tag_fast_sync import ExactOpcTagResolver, FastSyncError, TagFastSyncService
 from services.runtime_supervisor import HistorianSupervisor
 from services.historian_cutover import HistorianCutoverPreflight
 from services.sql_connection import connect_sql
+from services.alarm_audio import AlarmAudioError, AlarmAudioRepository
+from services.alarm_reload import AlarmReloadNotifier
+from services.alarm_service import AlarmService, AlarmServiceError, AlarmValues
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -133,6 +145,21 @@ class CreateKepwareTagRequest(BaseModel):
     scan_rate: int
     access: int
     description: str = ""
+
+
+class AlarmConfigurationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    alarm_mode: str
+    threshold_high: float | None = None
+    threshold_low: float | None = None
+    mp3_file: str
+    priority: int = 1
+    repeat: int = 3
+    enable_alarm: bool = True
+
+
+class CreateAlarmRequest(AlarmConfigurationRequest):
+    tag_id: int
 
 
 class FullReconcileRequest(BaseModel):
@@ -257,10 +284,33 @@ def get_conn():
     )
 
 
+tag_registry = TagRegistry(get_conn)
 tag_reconcile_service = TagReconcileService(
     discoverer=OpcTagDiscoverer(OPC_URL),
-    registry=TagRegistry(get_conn),
+    registry=tag_registry,
     on_registry_changed=runtime_supervisor.notify_registry_changed,
+)
+tag_fast_sync_service = TagFastSyncService(
+    resolver=ExactOpcTagResolver(
+        OPC_URL,
+        attempts=OPC_FAST_SYNC_ATTEMPTS,
+        retry_delay=OPC_FAST_SYNC_RETRY_DELAY_SEC,
+    ),
+    registry=tag_registry,
+    on_registry_changed=runtime_supervisor.notify_registry_changed,
+)
+alarm_audio_repository = AlarmAudioRepository(MP3_FOLDER)
+alarm_reload_notifier = AlarmReloadNotifier(
+    enabled=ALARM_RELOAD_ENABLED,
+    host=KEPWARE_MODBUS_HOST,
+    port=KEPWARE_MODBUS_PORT,
+    address=RELOAD_ALARM_ADDR,
+)
+alarm_service = AlarmService(
+    connection_factory=get_conn,
+    audio_repository=alarm_audio_repository,
+    reload_notifier=alarm_reload_notifier,
+    write_enabled=ALARM_WRITE_ENABLED,
 )
 historian_cutover_preflight = HistorianCutoverPreflight(
     connection_factory=get_conn,
@@ -281,7 +331,9 @@ last_reconcile_result: dict | None = None
 def build_tree(rows):
     tree = {}
 
-    for tagid, path, dtype in rows:
+    for row in rows:
+        tagid, path, dtype = row[0], row[1], row[2]
+        has_alarm = bool(row[3]) if len(row) > 3 else False
         parts = path.split("/")
         node = tree
 
@@ -292,6 +344,7 @@ def build_tree(rows):
             "tagid": tagid,
             "datatype": dtype,
             "fullpath": path,
+            "has_alarm": has_alarm,
             "_leaf": True,
         }
 
@@ -328,11 +381,14 @@ def home(request: Request):
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT TagId, Path, DataType
-            FROM TagMaster
-            WHERE IsActive = 1
-            AND (Path LIKE ? OR Path LIKE '%SERVER/SYSTEM%')
-            ORDER BY Path
+            SELECT t.TagId, t.Path, t.DataType,
+                   CASE WHEN EXISTS (
+                       SELECT 1 FROM Alarm_Lists a WHERE a.TagId = t.TagId
+                   ) THEN 1 ELSE 0 END AS HasAlarm
+            FROM TagMaster t
+            WHERE t.IsActive = 1
+            AND (t.Path LIKE ? OR t.Path LIKE '%SERVER/SYSTEM%')
+            ORDER BY t.Path
             """,
             (f"%{PRODUCTION_LINE}%",),
         )
@@ -352,6 +408,7 @@ def home(request: Request):
             "kepware_tag_default_access": KEPWARE_TAG_DEFAULT_ACCESS,
             "km_tag_write_enabled": KM_TAG_WRITE_ENABLED,
             "km_resource_write_enabled": KM_RESOURCE_WRITE_ENABLED,
+            "alarm_write_enabled": ALARM_WRITE_ENABLED,
             "kepware_tag_data_types": TAG_DATA_TYPES,
             "kepware_tag_access_levels": TAG_ACCESS_LEVELS,
             "last_reconcile_result": last_reconcile_result,
@@ -399,6 +456,106 @@ def runtime_status():
         status["tagmaster_active_count"] = None
     status["last_reconcile"] = last_reconcile_result
     return status
+
+
+def _alarm_values(payload: AlarmConfigurationRequest) -> AlarmValues:
+    return AlarmValues(
+        alarm_mode=payload.alarm_mode,
+        threshold_high=payload.threshold_high,
+        threshold_low=payload.threshold_low,
+        mp3_file=payload.mp3_file,
+        priority=payload.priority,
+        repeat=payload.repeat,
+        enable_alarm=payload.enable_alarm,
+    )
+
+
+def _alarm_failure(exc: Exception, write: bool = False):
+    status = 403 if write and not ALARM_WRITE_ENABLED else 400
+    return JSONResponse(
+        {
+            "success": False,
+            "mapping_saved": False,
+            "reload_notified": False,
+            "reload_error": None,
+            "error": str(exc),
+        },
+        status_code=status,
+    )
+
+
+@app.get("/api/alarms")
+def list_alarms():
+    try:
+        return {"success": True, "alarms": alarm_service.list()}
+    except Exception:
+        return JSONResponse({"success": False, "error": "Alarm mappings could not be read."}, status_code=500)
+
+
+@app.get("/api/opc-tags/{tag_id}/alarm")
+def get_tag_alarm(tag_id: int):
+    try:
+        return {"success": True, "alarm": alarm_service.get_for_tag(tag_id)}
+    except AlarmServiceError as exc:
+        return _alarm_failure(exc)
+    except Exception:
+        return JSONResponse({"success": False, "error": "Alarm mapping could not be read."}, status_code=500)
+
+
+@app.post("/api/alarms")
+def create_alarm(payload: CreateAlarmRequest):
+    try:
+        return {"success": True, **alarm_service.create(payload.tag_id, _alarm_values(payload))}
+    except (AlarmServiceError, AlarmAudioError) as exc:
+        return _alarm_failure(exc, write=True)
+    except Exception:
+        return JSONResponse(
+            {"success": False, "mapping_saved": False, "reload_notified": False,
+             "reload_error": None, "error": "Alarm database operation failed."},
+            status_code=500,
+        )
+
+
+@app.put("/api/alarms/{alarm_id}")
+def update_alarm(alarm_id: int, payload: AlarmConfigurationRequest):
+    try:
+        return {"success": True, **alarm_service.update(alarm_id, _alarm_values(payload))}
+    except (AlarmServiceError, AlarmAudioError) as exc:
+        return _alarm_failure(exc, write=True)
+    except Exception:
+        return JSONResponse(
+            {"success": False, "mapping_saved": False, "reload_notified": False,
+             "reload_error": None, "error": "Alarm database operation failed."},
+            status_code=500,
+        )
+
+
+@app.delete("/api/alarms/{alarm_id}")
+def delete_alarm(alarm_id: int):
+    try:
+        return {"success": True, **alarm_service.delete(alarm_id)}
+    except AlarmServiceError as exc:
+        return _alarm_failure(exc, write=True)
+    except Exception:
+        return JSONResponse(
+            {"success": False, "mapping_saved": False, "reload_notified": False,
+             "reload_error": None, "error": "Alarm database operation failed."},
+            status_code=500,
+        )
+
+
+@app.get("/api/alarm-mp3")
+def list_alarm_mp3():
+    return {"success": True, "files": alarm_audio_repository.list_files()}
+
+
+@app.get("/api/alarm-mp3/{filename}/preview")
+def preview_alarm_mp3(filename: str):
+    try:
+        path = alarm_audio_repository.resolve(filename)
+        return FileResponse(path, media_type="audio/mpeg", filename=path.name)
+    except AlarmAudioError as exc:
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=404)
 
 
 @app.get("/api/runtime/historian-cutover-preflight")
@@ -485,12 +642,60 @@ def create_kepware_tag(payload: CreateKepwareTagRequest):
             access=payload.access,
             description=payload.description,
         )
-        return {"success": True, **result}
     except KepwareConfigError as exc:
         status_code = 403 if not KEPWARE_CONFIG_WRITE_ENABLED else 400
         return JSONResponse(
-            {"success": False, "error": str(exc)}, status_code=status_code
+            {
+                "success": False,
+                "kepware_create": {"status": "failed", "error": str(exc)},
+                "runtime_registry_sync": {"status": "not_started"},
+                "historian_subscription_sync": {"status": "not_requested"},
+                "error": str(exc),
+            },
+            status_code=status_code,
         )
+
+    path = "/".join([
+        payload.channel,
+        payload.device,
+        *payload.group_path,
+        payload.tag_name.strip(),
+    ])
+    response = {
+        "success": True,
+        **result,
+        "kepware_create": {"status": "succeeded", "path": path},
+    }
+    try:
+        synced = asyncio.run(tag_fast_sync_service.sync(path))
+    except (FastSyncError, TagRegistryError) as exc:
+        response.update(
+            runtime_registry_sync={
+                "status": "failed",
+                "path": path,
+                "error": str(exc),
+                "full_reconcile_available": True,
+            },
+            historian_subscription_sync={"status": "not_requested"},
+        )
+        return response
+
+    runtime = runtime_supervisor.status()
+    if synced.historian_rebuild_requested:
+        historian_status = "requested"
+    elif not runtime["supervisor_enabled"] and runtime["rebuild_pending"]:
+        historian_status = "pending_disabled"
+    else:
+        historian_status = "pending"
+    response.update(
+        runtime_registry_sync={"status": "succeeded", **synced.to_dict()},
+        historian_subscription_sync={
+            "status": historian_status,
+            "registry_generation": runtime["registry_generation"],
+            "rebuild_pending": runtime["rebuild_pending"],
+        },
+    )
+    return response
 
 
 def _validated_knowledge_identity(payload: TagKnowledgeIdentityRequest):

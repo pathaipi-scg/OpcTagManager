@@ -156,7 +156,10 @@ class MemoryCursor:
                 if row["IsActive"] and row.get("LastBrowseRunId") != run_id:
                     row["IsActive"] = False
         elif normalized.startswith("UPDATE BROWSERRUN"):
-            total, run_id = params
+            if len(params) == 1:
+                total, run_id = 1, params[0]
+            else:
+                total, run_id = params
             state["runs"][run_id].update(EndTime=True, TotalTags=total)
         else:
             raise AssertionError(f"Unexpected SQL: {normalized}")
@@ -293,3 +296,47 @@ def test_snapshot_validation_and_source_have_no_export_or_deployment_endpoint():
     assert "tagmaster.json" not in sources.lower()
     assert "opc.tcp://" not in sources
     assert "10.28." not in sources and "172.28." not in sources
+
+
+def test_fast_sync_insert_retry_identity_reactivation_metadata_and_level_ordering():
+    database = MemoryDatabase({
+        "Line/Device/Existing": {
+            "TagId": 7, "NodeId": "old", "DataType": "Int16",
+            "IsActive": False, "LastBrowseRunId": 0,
+        },
+    })
+    registry = TagRegistry(database.connection)
+
+    inserted = registry.sync_tag(TagSnapshot("Line/Device/New", "new-node", "Boolean"))
+    changed = registry.sync_tag(TagSnapshot("Line/Device/Existing", "new-existing", "Float"))
+    retried = registry.sync_tag(TagSnapshot("Line/Device/New", "new-node", "Boolean"))
+
+    assert inserted.state == "added"
+    assert changed.state == "changed"
+    assert retried.state == "unchanged"
+    assert retried.tag_id == inserted.tag_id
+    assert database.tags["Line/Device/Existing"]["TagId"] == 7
+    assert database.tags["Line/Device/Existing"]["NodeId"] == "new-existing"
+    assert database.tags["Line/Device/Existing"]["DataType"] == "Float"
+    assert database.tags["Line/Device/Existing"]["IsActive"] is True
+    levels = [level[1:] for level in database.levels if level[0] == inserted.tag_id]
+    assert levels == [(0, "Line"), (1, "Device"), (2, "New")]
+    assert all(row["IsActive"] for row in database.tags.values())
+
+
+def test_fast_sync_sql_failure_rolls_back_run_tag_and_levels_together():
+    database = MemoryDatabase({
+        "Line/Existing": {
+            "TagId": 4, "NodeId": "old", "DataType": "Int16",
+            "IsActive": True, "LastBrowseRunId": 0,
+        },
+    })
+    connection = database.connection("INSERT INTO TAGLEVEL")
+    registry = TagRegistry(lambda: connection)
+    before = copy.deepcopy((database.tags, database.levels, database.runs))
+
+    with pytest.raises(TagRegistryError):
+        registry.sync_tag(TagSnapshot("Line/Existing", "new", "Float"))
+
+    assert (database.tags, database.levels, database.runs) == before
+    assert connection.rolled_back

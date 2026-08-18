@@ -1,5 +1,17 @@
 # OpcTagManager TODO
 
+## Phase 4.11B Slice 1 — Alarm domain and existing mapping integration
+
+- [x] Audit the current `alarm_system`, `alarm_sound`, and live read-only `Alarm_Lists` contract.
+- [x] Add existing-mapping read APIs and an Alarm indicator/filter to the OPC Runtime Tree.
+- [x] Add create, update, enable/disable, and delete operations behind `ALARM_WRITE_ENABLED=false`.
+- [x] Preserve TagId identity and derive TagPath from active TagMaster data.
+- [x] Add configuration-driven MP3 listing and browser preview with basename containment checks.
+- [x] Notify the configured reload register only after a successful commit and report reload failure separately.
+- [x] Remove the development `alarm_sound` hardcoded audio folder and working-directory assumptions.
+- [ ] Perform an explicitly approved notebook simulator test with a configured local audio repository and audible-output authorization.
+- [ ] Verify production configuration on the production server and MiniPC before any cutover.
+
 ## Phase 2 baseline
 
 - [x] Preserve the existing OPC Tag Tree query and hierarchy.
@@ -218,5 +230,6 @@ Keep deferred until separately approved:
 - [x] Slice 2: canonical historian worker, disabled-by-default supervisor, rebuild notification, and runtime status.
 - [ ] Controlled ownership cutover: prove single-writer transition, Grafana parity, restart behavior, and rollback before enabling production supervisor.
 - [x] Slice 3: NO-WRITE parity harness, read-only cutover preflight, generation-aware rebuild acknowledgement, and Windows runbook.
+- [x] Slice 4: exact-Tag Fast Sync after Kepware create, atomic registry update, pending historian rebuild, and legacy compatibility plan.
 - [ ] Obtain explicit LIVE cutover authorization only after preflight passes and all manual prerequisites are recorded.
 - [ ] Later: compatibility wrappers and startup ownership, only after explicit approval.

@@ -1,4 +1,7 @@
 const runtimeTags = document.querySelectorAll(".tag-click");
+let selectedRuntimeTag = null;
+let selectedAlarm = null;
+let alarmMp3Loaded = false;
 
 const themeStorageKey = "opcTagManagerTheme";
 const themeToggle = document.getElementById("theme-toggle");
@@ -139,12 +142,150 @@ window.addEventListener("resize", () => {
 applyMainPanelRatio();
 
 runtimeTags.forEach((tag) => {
-    tag.addEventListener("click", () => {
+    tag.addEventListener("click", async () => {
         runtimeTags.forEach((item) => item.classList.remove("selected-tag"));
         tag.classList.add("selected-tag");
+        selectedRuntimeTag = tag;
         document.getElementById("selected-tag-path").value = tag.dataset.path;
         document.getElementById("selected-tag-id").value = tag.dataset.tagid || "";
+        await loadTagAlarm(tag.dataset.tagid);
     });
+});
+
+document.querySelectorAll(".alarm-filter-button").forEach((button) => {
+    button.addEventListener("click", () => {
+        document.querySelectorAll(".alarm-filter-button").forEach((item) => item.classList.toggle("active", item === button));
+        const alarmOnly = button.dataset.alarmFilter === "alarm";
+        runtimeTags.forEach((tag) => {
+            tag.closest("li.leaf").classList.toggle("hidden", alarmOnly && tag.dataset.hasAlarm !== "true");
+        });
+    });
+});
+
+function alarmNumber(id) {
+    const value = document.getElementById(id).value;
+    return value === "" ? null : Number(value);
+}
+
+async function loadAlarmMp3(selected = "") {
+    const select = document.getElementById("alarm-mp3");
+    if (!alarmMp3Loaded) {
+        const response = await fetch("/api/alarm-mp3");
+        const data = await response.json();
+        select.replaceChildren(...(data.files || []).map((file) => new Option(file.filename, file.filename)));
+        alarmMp3Loaded = true;
+    }
+    if (selected && ![...select.options].some((option) => option.value === selected)) {
+        select.add(new Option(`${selected} (missing from browse repository)`, selected));
+    }
+    select.value = selected;
+}
+
+function showAlarmForm(alarm) {
+    selectedAlarm = alarm;
+    document.getElementById("use-tag-as-alarm").classList.add("hidden");
+    document.getElementById("alarm-form").classList.remove("hidden");
+    document.getElementById("alarm-id").value = alarm?.alarm_id || "";
+    document.getElementById("alarm-enable").checked = alarm?.enable_alarm ?? true;
+    document.getElementById("alarm-mode").value = alarm?.alarm_mode || "HIGH";
+    document.getElementById("alarm-threshold-high").value = alarm?.threshold_high ?? "";
+    document.getElementById("alarm-threshold-low").value = alarm?.threshold_low ?? "";
+    document.getElementById("alarm-priority").value = alarm?.priority ?? 1;
+    document.getElementById("alarm-repeat").value = alarm?.repeat ?? 3;
+    document.getElementById("delete-alarm").classList.toggle("hidden", !alarm);
+    loadAlarmMp3(alarm?.mp3_file || "");
+}
+
+async function loadTagAlarm(tagId) {
+    const status = document.getElementById("alarm-status");
+    status.textContent = "Loading Alarm configuration…";
+    document.getElementById("alarm-form").classList.add("hidden");
+    document.getElementById("use-tag-as-alarm").classList.add("hidden");
+    try {
+        const response = await fetch(`/api/opc-tags/${encodeURIComponent(tagId)}/alarm`);
+        const data = await response.json();
+        if (!response.ok || !data.success) throw new Error(data.error || "Alarm read failed");
+        if (!data.alarm) {
+            selectedAlarm = null;
+            status.textContent = "Not configured";
+            document.getElementById("use-tag-as-alarm").classList.remove("hidden");
+            return;
+        }
+        status.textContent = data.alarm.tag_path_consistent
+            ? "🔔 Alarm configured"
+            : "🔔 Alarm configured — stored TagPath differs from canonical TagMaster Path";
+        showAlarmForm(data.alarm);
+    } catch (_error) {
+        status.textContent = "Alarm configuration could not be loaded.";
+    }
+}
+
+document.getElementById("use-tag-as-alarm").addEventListener("click", () => showAlarmForm(null));
+
+document.getElementById("alarm-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!selectedRuntimeTag) return;
+    const result = document.getElementById("alarm-result");
+    const payload = {
+        alarm_mode: document.getElementById("alarm-mode").value,
+        threshold_high: alarmNumber("alarm-threshold-high"),
+        threshold_low: alarmNumber("alarm-threshold-low"),
+        mp3_file: document.getElementById("alarm-mp3").value,
+        priority: Number(document.getElementById("alarm-priority").value),
+        repeat: Number(document.getElementById("alarm-repeat").value),
+        enable_alarm: document.getElementById("alarm-enable").checked,
+    };
+    const alarmId = document.getElementById("alarm-id").value;
+    if (!alarmId) payload.tag_id = Number(selectedRuntimeTag.dataset.tagid);
+    const response = await fetch(alarmId ? `/api/alarms/${alarmId}` : "/api/alarms", {
+        method: alarmId ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+    });
+    const data = await response.json();
+    result.classList.remove("hidden");
+    if (!response.ok || !data.success) {
+        result.className = "create-result error-message";
+        result.textContent = data.error || "Alarm save failed.";
+        return;
+    }
+    result.className = data.reload_notified ? "create-result success-message" : "create-result warning-message";
+    result.textContent = data.reload_notified
+        ? "Alarm mapping saved and reload notified."
+        : `Alarm mapping saved; reload not notified (${data.reload_error || "unknown"}).`;
+    selectedRuntimeTag.dataset.hasAlarm = "true";
+    await loadTagAlarm(selectedRuntimeTag.dataset.tagid);
+});
+
+document.getElementById("delete-alarm").addEventListener("click", async () => {
+    if (!selectedAlarm || !window.confirm("Remove this Alarm mapping?")) return;
+    const response = await fetch(`/api/alarms/${selectedAlarm.alarm_id}`, { method: "DELETE" });
+    const data = await response.json();
+    const result = document.getElementById("alarm-result");
+    result.classList.remove("hidden");
+    if (!response.ok || !data.success) {
+        result.className = "create-result error-message";
+        result.textContent = data.error || "Alarm delete failed.";
+        return;
+    }
+    selectedRuntimeTag.dataset.hasAlarm = "false";
+    selectedAlarm = null;
+    document.getElementById("alarm-form").classList.add("hidden");
+    document.getElementById("alarm-status").textContent = "Not configured";
+    document.getElementById("use-tag-as-alarm").classList.remove("hidden");
+    result.className = data.reload_notified ? "create-result success-message" : "create-result warning-message";
+    result.textContent = data.reload_notified
+        ? "Alarm mapping removed and reload notified."
+        : `Alarm mapping removed; reload not notified (${data.reload_error || "unknown"}).`;
+});
+
+document.getElementById("preview-alarm-mp3").addEventListener("click", () => {
+    const filename = document.getElementById("alarm-mp3").value;
+    if (!filename) return;
+    const audio = document.getElementById("alarm-preview-audio");
+    audio.src = `/api/alarm-mp3/${encodeURIComponent(filename)}/preview`;
+    audio.classList.remove("hidden");
+    audio.play();
 });
 
 const viewTabs = document.querySelectorAll(".view-tab");
@@ -629,7 +770,9 @@ document.getElementById("confirm-create-tag").addEventListener("click", async ()
         }
 
         result.textContent = creationResultMessage(data);
-        result.className = "create-result success-message";
+        result.className = data.runtime_registry_sync?.status === "succeeded"
+            ? "create-result success-message"
+            : "create-result error-message";
         document.getElementById("create-tag-preview").classList.add("hidden");
         displayKepwareObject(data.tag);
         if (selectedDestinationDetails && selectedDestinationChildren) {
@@ -648,13 +791,24 @@ document.getElementById("confirm-create-tag").addEventListener("click", async ()
 });
 
 function creationResultMessage(data) {
+    const registry = data.runtime_registry_sync || { status: "not_started" };
+    const historian = data.historian_subscription_sync || { status: "not_requested" };
+    const registryText = registry.status === "succeeded"
+        ? `Runtime Registry Sync ✅ (${registry.registry_state})`
+        : `Runtime Registry Sync Failed — ${registry.error || "Full Reconcile remains available."}`;
+    const historianText = historian.status === "requested"
+        ? "Historian Subscription Sync Requested"
+        : historian.status === "pending_disabled"
+            ? "Historian Subscription Sync Pending (supervisor disabled)"
+            : "Historian Subscription Sync Not Requested";
+    const syncSummary = `Kepware Tag Created ✅ • ${registryText} • ${historianText}`;
     if (!data.differences || !data.differences.length) {
-        return `Created ${data.tag.full_path}. Returned properties match the request.`;
+        return `${syncSummary}. Returned properties match the request.`;
     }
     const differences = data.differences.map((difference) => {
         return `${difference.property}: requested ${JSON.stringify(difference.requested)}, returned ${JSON.stringify(difference.actual)}`;
     });
-    return `Created ${data.tag.full_path}. Differences: ${differences.join("; ")}`;
+    return `${syncSummary}. Kepware returned differences: ${differences.join("; ")}`;
 }
 
 function knowledgeIdentityPayload(node = selectedKnowledgeTag) {

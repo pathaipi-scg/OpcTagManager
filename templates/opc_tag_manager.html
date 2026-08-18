@@ -10,7 +10,8 @@
                     class="tag-name tag-click"
                     data-tagid="{{ value.tagid }}"
                     data-path="{{ value.fullpath }}"
-                >{{ key }}</button>
+                    data-has-alarm="{{ 'true' if value.has_alarm else 'false' }}"
+                >{{ '🔔 ' if value.has_alarm else '' }}{{ key }}</button>
                 <span class="tag-type">({{ value.datatype }})</span>
                 <span class="tag-id">ID: {{ value.tagid }}</span>
             </li>
@@ -50,6 +51,10 @@
     <section class="panel tree-panel" aria-label="Tag tree">
         <div id="runtime-tree-view" class="tree-view hidden">
             <h2>OPC Tag List</h2>
+            <div class="alarm-filter" role="group" aria-label="Filter OPC Tags">
+                <button type="button" class="alarm-filter-button active" data-alarm-filter="all">All Tags</button>
+                <button type="button" class="alarm-filter-button" data-alarm-filter="alarm">Alarm Tags</button>
+            </div>
             <section class="runtime-reconcile-status" aria-live="polite">
                 <strong>Safe Tag Reconcile Core</strong>
                 <p>Production subscriber ownership has not moved yet.</p>
@@ -139,7 +144,35 @@
                 <input id="selected-tag-id" type="text" readonly value="">
             </div>
 
-            <p class="placeholder-message">Tag configuration will be added in a later phase.</p>
+            <section id="alarm-panel" class="add-tag-panel" data-write-enabled="{{ 'true' if alarm_write_enabled else 'false' }}">
+                <h3>Alarm</h3>
+                <p id="alarm-status" class="placeholder-message">Select a Tag to load Alarm configuration.</p>
+                <button type="button" id="use-tag-as-alarm" class="refresh-button hidden" {{ 'disabled' if not alarm_write_enabled else '' }}>Use This Tag As Alarm</button>
+                <form id="alarm-form" class="hidden">
+                    <input id="alarm-id" type="hidden">
+                    <div class="field-group">
+                        <label for="alarm-enable">Enable Alarm</label>
+                        <input id="alarm-enable" type="checkbox" checked>
+                    </div>
+                    <div class="field-group">
+                        <label for="alarm-mode">Mode</label>
+                        <select id="alarm-mode"><option value="HIGH">HIGH</option><option value="LOW">LOW</option></select>
+                    </div>
+                    <div class="field-group"><label for="alarm-threshold-high">Threshold High (blank with LOW/HIGH for digital behavior)</label><input id="alarm-threshold-high" type="number" step="any"></div>
+                    <div class="field-group"><label for="alarm-threshold-low">Threshold Low (blank with HIGH/LOW for digital behavior)</label><input id="alarm-threshold-low" type="number" step="any"></div>
+                    <div class="field-group"><label for="alarm-priority">Priority (stored; currently does not order playback)</label><input id="alarm-priority" type="number" min="1" value="1"></div>
+                    <div class="field-group"><label for="alarm-repeat">Repeat count</label><input id="alarm-repeat" type="number" min="1" value="3"></div>
+                    <div class="field-group"><label for="alarm-mp3">MP3 File</label><select id="alarm-mp3"></select></div>
+                    <p class="tree-counts">RepeatEnable is retained for legacy compatibility; alarm_sound currently uses Repeat directly.</p>
+                    <div class="preview-actions">
+                        <button type="button" id="preview-alarm-mp3">Preview MP3</button>
+                        <button type="submit" id="save-alarm" class="refresh-button" {{ 'disabled' if not alarm_write_enabled else '' }}>Save Alarm</button>
+                        <button type="button" id="delete-alarm" class="danger-button" {{ 'disabled' if not alarm_write_enabled else '' }}>Delete / Remove Alarm</button>
+                    </div>
+                </form>
+                <audio id="alarm-preview-audio" controls class="hidden"></audio>
+                <p id="alarm-result" class="create-result hidden"></p>
+            </section>
         </div>
 
         <div id="kepware-details-view" class="details-view">

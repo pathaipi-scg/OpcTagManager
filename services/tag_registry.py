@@ -34,6 +34,13 @@ class RegistryApplyResult:
     deactivated: int
 
 
+@dataclass(frozen=True, slots=True)
+class FastTagApplyResult:
+    tag_id: int
+    state: str
+    run_id: int
+
+
 class TagRegistryError(RuntimeError):
     """A registry transaction could not be completed safely."""
 
@@ -189,5 +196,40 @@ class TagRegistry:
             if isinstance(exc, TagRegistryError):
                 raise
             raise TagRegistryError("Tag registry transaction was rolled back.") from exc
+        finally:
+            conn.close()
+
+    def sync_tag(self, tag: TagSnapshot) -> FastTagApplyResult:
+        """Atomically record one exact OPC Tag without deactivating unrelated registry rows."""
+        conn = self._connection_factory()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """INSERT INTO BrowserRun (StartTime)
+                   OUTPUT INSERTED.RunId
+                   VALUES (GETDATE())"""
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise TagRegistryError("Fast Sync did not return a registry RunId.")
+            run_id = int(row[0])
+            tag_id, state = self.upsert_tag(cursor, tag, run_id)
+            self.rebuild_tag_levels(cursor, tag_id, tag.path)
+            cursor.execute(
+                """UPDATE BrowserRun
+                   SET EndTime = GETDATE(), TotalTags = 1
+                   WHERE RunId = ?""",
+                run_id,
+            )
+            conn.commit()
+            return FastTagApplyResult(tag_id=tag_id, state=state, run_id=run_id)
+        except Exception as exc:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            if isinstance(exc, TagRegistryError):
+                raise
+            raise TagRegistryError("Fast Sync registry transaction was rolled back.") from exc
         finally:
             conn.close()

@@ -301,3 +301,21 @@ Revert Git Commit
 - Made rebuild synchronization generation-aware; pending clears only after the current generation is reloaded and acknowledged.
 - Added explicit legacy ownership expected/process unknown status rather than process-name guessing.
 - Added a Windows single-writer cutover and rollback runbook; no live cutover or process control was performed.
+
+## 2026-08-18 — Phase 4.11A Slice 4: Fast Sync + Legacy Compatibility Preparation
+
+- Added bounded exact-branch OPC resolution after confirmed Kepware Tag creation.
+- Added atomic single-Tag TagMaster/TagLevel synchronization through canonical TagRegistry ownership.
+- Added explicit Kepware-create, registry-sync, and historian-rebuild response/UI states without destructive compensation or automatic Full Reconcile.
+- Added configuration-driven OPC visibility retry tuning in `.env.example` only.
+- Documented the stable packaged-CLI compatibility direction; development legacy scripts remain unchanged.
+- Production cutover and Alarm migration were not performed.
+
+## 2026-08-18 — Phase 4.11B Slice 1: Alarm Domain + Existing Mapping Integration
+
+- Added read integration for existing `Alarm_Lists` mappings in the OPC Runtime Tree.
+- Added Alarm CRUD, enable/disable, validation, and reload notification behind independent disabled-by-default gates.
+- Added configuration-driven MP3 listing and browser preview with safe basename containment.
+- Preserved verified legacy field semantics and documented known Priority, RepeatEnable, and CHANGE-mode gaps.
+- Updated the development `alarm_sound` copy to honor configured audio and reload identities and to launch independently of the current directory.
+- Added alarm-domain tests; no production mapping, process, physical playback, or historian ownership was changed.

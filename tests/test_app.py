@@ -16,6 +16,7 @@ from services.supplier_profiles import SupplierProfileStore
 from services.equipment_parts import EquipmentPartStore
 from services.resource_relationships import ResourceRelationshipStore
 from services.tag_reconcile import ReconcileResult
+from services.tag_fast_sync import FastSyncError, FastSyncResult
 
 
 class FakeCursor:
@@ -91,6 +92,10 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertIn('id="use-tag-template"', html)
         self.assertIn('id="tag-knowledge-panel"', html)
         self.assertIn('id="tag-resources-panel"', html)
+        self.assertIn('data-alarm-filter="alarm"', html)
+        self.assertIn('id="alarm-panel"', html)
+        self.assertIn('id="use-tag-as-alarm"', html)
+        self.assertIn('id="preview-alarm-mp3"', html)
         self.assertIn('<html lang="en" data-theme="dark">', html)
         self.assertIn('id="theme-toggle"', html)
         self.assertIn('opcTagManagerTheme', html)
@@ -118,6 +123,9 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertIn('selectEnumValue("new-tag-data-type", templateTag?.tag_details?.data_type', javascript)
         self.assertIn('friendlyEnumValue("new-tag-data-type", dataType)', javascript)
         self.assertIn('friendlyEnumValue("new-tag-access", access)', javascript)
+        self.assertIn("Kepware Tag Created ✅", javascript)
+        self.assertIn("Runtime Registry Sync", javascript)
+        self.assertIn("Historian Subscription Sync", javascript)
         self.assertIn('`Unknown (${value})`', javascript)
         self.assertIn('value === "dark" || value === "light" ? value : "dark"', javascript)
         self.assertIn('localStorage.setItem(themeStorageKey, safeTheme)', javascript)
@@ -207,6 +215,77 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertEqual(status, 422)
         missing = {item["loc"][-1] for item in json.loads(body)["detail"]}
         self.assertEqual(missing, {"data_type", "scan_rate", "access"})
+
+    @staticmethod
+    def create_payload():
+        return {
+            "channel": "Line",
+            "device": "Device",
+            "group_path": ["Group"],
+            "tag_name": "NewTag",
+            "address": "DB1.X0",
+            "data_type": 1,
+            "scan_rate": 100,
+            "access": 1,
+            "description": "",
+        }
+
+    @staticmethod
+    def created_tag_result():
+        return {
+            "destination_path": "Line/Device/Group",
+            "endpoint": "/configured/tags",
+            "tag": {"name": "NewTag", "full_path": "Line.Device.Group.NewTag"},
+            "requested_properties": {},
+            "differences": [],
+        }
+
+    def test_create_success_fast_syncs_exact_path_without_full_reconcile(self):
+        synced = FastSyncResult(
+            path="Line/Device/Group/NewTag", node_id="ns=2;s=Line.Device.Group.NewTag",
+            data_type="Boolean", tag_id=22, registry_state="added", run_id=8,
+            attempts=2, duration=0.1, historian_rebuild_requested=False,
+        )
+        runtime = {
+            "supervisor_enabled": False,
+            "rebuild_pending": True,
+            "registry_generation": 3,
+        }
+        with (
+            patch.object(OpcTagManager.kepware_config_api, "create_tag", return_value=self.created_tag_result()) as create,
+            patch.object(OpcTagManager.tag_fast_sync_service, "sync", new=AsyncMock(return_value=synced)) as sync,
+            patch.object(OpcTagManager.tag_reconcile_service, "reconcile", new=AsyncMock()) as reconcile,
+            patch.object(OpcTagManager.runtime_supervisor, "status", return_value=runtime),
+        ):
+            status, body = self.request("POST", "/api/kepware/tags", self.create_payload())
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["kepware_create"]["status"], "succeeded")
+        self.assertEqual(payload["runtime_registry_sync"]["status"], "succeeded")
+        self.assertEqual(payload["runtime_registry_sync"]["path"], "Line/Device/Group/NewTag")
+        self.assertEqual(payload["historian_subscription_sync"]["status"], "pending_disabled")
+        create.assert_called_once()
+        sync.assert_awaited_once_with("Line/Device/Group/NewTag")
+        reconcile.assert_not_awaited()
+
+    def test_kepware_success_fast_sync_failure_is_explicit_and_not_compensated(self):
+        with (
+            patch.object(OpcTagManager.kepware_config_api, "create_tag", return_value=self.created_tag_result()) as create,
+            patch.object(OpcTagManager.tag_fast_sync_service, "sync", new=AsyncMock(side_effect=FastSyncError("not visible"))) as sync,
+            patch.object(OpcTagManager.tag_reconcile_service, "reconcile", new=AsyncMock()) as reconcile,
+        ):
+            status, body = self.request("POST", "/api/kepware/tags", self.create_payload())
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["kepware_create"]["status"], "succeeded")
+        self.assertEqual(payload["runtime_registry_sync"]["status"], "failed")
+        self.assertTrue(payload["runtime_registry_sync"]["full_reconcile_available"])
+        self.assertEqual(payload["historian_subscription_sync"]["status"], "not_requested")
+        create.assert_called_once()
+        sync.assert_awaited_once()
+        reconcile.assert_not_awaited()
 
     @patch.object(OpcTagManager.tag_knowledge_store, "save")
     @patch.object(OpcTagManager, "KM_TAG_WRITE_ENABLED", False)
