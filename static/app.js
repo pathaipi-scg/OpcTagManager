@@ -379,7 +379,6 @@ viewTabs.forEach((tab) => {
         document.getElementById("kepware-tree-view").classList.toggle("hidden", !isKepware);
         document.getElementById("runtime-details-view").classList.toggle("hidden", isKepware);
         document.getElementById("kepware-details-view").classList.toggle("hidden", !isKepware);
-        document.getElementById("refresh-form").classList.toggle("hidden", isKepware);
         document.getElementById("full-reconcile").classList.toggle("hidden", isKepware);
 
         if (isKepware && !kepwareLoaded) {

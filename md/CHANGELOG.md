@@ -337,3 +337,13 @@ Revert Git Commit
 - Added an Alarm mapping summary linked back to the canonical OPC Tag List.
 - Separated Mapping Save/Remove and Alarm Reload outcomes in operator feedback.
 - Completed development legacy workflow parity and removed all temporary `.codex_*` audit scripts.
+
+## 2026-08-18 — Phase 4.11B Slice 4: Legacy Alarm Retirement Preparation + Deployment Contract
+
+- Proved exact read-only parity for 207 Alarm mappings and the full 249-file MP3 set.
+- Added a no-write/no-reload Alarm readiness preflight and configuration-driven ownership/capability labels.
+- Removed OpcTagManager's obsolete BROWSER_SCRIPT refresh path in favor of canonical Full Reconcile.
+- Made the OpcTagManager launcher location-independent.
+- Removed unused Influx/browser/poller/Modbus/test-node configuration from development alarm_sound.
+- Documented Server/MiniPC deployment, startup, dual-writer, staged cutover, observation, and rollback contracts.
+- Declared development functional parity complete while retaining legacy production ownership.

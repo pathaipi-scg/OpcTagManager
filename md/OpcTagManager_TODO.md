@@ -36,6 +36,18 @@
 - [x] Preserve read-only health reporting for missing files/tags, inactive tags, and unsupported modes.
 - [x] Remove all one-off `.codex_*` audit scripts.
 
+## Phase 4.11B Slice 4 — Legacy Alarm retirement preparation and deployment contract
+
+- [x] Inventory and classify every current alarm_system route, workflow, launcher, and configuration responsibility.
+- [x] Prove exact read-only parity for all 207 mappings and the complete 249-file MP3 set.
+- [x] Add a no-write/no-reload Alarm readiness preflight with truthful ownership and capability labels.
+- [x] Remove OpcTagManager's duplicate legacy browser-script refresh path; Full Reconcile remains canonical.
+- [x] Make the canonical OpcTagManager launcher location-independent.
+- [x] Remove unused browser/Influx/poller/Modbus/test-node settings from development alarm_sound configuration.
+- [x] Define Server/MiniPC configuration, startup, single-writer, cutover, observation, and rollback contracts.
+- [x] Confirm no development runtime depends on alarm_system routes, port 1865, or launcher.
+- [x] Declare `DEVELOPMENT_FUNCTIONAL_PARITY_COMPLETE` without changing production ownership.
+
 ## Phase 2 baseline
 
 - [x] Preserve the existing OPC Tag Tree query and hierarchy.

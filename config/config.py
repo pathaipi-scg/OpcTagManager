@@ -93,7 +93,6 @@ if OPC_FAST_SYNC_ATTEMPTS < 1 or OPC_FAST_SYNC_ATTEMPTS > 100:
     raise RuntimeError("Configuration OPC_FAST_SYNC_ATTEMPTS must be between 1 and 100")
 if OPC_FAST_SYNC_RETRY_DELAY_SEC < 0 or OPC_FAST_SYNC_RETRY_DELAY_SEC > 60:
     raise RuntimeError("Configuration OPC_FAST_SYNC_RETRY_DELAY_SEC must be between 0 and 60")
-BROWSER_SCRIPT = get_required("BROWSER_SCRIPT")
 PRODUCTION_LINE = get_required("PRODUCTION_LINE")
 
 # SQL
@@ -115,6 +114,12 @@ ALARM_RELOAD_ENABLED = get_bool_default("ALARM_RELOAD_ENABLED", False)
 RELOAD_ALARM_ADDR = get_int_default("RELOAD_ALARM_ADDR", 0)
 if RELOAD_ALARM_ADDR < 0 or RELOAD_ALARM_ADDR > 65535:
     raise RuntimeError("Configuration RELOAD_ALARM_ADDR must be between 0 and 65535")
+PRODUCTION_ALARM_OWNER = get_optional("PRODUCTION_ALARM_OWNER") or "legacy_alarm_system"
+OPCTAGMANAGER_ALARM_CAPABILITY = get_optional("OPCTAGMANAGER_ALARM_CAPABILITY") or "development_ready"
+if PRODUCTION_ALARM_OWNER not in {"legacy_alarm_system", "opctagmanager"}:
+    raise RuntimeError("PRODUCTION_ALARM_OWNER must be legacy_alarm_system or opctagmanager")
+if OPCTAGMANAGER_ALARM_CAPABILITY not in {"development_ready", "shadow", "active"}:
+    raise RuntimeError("OPCTAGMANAGER_ALARM_CAPABILITY must be development_ready, shadow, or active")
 
 # Kepware Configuration API (reserved for a future phase)
 KEPWARE_CONFIG_API_SCHEME = get_required("KEPWARE_CONFIG_API_SCHEME")

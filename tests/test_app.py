@@ -100,6 +100,8 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertIn('id="alarm-summary"', html)
         self.assertIn('id="alarm-mp3-search"', html)
         self.assertIn('id="alarm-mp3-warning"', html)
+        self.assertIn('id="production-alarm-owner">legacy_alarm_system', html)
+        self.assertIn('id="alarm-capability">development_ready', html)
         self.assertIn('<html lang="en" data-theme="dark">', html)
         self.assertIn('id="theme-toggle"', html)
         self.assertIn('opcTagManagerTheme', html)

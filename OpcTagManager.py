@@ -2,13 +2,11 @@ from pathlib import Path
 import asyncio
 from contextlib import asynccontextmanager
 import re
-import subprocess
-import sys
 from datetime import datetime
 from typing import Literal
 
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field
@@ -19,7 +17,6 @@ from config.config import (
     APP_HOST,
     APP_PORT,
     APP_TIMEZONE,
-    BROWSER_SCRIPT,
     KEPWARE_CONFIG_API_HOST,
     KEPWARE_CONFIG_API_PASSWORD,
     KEPWARE_CONFIG_API_PORT,
@@ -50,6 +47,8 @@ from config.config import (
     MP3_FOLDER,
     PRODUCTION_LINE,
     RELOAD_ALARM_ADDR,
+    PRODUCTION_ALARM_OWNER,
+    OPCTAGMANAGER_ALARM_CAPABILITY,
     SQL_DB,
     SQL_ENCRYPT,
     SQL_DRIVER,
@@ -87,6 +86,7 @@ from services.sql_connection import connect_sql
 from services.alarm_audio import AlarmAudioError, AlarmAudioRepository
 from services.alarm_reload import AlarmReloadNotifier
 from services.alarm_service import AlarmService, AlarmServiceError, AlarmValues
+from services.alarm_preflight import AlarmPreflight
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -312,6 +312,17 @@ alarm_service = AlarmService(
     reload_notifier=alarm_reload_notifier,
     write_enabled=ALARM_WRITE_ENABLED,
 )
+alarm_preflight = AlarmPreflight(
+    alarm_service=alarm_service,
+    audio_repository=alarm_audio_repository,
+    production_alarm_owner=PRODUCTION_ALARM_OWNER,
+    capability=OPCTAGMANAGER_ALARM_CAPABILITY,
+    alarm_write_enabled=ALARM_WRITE_ENABLED,
+    alarm_reload_enabled=ALARM_RELOAD_ENABLED,
+    reload_host=KEPWARE_MODBUS_HOST,
+    reload_port=KEPWARE_MODBUS_PORT,
+    reload_address=RELOAD_ALARM_ADDR,
+)
 historian_cutover_preflight = HistorianCutoverPreflight(
     connection_factory=get_conn,
     supervisor_status=runtime_supervisor.status,
@@ -408,19 +419,15 @@ def home(request: Request):
             "kepware_tag_default_access": KEPWARE_TAG_DEFAULT_ACCESS,
             "km_tag_write_enabled": KM_TAG_WRITE_ENABLED,
             "km_resource_write_enabled": KM_RESOURCE_WRITE_ENABLED,
-            "alarm_write_enabled": ALARM_WRITE_ENABLED,
+        "alarm_write_enabled": ALARM_WRITE_ENABLED,
+        "production_alarm_owner": PRODUCTION_ALARM_OWNER,
+        "opctagmanager_alarm_capability": OPCTAGMANAGER_ALARM_CAPABILITY,
             "kepware_tag_data_types": TAG_DATA_TYPES,
             "kepware_tag_access_levels": TAG_ACCESS_LEVELS,
             "last_reconcile_result": last_reconcile_result,
             "runtime_status": runtime_supervisor.status(),
         },
     )
-
-
-@app.post("/refresh")
-def refresh_browser():
-    subprocess.run([sys.executable, BROWSER_SCRIPT])
-    return RedirectResponse("/", status_code=303)
 
 
 @app.post("/api/runtime/full-reconcile")
@@ -498,6 +505,11 @@ def alarm_integrity():
         return {"success": True, **alarm_service.integrity()}
     except Exception:
         return JSONResponse({"success": False, "error": "Alarm integrity audit could not be read."}, status_code=500)
+
+
+@app.get("/api/runtime/alarm-readiness")
+def alarm_readiness():
+    return alarm_preflight.run()
 
 
 @app.get("/api/opc-tags/{tag_id}/alarm")
