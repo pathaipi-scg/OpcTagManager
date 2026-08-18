@@ -181,12 +181,40 @@ viewTabs.forEach((tab) => {
         document.getElementById("runtime-details-view").classList.toggle("hidden", isKepware);
         document.getElementById("kepware-details-view").classList.toggle("hidden", !isKepware);
         document.getElementById("refresh-form").classList.toggle("hidden", isKepware);
+        document.getElementById("full-reconcile").classList.toggle("hidden", isKepware);
 
         if (isKepware && !kepwareLoaded) {
             kepwareLoaded = true;
             loadKepwareChannels();
         }
     });
+});
+
+document.getElementById("full-reconcile").addEventListener("click", async event => {
+    const button = event.currentTarget;
+    const result = document.getElementById("reconcile-result");
+    if (!window.confirm("Run a complete OPC browse and safely reconcile TagMaster/TagLevel?\n\nThe historian subscriber will NOT be synchronized in this slice.")) {
+        return;
+    }
+    button.disabled = true;
+    result.textContent = "Full Reconcile is running. Subscriber synchronization will not be changed.";
+    try {
+        const response = await fetch("/api/runtime/full-reconcile", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ confirm: "FULL_RECONCILE" }),
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            result.textContent = `Full Reconcile failed: ${data.error || "unknown error"}`;
+            return;
+        }
+        result.textContent = `Run ${data.run_id}: ${data.total_discovered} discovered, ${data.added} added, ${data.changed} changed, ${data.unchanged} unchanged, ${data.deactivated} inactive. Subscriber not synchronized.`;
+    } catch (_error) {
+        result.textContent = "Full Reconcile request failed before a result was returned.";
+    } finally {
+        button.disabled = false;
+    }
 });
 
 // Tag Configuration is intentionally the default on every full page load/refresh.

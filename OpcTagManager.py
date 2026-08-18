@@ -1,8 +1,10 @@
 from pathlib import Path
+import asyncio
 import re
 import subprocess
 import sys
 from datetime import datetime
+from typing import Literal
 
 import pyodbc
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile
@@ -29,6 +31,7 @@ from config.config import (
     KEPWARE_TAG_DEFAULT_DATA_TYPE,
     KEPWARE_TAG_DEFAULT_SCAN_RATE_MS,
     LOG_LEVEL,
+    OPC_URL,
     KM_TAG_ROOT,
     KM_TAG_WRITE_ENABLED,
     KM_RESOURCE_WRITE_ENABLED,
@@ -55,6 +58,14 @@ from services.resource_relationships import (
     ResourceRelationshipError,
     ResourceRelationshipStore,
 )
+from services.tag_reconcile import (
+    OpcDiscoveryError,
+    OpcTagDiscoverer,
+    ReconcileInProgressError,
+    SnapshotValidationError,
+    TagReconcileService,
+)
+from services.tag_registry import TagRegistry, TagRegistryError
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -101,6 +112,11 @@ class CreateKepwareTagRequest(BaseModel):
     scan_rate: int
     access: int
     description: str = ""
+
+
+class FullReconcileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirm: Literal["FULL_RECONCILE"]
 
 
 class TagKnowledgeIdentityRequest(BaseModel):
@@ -219,6 +235,13 @@ def get_conn():
     )
 
 
+tag_reconcile_service = TagReconcileService(
+    discoverer=OpcTagDiscoverer(OPC_URL),
+    registry=TagRegistry(get_conn),
+)
+last_reconcile_result: dict | None = None
+
+
 def build_tree(rows):
     tree = {}
 
@@ -295,6 +318,7 @@ def home(request: Request):
             "km_resource_write_enabled": KM_RESOURCE_WRITE_ENABLED,
             "kepware_tag_data_types": TAG_DATA_TYPES,
             "kepware_tag_access_levels": TAG_ACCESS_LEVELS,
+            "last_reconcile_result": last_reconcile_result,
         },
     )
 
@@ -303,6 +327,23 @@ def home(request: Request):
 def refresh_browser():
     subprocess.run([sys.executable, BROWSER_SCRIPT])
     return RedirectResponse("/", status_code=303)
+
+
+@app.post("/api/runtime/full-reconcile")
+def run_full_reconcile(payload: FullReconcileRequest):
+    global last_reconcile_result
+    try:
+        result = asyncio.run(tag_reconcile_service.reconcile()).to_dict()
+        last_reconcile_result = result
+        return result
+    except ReconcileInProgressError as exc:
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=409)
+    except (OpcDiscoveryError, SnapshotValidationError) as exc:
+        last_reconcile_result = {"success": False, "error": str(exc), "subscriber_synchronized": False}
+        return JSONResponse(last_reconcile_result, status_code=503)
+    except TagRegistryError as exc:
+        last_reconcile_result = {"success": False, "error": str(exc), "subscriber_synchronized": False}
+        return JSONResponse(last_reconcile_result, status_code=500)
 
 
 @app.get("/api/kepware/status")

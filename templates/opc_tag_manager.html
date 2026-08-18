@@ -34,6 +34,9 @@
         <form method="post" action="/refresh" id="refresh-form" class="hidden">
             <button type="submit" class="refresh-button">Refresh OPC Tree</button>
         </form>
+        <button type="button" id="full-reconcile" class="refresh-button hidden">
+            Full Reconcile
+        </button>
         <button type="button" id="theme-toggle" class="theme-toggle" aria-label="Switch to Light theme">☀ Light</button>
     </div>
 </header>
@@ -47,6 +50,24 @@
     <section class="panel tree-panel" aria-label="Tag tree">
         <div id="runtime-tree-view" class="tree-view hidden">
             <h2>OPC Tag List</h2>
+            <section class="runtime-reconcile-status" aria-live="polite">
+                <strong>Safe Tag Reconcile Core</strong>
+                <p>Subscriber synchronization has not moved yet.</p>
+                <p id="reconcile-result">
+                    {% if last_reconcile_result %}
+                        {% if last_reconcile_result.success %}
+                            Last result: {{ last_reconcile_result.total_discovered }} discovered,
+                            {{ last_reconcile_result.added }} added,
+                            {{ last_reconcile_result.changed }} changed,
+                            {{ last_reconcile_result.deactivated }} inactive.
+                        {% else %}
+                            Last result failed: {{ last_reconcile_result.error }}
+                        {% endif %}
+                    {% else %}
+                        No Full Reconcile has run in this web process.
+                    {% endif %}
+                </p>
+            </section>
 
             {% if tree %}
                 {{ render_tree(tree) }}

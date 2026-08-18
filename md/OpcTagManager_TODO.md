@@ -210,3 +210,10 @@ Keep deferred until separately approved:
 - Automatic Supplier, Contact, or Equipment/Part identity creation
 
 `QUO_` remains an OpcTagManager Shared Resource, but quotation OCR/LLM parsing and a large manual quotation-entry workflow do not belong in OpcTagManager. Candidate APIs remain read-only and never auto-select, create, update, merge, or link.
+# Phase 4.11A — Runtime Ownership Consolidation
+
+- [x] Slice 1: safe Tag reconcile core with strict snapshot discovery and atomic SQL registry apply.
+- [x] Add controlled Full Reconcile API/UI and structured result without subscriber synchronization.
+- [ ] Validate Slice 1 against approved non-production OPC/SQL fixtures before runtime ownership cutover.
+- [ ] Slice 2: extract/supervise historian subscriber worker while preserving the exact Influx contract.
+- [ ] Later: compatibility wrappers and startup ownership, only after explicit approval.

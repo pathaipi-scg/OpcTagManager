@@ -279,3 +279,10 @@ Low
 Rollback Method
 
 Revert Git Commit
+# 2026-08-18 — Phase 4.11A Slice 1: Safe Tag Reconcile Core
+
+- Added strict, all-or-nothing OPC discovery and snapshot validation.
+- Added transactional TagMaster/TagLevel reconcile with post-success deactivation and BrowserRun completion.
+- Added a confirmation-gated Full Reconcile API/UI with structured counts.
+- Added mock-only safety/parity tests; no live OPC, SQL, Influx, or service operations are part of the test suite.
+- Runtime ownership has not moved: subscriber, Alarm UI, MiniPC audio, legacy browser, and startup remain unchanged.

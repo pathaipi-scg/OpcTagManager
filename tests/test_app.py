@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from urllib.parse import urlsplit
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import OpcTagManager
 from starlette.datastructures import UploadFile
@@ -15,6 +15,7 @@ from services.shared_resources import SharedResourceStore
 from services.supplier_profiles import SupplierProfileStore
 from services.equipment_parts import EquipmentPartStore
 from services.resource_relationships import ResourceRelationshipStore
+from services.tag_reconcile import ReconcileResult
 
 
 class FakeCursor:
@@ -101,6 +102,8 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertLess(html.index(">Tag Configuration</button>"), html.index(">OPC Tag List</button>"))
         self.assertIn('<h2>Tag Configuration Tree</h2>', html)
         self.assertIn('<h2>OPC Tag List</h2>', html)
+        self.assertIn('id="full-reconcile"', html)
+        self.assertIn("Subscriber synchronization has not moved yet.", html)
         self.assertIn("Refresh Configuration", html)
         self.assertIn('<select id="new-tag-data-type"', html)
         self.assertIn('<option value="5">Word</option>', html)
@@ -143,6 +146,29 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertIn("The selected file has different content.", javascript)
         self.assertEqual(self.request("GET", "/static/app.js")[0], 200)
         self.assertEqual(self.request("GET", "/static/app.css")[0], 200)
+
+    def test_full_reconcile_endpoint_returns_structured_result_without_subscriber_sync(self):
+        expected = ReconcileResult(
+            total_discovered=4,
+            added=1,
+            changed=1,
+            unchanged=2,
+            deactivated=1,
+            run_id=9,
+            duration=0.125,
+        )
+        with patch.object(OpcTagManager.tag_reconcile_service, "reconcile", new=AsyncMock(return_value=expected)):
+            status, body = self.request("POST", "/api/runtime/full-reconcile", {"confirm": "FULL_RECONCILE"})
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["run_id"], 9)
+        self.assertEqual(payload["added"], 1)
+        self.assertFalse(payload["subscriber_synchronized"])
+        OpcTagManager.last_reconcile_result = None
+
+    def test_full_reconcile_endpoint_requires_explicit_confirmation(self):
+        status, _body = self.request("POST", "/api/runtime/full-reconcile", {"confirm": "no"})
+        self.assertEqual(status, 422)
 
     def test_create_route_requires_all_explicit_operational_properties(self):
         status, body = self.request(
