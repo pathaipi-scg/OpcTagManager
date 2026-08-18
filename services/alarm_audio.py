@@ -19,14 +19,24 @@ class AlarmAudioRepository:
             raise AlarmAudioError("Alarm audio file must use the .mp3 extension.")
         return filename
 
-    def list_files(self) -> list[dict]:
+    def list_files(self, search: str = "") -> list[dict]:
         if self.root is None or not self.root.is_dir():
             return []
+        needle = search.strip().casefold()
         return [
             {"filename": path.name, "size": path.stat().st_size}
             for path in sorted(self.root.iterdir(), key=lambda item: item.name.casefold())
-            if path.is_file() and path.suffix.lower() == ".mp3"
+            if path.is_file()
+            and path.suffix.lower() == ".mp3"
+            and (not needle or needle in path.name.casefold())
         ]
+
+    def exists(self, filename: str) -> bool:
+        try:
+            self.resolve(filename)
+            return True
+        except AlarmAudioError:
+            return False
 
     def resolve(self, filename: str) -> Path:
         name = self.validate_filename(filename)

@@ -492,6 +492,14 @@ def list_alarms():
         return JSONResponse({"success": False, "error": "Alarm mappings could not be read."}, status_code=500)
 
 
+@app.get("/api/alarms/integrity")
+def alarm_integrity():
+    try:
+        return {"success": True, **alarm_service.integrity()}
+    except Exception:
+        return JSONResponse({"success": False, "error": "Alarm integrity audit could not be read."}, status_code=500)
+
+
 @app.get("/api/opc-tags/{tag_id}/alarm")
 def get_tag_alarm(tag_id: int):
     try:
@@ -545,8 +553,8 @@ def delete_alarm(alarm_id: int):
 
 
 @app.get("/api/alarm-mp3")
-def list_alarm_mp3():
-    return {"success": True, "files": alarm_audio_repository.list_files()}
+def list_alarm_mp3(search: str = ""):
+    return {"success": True, "files": alarm_audio_repository.list_files(search)}
 
 
 @app.get("/api/alarm-mp3/{filename}/preview")

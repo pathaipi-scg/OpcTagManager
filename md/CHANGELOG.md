@@ -319,3 +319,21 @@ Revert Git Commit
 - Preserved verified legacy field semantics and documented known Priority, RepeatEnable, and CHANGE-mode gaps.
 - Updated the development `alarm_sound` copy to honor configured audio and reload identities and to launch independently of the current directory.
 - Added alarm-domain tests; no production mapping, process, physical playback, or historian ownership was changed.
+
+## 2026-08-18 — Phase 4.11B Slice 2: Notebook Alarm Simulator Validation
+
+- Added a read-only SQL synthetic-value simulator with optional bounded local playback.
+- Extracted the canonical condition/transition engine for simulator and OPC callback reuse.
+- Preserved active state across reload/reconnect and safely baselined new mappings.
+- Added runtime eligibility and integrity reporting for orphan/unsupported data.
+- Audited all 207 mappings and completed preview plus one bounded playback attempt.
+- Shared SQL remained read-only; no PLC, production reload, history, MiniPC, or historian change occurred.
+
+## 2026-08-18 — Phase 4.11B Slice 3: MP3 Repository Parity + Alarm Integration Completion
+
+- Identified configuration drift to a partial 122-file folder and corrected notebook-only roots to the existing 249-file development share.
+- Verified exact parity for all 206 distinct filenames used by 207 mappings without changing data or files.
+- Added deterministic MP3 search, exact-name/missing-value UX, health status, and safe unchanged-legacy behavior.
+- Added an Alarm mapping summary linked back to the canonical OPC Tag List.
+- Separated Mapping Save/Remove and Alarm Reload outcomes in operator feedback.
+- Completed development legacy workflow parity and removed all temporary `.codex_*` audit scripts.

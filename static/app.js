@@ -2,6 +2,7 @@ const runtimeTags = document.querySelectorAll(".tag-click");
 let selectedRuntimeTag = null;
 let selectedAlarm = null;
 let alarmMp3Loaded = false;
+let alarmMp3Files = [];
 
 const themeStorageKey = "opcTagManagerTheme";
 const themeToggle = document.getElementById("theme-toggle");
@@ -152,13 +153,42 @@ runtimeTags.forEach((tag) => {
     });
 });
 
+async function loadAlarmSummary() {
+    const summary = document.getElementById("alarm-summary");
+    const body = document.getElementById("alarm-summary-body");
+    summary.classList.remove("hidden");
+    body.replaceChildren();
+    const response = await fetch("/api/alarms");
+    const data = await response.json();
+    if (!response.ok || !data.success) {
+        document.getElementById("alarm-summary-count").textContent = "Unavailable";
+        return;
+    }
+    document.getElementById("alarm-summary-count").textContent = `${data.alarms.length} mappings`;
+    data.alarms.forEach((alarm) => {
+        const row = document.createElement("tr");
+        row.dataset.tagid = alarm.tag_id;
+        const threshold = alarm.alarm_mode === "HIGH" ? alarm.threshold_high : alarm.threshold_low;
+        [alarm.tag_path, `${alarm.alarm_mode} / ${threshold ?? "digital"}`, alarm.mp3_file,
+            alarm.enable_alarm ? "Yes" : "No", alarm.priority, alarm.health.join(", ")]
+            .forEach((value) => { const cell = document.createElement("td"); cell.textContent = value; row.appendChild(cell); });
+        row.addEventListener("click", () => {
+            const tag = document.querySelector(`.tag-click[data-tagid="${CSS.escape(String(alarm.tag_id))}"]`);
+            if (tag) tag.click();
+        });
+        body.appendChild(row);
+    });
+}
+
 document.querySelectorAll(".alarm-filter-button").forEach((button) => {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", async () => {
         document.querySelectorAll(".alarm-filter-button").forEach((item) => item.classList.toggle("active", item === button));
         const alarmOnly = button.dataset.alarmFilter === "alarm";
         runtimeTags.forEach((tag) => {
             tag.closest("li.leaf").classList.toggle("hidden", alarmOnly && tag.dataset.hasAlarm !== "true");
         });
+        if (alarmOnly) await loadAlarmSummary();
+        else document.getElementById("alarm-summary").classList.add("hidden");
     });
 });
 
@@ -172,14 +202,30 @@ async function loadAlarmMp3(selected = "") {
     if (!alarmMp3Loaded) {
         const response = await fetch("/api/alarm-mp3");
         const data = await response.json();
-        select.replaceChildren(...(data.files || []).map((file) => new Option(file.filename, file.filename)));
+        alarmMp3Files = data.files || [];
         alarmMp3Loaded = true;
     }
-    if (selected && ![...select.options].some((option) => option.value === selected)) {
-        select.add(new Option(`${selected} (missing from browse repository)`, selected));
-    }
-    select.value = selected;
+    renderAlarmMp3Options(selected);
 }
+
+function renderAlarmMp3Options(selected = document.getElementById("alarm-mp3").value) {
+    const select = document.getElementById("alarm-mp3");
+    const search = document.getElementById("alarm-mp3-search").value.trim().toLocaleLowerCase();
+    const visible = alarmMp3Files.filter((file) => file.filename.toLocaleLowerCase().includes(search));
+    select.replaceChildren(...visible.map((file) => new Option(file.filename, file.filename)));
+    const exists = alarmMp3Files.some((file) => file.filename === selected);
+    const selectedVisible = visible.some((file) => file.filename === selected);
+    if (selected && exists && !selectedVisible) select.add(new Option(`${selected} (current selection)`, selected));
+    if (selected && !exists) select.add(new Option(`${selected} (missing — retained legacy value)`, selected));
+    if (selected) select.value = selected;
+    const warning = document.getElementById("alarm-mp3-warning");
+    warning.classList.toggle("hidden", !selected || exists);
+    warning.textContent = selected && !exists
+        ? `Mapped file “${selected}” is missing from this browse repository. It remains unchanged unless you select another file.`
+        : "";
+}
+
+document.getElementById("alarm-mp3-search").addEventListener("input", () => renderAlarmMp3Options());
 
 function showAlarmForm(alarm) {
     selectedAlarm = alarm;
@@ -187,7 +233,19 @@ function showAlarmForm(alarm) {
     document.getElementById("alarm-form").classList.remove("hidden");
     document.getElementById("alarm-id").value = alarm?.alarm_id || "";
     document.getElementById("alarm-enable").checked = alarm?.enable_alarm ?? true;
-    document.getElementById("alarm-mode").value = alarm?.alarm_mode || "HIGH";
+    const modeSelect = document.getElementById("alarm-mode");
+    modeSelect.querySelectorAll("option[data-unsupported='true']").forEach((option) => option.remove());
+    if (alarm && alarm.runtime_supported === false) {
+        const unsupported = document.createElement("option");
+        unsupported.value = alarm.alarm_mode;
+        unsupported.textContent = `${alarm.alarm_mode} (unsupported by current alarm_sound)`;
+        unsupported.dataset.unsupported = "true";
+        unsupported.selected = true;
+        unsupported.disabled = true;
+        modeSelect.appendChild(unsupported);
+    } else {
+        modeSelect.value = alarm?.alarm_mode || "HIGH";
+    }
     document.getElementById("alarm-threshold-high").value = alarm?.threshold_high ?? "";
     document.getElementById("alarm-threshold-low").value = alarm?.threshold_low ?? "";
     document.getElementById("alarm-priority").value = alarm?.priority ?? 1;
@@ -246,13 +304,13 @@ document.getElementById("alarm-form").addEventListener("submit", async (event) =
     result.classList.remove("hidden");
     if (!response.ok || !data.success) {
         result.className = "create-result error-message";
-        result.textContent = data.error || "Alarm save failed.";
+        result.textContent = `Mapping Save          Failed\nAlarm Reload         Not attempted\n${data.error || "Alarm save failed."}`;
         return;
     }
     result.className = data.reload_notified ? "create-result success-message" : "create-result warning-message";
     result.textContent = data.reload_notified
-        ? "Alarm mapping saved and reload notified."
-        : `Alarm mapping saved; reload not notified (${data.reload_error || "unknown"}).`;
+        ? "Mapping Save          Succeeded\nAlarm Reload         Succeeded"
+        : `Mapping Save          Succeeded\nAlarm Reload         ${data.reload_error === "disabled" ? "Disabled" : `Failed (${data.reload_error || "unknown"})`}`;
     selectedRuntimeTag.dataset.hasAlarm = "true";
     await loadTagAlarm(selectedRuntimeTag.dataset.tagid);
 });
@@ -265,7 +323,7 @@ document.getElementById("delete-alarm").addEventListener("click", async () => {
     result.classList.remove("hidden");
     if (!response.ok || !data.success) {
         result.className = "create-result error-message";
-        result.textContent = data.error || "Alarm delete failed.";
+        result.textContent = `Mapping Remove        Failed\nAlarm Reload         Not attempted\n${data.error || "Alarm delete failed."}`;
         return;
     }
     selectedRuntimeTag.dataset.hasAlarm = "false";
@@ -275,8 +333,8 @@ document.getElementById("delete-alarm").addEventListener("click", async () => {
     document.getElementById("use-tag-as-alarm").classList.remove("hidden");
     result.className = data.reload_notified ? "create-result success-message" : "create-result warning-message";
     result.textContent = data.reload_notified
-        ? "Alarm mapping removed and reload notified."
-        : `Alarm mapping removed; reload not notified (${data.reload_error || "unknown"}).`;
+        ? "Mapping Remove        Succeeded\nAlarm Reload         Succeeded"
+        : `Mapping Remove        Succeeded\nAlarm Reload         ${data.reload_error === "disabled" ? "Disabled" : `Failed (${data.reload_error || "unknown"})`}`;
 });
 
 document.getElementById("preview-alarm-mp3").addEventListener("click", () => {

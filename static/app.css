@@ -196,6 +196,14 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 
 .success-message { border-left: 3px solid var(--success-accent); background: var(--success-bg); color: var(--success-text); }
 .warning-message { border-left: 3px solid var(--warning-text); background: var(--warning-bg); color: var(--warning-text); }
+.alarm-summary { margin: 8px 0 12px; border: 1px solid var(--border-color); border-radius: 5px; background: var(--bg-card); }
+.alarm-summary-heading { display: flex; justify-content: space-between; gap: 8px; padding: 8px; }
+.alarm-summary-scroll { max-height: 310px; overflow: auto; }
+.alarm-summary table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+.alarm-summary th, .alarm-summary td { padding: 6px; border-top: 1px solid var(--border-color); text-align: left; vertical-align: top; }
+.alarm-summary tbody tr { cursor: pointer; }
+.alarm-summary tbody tr:hover { background: var(--hover-bg); }
+#alarm-result { white-space: pre-line; }
 
 @media (max-width: 760px) {
     body { padding: 10px; overflow: auto; }

@@ -96,6 +96,10 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertIn('id="alarm-panel"', html)
         self.assertIn('id="use-tag-as-alarm"', html)
         self.assertIn('id="preview-alarm-mp3"', html)
+        self.assertIn('Legacy CHANGE mappings remain readable', html)
+        self.assertIn('id="alarm-summary"', html)
+        self.assertIn('id="alarm-mp3-search"', html)
+        self.assertIn('id="alarm-mp3-warning"', html)
         self.assertIn('<html lang="en" data-theme="dark">', html)
         self.assertIn('id="theme-toggle"', html)
         self.assertIn('opcTagManagerTheme', html)
@@ -517,6 +521,25 @@ class OpcTagManagerAppTests(unittest.TestCase):
                 self.assertNotIn("filesystem_path", json.dumps(bodies))
             self.assertEqual(suppliers.read(supplier["resource_id"])["resource"]["active_version"], 1)
             self.assertEqual(catalog.read(part["resource_id"])["resource"]["active_version"], 1)
+
+    def test_alarm_mp3_search_and_preview_preserve_safe_special_filename(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            filename = "Long Name_(Zone 1)_เสียง.mp3"
+            payload = b"ID3-test-audio"
+            (root / filename).write_bytes(payload)
+            with patch.object(OpcTagManager.alarm_audio_repository, "root", root):
+                status, body = self.request("GET", "/api/alarm-mp3?search=zone%201")
+                result = json.loads(body)
+                self.assertEqual(status, 200)
+                self.assertEqual(result["files"], [{"filename": filename, "size": len(payload)}])
+                self.assertNotIn(temporary, body.decode())
+
+                status, body = self.request("GET", f"/api/alarm-mp3/{filename}/preview")
+                self.assertEqual(status, 200)
+                self.assertEqual(body, payload)
+                status, _body = self.request("GET", "/api/alarm-mp3/missing.mp3/preview")
+                self.assertEqual(status, 404)
 
 
 if __name__ == "__main__":

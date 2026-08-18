@@ -67,9 +67,9 @@ class Cursor:
         elif normalized.startswith("SELECT ALARMID FROM ALARM_LISTS WHERE TAGID"):
             row = next((row for row in alarms.values() if row["TagId"] == params[0]), None)
             self.rows = [] if row is None else [(row["AlarmId"],)]
-        elif normalized.startswith("SELECT TAGID FROM ALARM_LISTS"):
+        elif normalized.startswith("SELECT TAGID, MP3FILE FROM ALARM_LISTS"):
             row = alarms.get(params[0])
-            self.rows = [] if row is None else [(row["TagId"],)]
+            self.rows = [] if row is None else [(row["TagId"], row["Mp3File"])]
         elif normalized.startswith("SELECT ALARMID FROM ALARM_LISTS WHERE ALARMID"):
             self.rows = [(params[0],)] if params[0] in alarms else []
         elif normalized.startswith("INSERT INTO ALARM_LISTS"):
@@ -236,9 +236,57 @@ def test_mp3_listing_preserves_names_and_resolution_rejects_missing_and_traversa
         audio.resolve("missing.mp3")
 
 
+def test_mp3_search_preserves_exact_special_names(tmp_path):
+    names = ["Long Name_(Zone 1).MP3", "เสียงเตือน เครื่องจักร.mp3", "other.mp3"]
+    for name in names:
+        (tmp_path / name).write_bytes(b"audio")
+    repository = AlarmAudioRepository(str(tmp_path))
+
+    assert [item["filename"] for item in repository.list_files("zone 1")] == ["Long Name_(Zone 1).MP3"]
+    assert repository.exists("เสียงเตือน เครื่องจักร.mp3") is True
+    assert all("path" not in item for item in repository.list_files())
+
+
+def test_existing_missing_mp3_can_remain_but_changed_missing_is_rejected(audio):
+    database = Database()
+    alarm_service = service(database, audio)
+    alarm_id = alarm_service.create(10, values())["mapping"]["alarm_id"]
+    database.alarms[alarm_id]["Mp3File"] = "legacy-missing.mp3"
+
+    unchanged = alarm_service.update(alarm_id, values(mp3_file="legacy-missing.mp3", priority=2))["mapping"]
+    assert unchanged["mp3_file"] == "legacy-missing.mp3"
+    assert unchanged["mp3_exists"] is False
+    assert unchanged["health"] == ["missing_mp3"]
+    with pytest.raises(AlarmAudioError):
+        alarm_service.update(alarm_id, values(mp3_file="different-missing.mp3"))
+
+
 def test_disabled_write_gate_keeps_reads_available(audio):
     database = Database()
     alarm_service = service(database, audio, write=False)
     assert alarm_service.list() == []
     with pytest.raises(AlarmServiceError, match="disabled"):
         alarm_service.create(10, values())
+
+
+def test_integrity_reports_runtime_and_repository_gaps(audio):
+    database = Database()
+    alarm_service = service(database, audio)
+    alarm_id = alarm_service.create(10, values())["mapping"]["alarm_id"]
+    database.alarms[alarm_id]["Mp3File"] = "missing.mp3"
+    database.alarms[alarm_id]["AlarmMode"] = "CHANGE"
+    database.tags[10]["IsActive"] = False
+
+    report = alarm_service.integrity()
+
+    assert report["total_mappings"] == 1
+    assert report["inactive_tagmaster"] == 1
+    assert report["unsupported_modes"] == 1
+    assert report["missing_mp3_files"] == ["missing.mp3"]
+
+
+def test_create_rejects_inactive_tagmaster_identity(audio):
+    database = Database()
+    database.tags[10]["IsActive"] = False
+    with pytest.raises(AlarmServiceError, match="inactive"):
+        service(database, audio).create(10, values())

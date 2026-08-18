@@ -12,6 +12,30 @@
 - [ ] Perform an explicitly approved notebook simulator test with a configured local audio repository and audible-output authorization.
 - [ ] Verify production configuration on the production server and MiniPC before any cutover.
 
+## Phase 4.11B Slice 2 — Controlled notebook alarm simulator validation
+
+- [x] Configure a notebook-only MP3 repository in development `.env` files.
+- [x] Audit all 207 Alarm mappings against TagMaster and the notebook MP3 inventory read-only.
+- [x] Add a read-only SQL/synthetic-value simulator with no OPC, history, or reload writes.
+- [x] Extract canonical HIGH/LOW/digital and transition behavior for runtime and simulator reuse.
+- [x] Preserve active state across reload/reconnect and baseline newly introduced mappings.
+- [x] Validate preview success, MIME type, missing file, and traversal behavior over localhost.
+- [x] Complete one bounded pygame attempt using AlarmId 232 and `DINGDONG.mp3`.
+- [ ] Record operator confirmation that the expected sound was physically audible.
+- [x] Keep shared Alarm SQL read-only; CRUD lifecycle validation uses in-memory fixtures.
+
+## Phase 4.11B Slice 3 — MP3 repository parity and Alarm integration completion
+
+- [x] Identify the full 249-file development repository behind the configured local UNC share.
+- [x] Point OpcTagManager and alarm_sound notebook `.env` roots to the full repository without changing mappings.
+- [x] Confirm all 206 distinct filenames used by 207 mappings match exactly with zero missing files.
+- [x] Add deterministic MP3 search, exact-name preservation, missing-current-file warning, and safe preview.
+- [x] Permit unchanged legacy missing filenames while requiring changed/new selections to exist.
+- [x] Add Alarm mapping summary columns and row-to-canonical-Tag selection.
+- [x] Separate mapping-save and reload-notification outcomes in UI feedback.
+- [x] Preserve read-only health reporting for missing files/tags, inactive tags, and unsupported modes.
+- [x] Remove all one-off `.codex_*` audit scripts.
+
 ## Phase 2 baseline
 
 - [x] Preserve the existing OPC Tag Tree query and hierarchy.

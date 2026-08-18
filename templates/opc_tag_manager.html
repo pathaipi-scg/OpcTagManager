@@ -55,6 +55,15 @@
                 <button type="button" class="alarm-filter-button active" data-alarm-filter="all">All Tags</button>
                 <button type="button" class="alarm-filter-button" data-alarm-filter="alarm">Alarm Tags</button>
             </div>
+            <section id="alarm-summary" class="alarm-summary hidden" aria-live="polite">
+                <div class="alarm-summary-heading"><strong>Alarm Mapping Summary</strong><span id="alarm-summary-count"></span></div>
+                <div class="alarm-summary-scroll">
+                    <table>
+                        <thead><tr><th>Tag Path</th><th>Mode / Threshold</th><th>MP3</th><th>Enabled</th><th>Priority</th><th>Health</th></tr></thead>
+                        <tbody id="alarm-summary-body"></tbody>
+                    </table>
+                </div>
+            </section>
             <section class="runtime-reconcile-status" aria-live="polite">
                 <strong>Safe Tag Reconcile Core</strong>
                 <p>Production subscriber ownership has not moved yet.</p>
@@ -158,11 +167,17 @@
                         <label for="alarm-mode">Mode</label>
                         <select id="alarm-mode"><option value="HIGH">HIGH</option><option value="LOW">LOW</option></select>
                     </div>
+                    <p class="tree-counts">Legacy CHANGE mappings remain readable but are not executable by current alarm_sound. Select HIGH or LOW before saving such a mapping.</p>
                     <div class="field-group"><label for="alarm-threshold-high">Threshold High (blank with LOW/HIGH for digital behavior)</label><input id="alarm-threshold-high" type="number" step="any"></div>
                     <div class="field-group"><label for="alarm-threshold-low">Threshold Low (blank with HIGH/LOW for digital behavior)</label><input id="alarm-threshold-low" type="number" step="any"></div>
                     <div class="field-group"><label for="alarm-priority">Priority (stored; currently does not order playback)</label><input id="alarm-priority" type="number" min="1" value="1"></div>
                     <div class="field-group"><label for="alarm-repeat">Repeat count</label><input id="alarm-repeat" type="number" min="1" value="3"></div>
+                    <div class="field-group">
+                        <label for="alarm-mp3-search">Search MP3 files</label>
+                        <input id="alarm-mp3-search" type="search" placeholder="Search exact filenames…" autocomplete="off">
+                    </div>
                     <div class="field-group"><label for="alarm-mp3">MP3 File</label><select id="alarm-mp3"></select></div>
+                    <p id="alarm-mp3-warning" class="warning-message hidden"></p>
                     <p class="tree-counts">RepeatEnable is retained for legacy compatibility; alarm_sound currently uses Repeat directly.</p>
                     <div class="preview-actions">
                         <button type="button" id="preview-alarm-mp3">Preview MP3</button>

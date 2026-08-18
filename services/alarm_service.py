@@ -63,7 +63,11 @@ class AlarmService:
         result["repeat_enable"] = bool(result["repeat_enable"])
         result["enable_alarm"] = bool(result["enable_alarm"])
         result["tag_is_active"] = bool(result["tag_is_active"])
-        result["tag_path_consistent"] = result["tag_path"] == result["canonical_path"]
+        result["tag_missing"] = result["canonical_path"] is None
+        result["runtime_supported"] = str(result["alarm_mode"]).upper() in SUPPORTED_ALARM_MODES
+        result["tag_path_consistent"] = (
+            result["canonical_path"] is not None and result["tag_path"] == result["canonical_path"]
+        )
         return result
 
     def _select(self, where: str = "", parameters=()) -> list[dict]:
@@ -72,15 +76,60 @@ class AlarmService:
             cursor = connection.cursor()
             cursor.execute(
                 f"SELECT {self.SELECT_COLUMNS} FROM Alarm_Lists a "
-                f"INNER JOIN TagMaster t ON a.TagId = t.TagId {where} ORDER BY a.TagPath, a.AlarmId",
+                f"LEFT JOIN TagMaster t ON a.TagId = t.TagId {where} ORDER BY a.TagPath, a.AlarmId",
                 *parameters,
             )
-            return [self._mapping(row) for row in cursor.fetchall()]
+            mappings = [self._mapping(row) for row in cursor.fetchall()]
+            for mapping in mappings:
+                mapping["mp3_exists"] = self.audio_repository.exists(mapping["mp3_file"])
+                mapping["health"] = self._health(mapping)
+            return mappings
         finally:
             connection.close()
 
     def list(self) -> list[dict]:
         return self._select()
+
+    @staticmethod
+    def _health(mapping: dict) -> list[str]:
+        issues = []
+        if mapping["tag_missing"]:
+            issues.append("missing_tag")
+        elif not mapping["tag_is_active"]:
+            issues.append("inactive_tag")
+        if not mapping["node_id"]:
+            issues.append("missing_node_id")
+        if not mapping["runtime_supported"]:
+            issues.append("unsupported_mode")
+        if not mapping["mp3_exists"]:
+            issues.append("missing_mp3")
+        return issues or ["valid"]
+
+    def integrity(self) -> dict:
+        mappings = self.list()
+        tag_counts: dict[int, int] = {}
+        missing_mp3 = []
+        for mapping in mappings:
+            tag_id = int(mapping["tag_id"])
+            tag_counts[tag_id] = tag_counts.get(tag_id, 0) + 1
+            try:
+                self.audio_repository.resolve(mapping["mp3_file"])
+            except Exception:
+                missing_mp3.append(mapping["mp3_file"])
+        return {
+            "total_mappings": len(mappings),
+            "distinct_tag_ids": len(tag_counts),
+            "duplicate_tag_ids": sorted(tag_id for tag_id, count in tag_counts.items() if count > 1),
+            "missing_tagmaster": sum(1 for mapping in mappings if mapping["tag_missing"]),
+            "inactive_tagmaster": sum(
+                1 for mapping in mappings if not mapping["tag_missing"] and not mapping["tag_is_active"]
+            ),
+            "missing_node_ids": sum(
+                1 for mapping in mappings if not mapping["tag_missing"] and not mapping["node_id"]
+            ),
+            "unsupported_modes": sum(1 for mapping in mappings if not mapping["runtime_supported"]),
+            "missing_mp3_files": sorted(set(missing_mp3), key=str.casefold),
+        }
 
     def get_for_tag(self, tag_id: int) -> dict | None:
         rows = self._select("WHERE a.TagId = ?", (tag_id,))
@@ -94,7 +143,7 @@ class AlarmService:
             raise AlarmServiceError("Alarm mapping was not found.")
         return rows[0]
 
-    def validate(self, values: AlarmValues) -> AlarmValues:
+    def validate(self, values: AlarmValues, require_mp3_exists: bool = True) -> AlarmValues:
         mode = values.alarm_mode.strip().upper()
         if mode not in SUPPORTED_ALARM_MODES:
             raise AlarmServiceError("AlarmMode must be HIGH or LOW; CHANGE is not supported by alarm_sound.")
@@ -107,7 +156,8 @@ class AlarmService:
         if values.repeat < 1:
             raise AlarmServiceError("Repeat must be at least 1.")
         filename = self.audio_repository.validate_filename(values.mp3_file)
-        self.audio_repository.resolve(filename)
+        if require_mp3_exists:
+            self.audio_repository.resolve(filename)
         return AlarmValues(
             mode, values.threshold_high, values.threshold_low, filename,
             values.priority, values.repeat, bool(values.enable_alarm),
@@ -122,6 +172,8 @@ class AlarmService:
         row = cursor.fetchone()
         if row is None:
             raise AlarmServiceError("Canonical TagMaster identity was not found.")
+        if not bool(self._value(row, 3, "IsActive")):
+            raise AlarmServiceError("Canonical TagMaster identity is inactive.")
         return int(self._value(row, 0, "TagId")), str(self._value(row, 1, "Path"))
 
     def _reload_response(self, mapping: dict) -> dict:
@@ -169,15 +221,18 @@ class AlarmService:
 
     def update(self, alarm_id: int, values: AlarmValues) -> dict:
         self._require_write()
-        values = self.validate(values)
+        values = self.validate(values, require_mp3_exists=False)
         connection = self.connection_factory()
         try:
             cursor = connection.cursor()
-            cursor.execute("SELECT TagId FROM Alarm_Lists WHERE AlarmId = ?", alarm_id)
+            cursor.execute("SELECT TagId, Mp3File FROM Alarm_Lists WHERE AlarmId = ?", alarm_id)
             row = cursor.fetchone()
             if row is None:
                 raise AlarmServiceError("Alarm mapping was not found.")
             tag_id, path = self._tag(cursor, int(row[0]))
+            existing_mp3 = str(row[1])
+            if values.mp3_file != existing_mp3:
+                self.audio_repository.resolve(values.mp3_file)
             cursor.execute(
                 """UPDATE Alarm_Lists SET TagPath = ?, AlarmMode = ?, ThresholdHigh = ?,
                    ThresholdLow = ?, Mp3File = ?, Priority = ?, [Repeat] = ?,
