@@ -215,5 +215,6 @@ Keep deferred until separately approved:
 - [x] Slice 1: safe Tag reconcile core with strict snapshot discovery and atomic SQL registry apply.
 - [x] Add controlled Full Reconcile API/UI and structured result without subscriber synchronization.
 - [ ] Validate Slice 1 against approved non-production OPC/SQL fixtures before runtime ownership cutover.
-- [ ] Slice 2: extract/supervise historian subscriber worker while preserving the exact Influx contract.
+- [x] Slice 2: canonical historian worker, disabled-by-default supervisor, rebuild notification, and runtime status.
+- [ ] Controlled ownership cutover: prove single-writer transition, Grafana parity, restart behavior, and rollback before enabling production supervisor.
 - [ ] Later: compatibility wrappers and startup ownership, only after explicit approval.

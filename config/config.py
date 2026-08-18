@@ -39,6 +39,18 @@ def get_bool(name: str) -> bool:
     raise RuntimeError(f"Configuration {name} must be true or false")
 
 
+def get_bool_default(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"Configuration {name} must be true or false")
+
+
 # Application
 APP_HOST = get_required("APP_HOST")
 APP_PORT = get_int("APP_PORT")
@@ -89,6 +101,7 @@ INFLUX_PASS = get_configured("INFLUX_PASS")
 
 # Poller
 POLL_INTERVAL = get_int("POLL_INTERVAL")
+OPC_RUNTIME_SUPERVISOR_ENABLED = get_bool_default("OPC_RUNTIME_SUPERVISOR_ENABLED", False)
 
 # Kepware Modbus
 KEPWARE_MODBUS_HOST = get_required("KEPWARE_MODBUS_HOST")

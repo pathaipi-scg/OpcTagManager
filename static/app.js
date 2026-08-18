@@ -187,6 +187,9 @@ viewTabs.forEach((tab) => {
             kepwareLoaded = true;
             loadKepwareChannels();
         }
+        if (!isKepware) {
+            loadRuntimeStatus();
+        }
     });
 });
 
@@ -210,12 +213,33 @@ document.getElementById("full-reconcile").addEventListener("click", async event 
             return;
         }
         result.textContent = `Run ${data.run_id}: ${data.total_discovered} discovered, ${data.added} added, ${data.changed} changed, ${data.unchanged} unchanged, ${data.deactivated} inactive. Subscriber not synchronized.`;
+        await loadRuntimeStatus();
     } catch (_error) {
         result.textContent = "Full Reconcile request failed before a result was returned.";
     } finally {
         button.disabled = false;
     }
 });
+
+async function loadRuntimeStatus() {
+    try {
+        const response = await fetch("/api/runtime/status");
+        const data = await response.json();
+        document.getElementById("historian-ownership").textContent =
+            data.historian_ownership === "legacy_opc_service" ? "Legacy opc_service" : data.historian_ownership;
+        document.getElementById("supervisor-state").textContent = data.supervisor_enabled ? "Enabled" : "Disabled";
+        document.getElementById("worker-state").textContent = data.worker_state || "unknown";
+        document.getElementById("runtime-opc-state").textContent = data.opc_state || "unknown";
+        document.getElementById("runtime-tag-count").textContent =
+            data.tagmaster_active_count == null ? "Unknown" : `${data.tagmaster_active_count} Active`;
+        document.getElementById("runtime-subscriber-count").textContent =
+            data.subscribed_tag_count == null ? "Unknown" : data.subscribed_tag_count;
+        document.getElementById("runtime-influx-state").textContent = data.influx_state || "unknown";
+        document.getElementById("runtime-rebuild-state").textContent = data.rebuild_pending ? "Pending" : "No pending rebuild";
+    } catch (_error) {
+        document.getElementById("worker-state").textContent = "status unavailable";
+    }
+}
 
 // Tag Configuration is intentionally the default on every full page load/refresh.
 document.querySelector('.view-tab[data-view="kepware"]').click();

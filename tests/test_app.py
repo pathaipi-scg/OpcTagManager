@@ -103,7 +103,8 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertIn('<h2>Tag Configuration Tree</h2>', html)
         self.assertIn('<h2>OPC Tag List</h2>', html)
         self.assertIn('id="full-reconcile"', html)
-        self.assertIn("Subscriber synchronization has not moved yet.", html)
+        self.assertIn("Production subscriber ownership has not moved yet.", html)
+        self.assertIn("Historian ownership", html)
         self.assertIn("Refresh Configuration", html)
         self.assertIn('<select id="new-tag-data-type"', html)
         self.assertIn('<option value="5">Word</option>', html)
@@ -169,6 +170,15 @@ class OpcTagManagerAppTests(unittest.TestCase):
     def test_full_reconcile_endpoint_requires_explicit_confirmation(self):
         status, _body = self.request("POST", "/api/runtime/full-reconcile", {"confirm": "no"})
         self.assertEqual(status, 422)
+
+    @patch.object(OpcTagManager, "get_conn", return_value=FakeConnection())
+    def test_runtime_status_is_read_only_and_reports_legacy_disabled_ownership(self, _get_conn):
+        status, body = self.request("GET", "/api/runtime/status")
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["historian_ownership"], "legacy_opc_service")
+        self.assertFalse(payload["supervisor_enabled"])
+        self.assertEqual(payload["worker_state"], "disabled")
 
     def test_create_route_requires_all_explicit_operational_properties(self):
         status, body = self.request(

@@ -256,12 +256,31 @@ def test_failed_browse_does_not_deactivate_or_mutate_registry():
     })
     before = copy.deepcopy(database.tags)
     discoverer = OpcTagDiscoverer("configured-endpoint", lambda **_kwargs: FakeClient(enter_error=RuntimeError("offline")))
-    service = TagReconcileService(discoverer, TagRegistry(database.connection))
+    notifications = []
+    service = TagReconcileService(discoverer, TagRegistry(database.connection), notifications.append)
     with pytest.raises(OpcDiscoveryError):
         asyncio.run(service.reconcile())
     assert database.tags == before
     assert database.levels == []
     assert database.runs[1]["EndTime"] is None
+    assert notifications == []
+
+
+def test_successful_committed_reconcile_notifies_rebuild_once():
+    database = MemoryDatabase()
+    root = FakeNode("Objects", children=[
+        FakeNode("Line", children=[FakeNode("Tag", NodeClass.Variable, "node")])
+    ])
+    notifications = []
+    service = TagReconcileService(
+        OpcTagDiscoverer("configured-endpoint", lambda **_kwargs: FakeClient(root)),
+        TagRegistry(database.connection),
+        lambda run_id: notifications.append(run_id) or True,
+    )
+    result = asyncio.run(service.reconcile())
+    assert notifications == [result.run_id]
+    assert result.subscriber_rebuild_requested is True
+    assert result.subscriber_synchronized is False
 
 
 def test_snapshot_validation_and_source_have_no_export_or_deployment_endpoint():

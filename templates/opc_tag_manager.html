@@ -52,7 +52,17 @@
             <h2>OPC Tag List</h2>
             <section class="runtime-reconcile-status" aria-live="polite">
                 <strong>Safe Tag Reconcile Core</strong>
-                <p>Subscriber synchronization has not moved yet.</p>
+                <p>Production subscriber ownership has not moved yet.</p>
+                <dl class="object-properties runtime-status-grid">
+                    <dt>Historian ownership</dt><dd id="historian-ownership">Legacy opc_service</dd>
+                    <dt>Supervisor</dt><dd id="supervisor-state">{{ 'Enabled' if runtime_status.supervisor_enabled else 'Disabled' }}</dd>
+                    <dt>Worker</dt><dd id="worker-state">{{ runtime_status.worker_state }}</dd>
+                    <dt>OPC UA</dt><dd id="runtime-opc-state">{{ runtime_status.opc_state }}</dd>
+                    <dt>TagMaster</dt><dd id="runtime-tag-count">Unknown</dd>
+                    <dt>Subscriber</dt><dd id="runtime-subscriber-count">{{ runtime_status.subscribed_tag_count if runtime_status.subscribed_tag_count is not none else 'Unknown' }}</dd>
+                    <dt>InfluxDB</dt><dd id="runtime-influx-state">{{ runtime_status.influx_state }}</dd>
+                    <dt>Subscriber sync</dt><dd id="runtime-rebuild-state">{{ 'Pending' if runtime_status.rebuild_pending else 'No pending rebuild' }}</dd>
+                </dl>
                 <p id="reconcile-result">
                     {% if last_reconcile_result %}
                         {% if last_reconcile_result.success %}

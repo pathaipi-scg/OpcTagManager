@@ -286,3 +286,11 @@ Revert Git Commit
 - Added a confirmation-gated Full Reconcile API/UI with structured counts.
 - Added mock-only safety/parity tests; no live OPC, SQL, Influx, or service operations are part of the test suite.
 - Runtime ownership has not moved: subscriber, Alarm UI, MiniPC audio, legacy browser, and startup remain unchanged.
+# 2026-08-18 — Phase 4.11A Slice 2: Historian Worker + Runtime Supervisor
+
+- Added the canonical, separate-process historian worker with exact legacy Influx contract parity.
+- Added a disabled-by-default, historian-specific Windows-compatible subprocess supervisor.
+- Added private stdin/stdout JSON status and command communication without filesystem or schema dependencies.
+- Successful committed reconcile now records a registry generation and requests a full rebuild only when a supervised worker is enabled/running.
+- Added read-only runtime status API and minimal legacy-ownership UI.
+- Production historian ownership remains legacy `opc_service`; its source and startup are unchanged.

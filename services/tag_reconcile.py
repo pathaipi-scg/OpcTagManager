@@ -38,6 +38,7 @@ class ReconcileResult:
     duration: float
     success: bool = True
     subscriber_synchronized: bool = False
+    subscriber_rebuild_requested: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -102,9 +103,10 @@ class OpcTagDiscoverer:
 
 
 class TagReconcileService:
-    def __init__(self, discoverer: OpcTagDiscoverer, registry: TagRegistry) -> None:
+    def __init__(self, discoverer: OpcTagDiscoverer, registry: TagRegistry, on_registry_changed=None) -> None:
         self._discoverer = discoverer
         self._registry = registry
+        self._on_registry_changed = on_registry_changed
         self._lock = Lock()
 
     async def reconcile(self) -> ReconcileResult:
@@ -115,6 +117,12 @@ class TagReconcileService:
             run_id = self._registry.start_run()
             snapshot = await self._discoverer.discover()
             applied = self._registry.apply_snapshot(run_id, snapshot)
+            rebuild_requested = False
+            if self._on_registry_changed is not None:
+                try:
+                    rebuild_requested = bool(self._on_registry_changed(run_id))
+                except Exception:
+                    rebuild_requested = False
             return ReconcileResult(
                 total_discovered=len(snapshot),
                 added=applied.added,
@@ -123,6 +131,7 @@ class TagReconcileService:
                 deactivated=applied.deactivated,
                 run_id=run_id,
                 duration=round(perf_counter() - started, 3),
+                subscriber_rebuild_requested=rebuild_requested,
             )
         finally:
             self._lock.release()

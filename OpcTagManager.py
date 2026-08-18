@@ -1,5 +1,6 @@
 from pathlib import Path
 import asyncio
+from contextlib import asynccontextmanager
 import re
 import subprocess
 import sys
@@ -32,6 +33,7 @@ from config.config import (
     KEPWARE_TAG_DEFAULT_SCAN_RATE_MS,
     LOG_LEVEL,
     OPC_URL,
+    OPC_RUNTIME_SUPERVISOR_ENABLED,
     KM_TAG_ROOT,
     KM_TAG_WRITE_ENABLED,
     KM_RESOURCE_WRITE_ENABLED,
@@ -66,11 +68,24 @@ from services.tag_reconcile import (
     TagReconcileService,
 )
 from services.tag_registry import TagRegistry, TagRegistryError
+from services.runtime_supervisor import HistorianSupervisor
 
 
 BASE_DIR = Path(__file__).resolve().parent
 
-app = FastAPI(title="OpcTagManager")
+runtime_supervisor = HistorianSupervisor(OPC_RUNTIME_SUPERVISOR_ENABLED)
+
+
+@asynccontextmanager
+async def app_lifespan(_app: FastAPI):
+    runtime_supervisor.start()
+    try:
+        yield
+    finally:
+        runtime_supervisor.shutdown()
+
+
+app = FastAPI(title="OpcTagManager", lifespan=app_lifespan)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 kepware_config_api = KepwareConfigApi(
@@ -238,6 +253,7 @@ def get_conn():
 tag_reconcile_service = TagReconcileService(
     discoverer=OpcTagDiscoverer(OPC_URL),
     registry=TagRegistry(get_conn),
+    on_registry_changed=runtime_supervisor.notify_registry_changed,
 )
 last_reconcile_result: dict | None = None
 
@@ -319,6 +335,7 @@ def home(request: Request):
             "kepware_tag_data_types": TAG_DATA_TYPES,
             "kepware_tag_access_levels": TAG_ACCESS_LEVELS,
             "last_reconcile_result": last_reconcile_result,
+            "runtime_status": runtime_supervisor.status(),
         },
     )
 
@@ -344,6 +361,24 @@ def run_full_reconcile(payload: FullReconcileRequest):
     except TagRegistryError as exc:
         last_reconcile_result = {"success": False, "error": str(exc), "subscriber_synchronized": False}
         return JSONResponse(last_reconcile_result, status_code=500)
+
+
+@app.get("/api/runtime/status")
+def runtime_status():
+    status = runtime_supervisor.status()
+    try:
+        conn = get_conn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM TagMaster WHERE IsActive = 1")
+            row = cursor.fetchone()
+            status["tagmaster_active_count"] = int(row[0]) if row else None
+        finally:
+            conn.close()
+    except Exception:
+        status["tagmaster_active_count"] = None
+    status["last_reconcile"] = last_reconcile_result
+    return status
 
 
 @app.get("/api/kepware/status")
