@@ -45,6 +45,21 @@ from config.config import (
     MP3_FOLDER,
     PRODUCTION_LINE,
     RELOAD_ALARM_NODE,
+    RELOAD_ALARM_CHANNEL,
+    RELOAD_ALARM_DEVICE,
+    RELOAD_ALARM_GROUP_PATH,
+    RELOAD_ALARM_DRIVER,
+    RELOAD_ALARM_DEVICE_MODEL,
+    RELOAD_ALARM_DEVICE_ID_FORMAT,
+    RELOAD_ALARM_DEVICE_ID,
+    RELOAD_ALARM_ADDRESS,
+    RELOAD_ALARM_DATA_TYPE,
+    RELOAD_ALARM_READ_WRITE_ACCESS,
+    RELOAD_ALARM_SCAN_RATE_MS,
+    RELOAD_ALARM_BOOTSTRAP_ENABLED,
+    RELOAD_ALARM_REPAIR_ENABLED,
+    RELOAD_ALARM_SELF_HEAL_ENABLED,
+    RELOAD_ALARM_HISTORIAN_ENABLED,
     PRODUCTION_ALARM_OWNER,
     OPCTAGMANAGER_ALARM_CAPABILITY,
     SQL_DB,
@@ -77,7 +92,12 @@ from services.tag_reconcile import (
     TagReconcileService,
 )
 from services.tag_registry import TagRegistry, TagRegistryError
-from services.tag_fast_sync import ExactOpcTagResolver, FastSyncError, TagFastSyncService
+from services.tag_fast_sync import (
+    ExactOpcTagResolver,
+    FastSyncError,
+    OpcTagNotVisibleError,
+    TagFastSyncService,
+)
 from services.runtime_supervisor import HistorianSupervisor
 from services.historian_cutover import HistorianCutoverPreflight
 from services.sql_connection import connect_sql
@@ -85,6 +105,7 @@ from services.alarm_audio import AlarmAudioError, AlarmAudioRepository
 from services.alarm_reload import AlarmReloadNotifier, AlarmReloadReadinessProbe
 from services.alarm_service import AlarmService, AlarmServiceError, AlarmValues
 from services.alarm_preflight import AlarmPreflight
+from services.kepware_system_control import KepwareSystemControl, SystemControlContract
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -283,8 +304,13 @@ def get_conn():
 
 
 tag_registry = TagRegistry(get_conn)
+reload_control_path = "/".join((RELOAD_ALARM_CHANNEL, RELOAD_ALARM_DEVICE,
+                                *RELOAD_ALARM_GROUP_PATH, "RELOAD_ALARM"))
 tag_reconcile_service = TagReconcileService(
-    discoverer=OpcTagDiscoverer(OPC_URL),
+    discoverer=OpcTagDiscoverer(
+        OPC_URL,
+        excluded_paths=() if RELOAD_ALARM_HISTORIAN_ENABLED else (reload_control_path,),
+    ),
     registry=tag_registry,
     on_registry_changed=runtime_supervisor.notify_registry_changed,
 )
@@ -298,10 +324,57 @@ tag_fast_sync_service = TagFastSyncService(
     on_registry_changed=runtime_supervisor.notify_registry_changed,
 )
 alarm_audio_repository = AlarmAudioRepository(MP3_FOLDER)
+reload_contract = SystemControlContract(
+    channel=RELOAD_ALARM_CHANNEL, device=RELOAD_ALARM_DEVICE,
+    group_path=RELOAD_ALARM_GROUP_PATH, driver=RELOAD_ALARM_DRIVER,
+    device_model=RELOAD_ALARM_DEVICE_MODEL, device_id_format=RELOAD_ALARM_DEVICE_ID_FORMAT,
+    device_id=RELOAD_ALARM_DEVICE_ID, address=RELOAD_ALARM_ADDRESS,
+    data_type=RELOAD_ALARM_DATA_TYPE, access=RELOAD_ALARM_READ_WRITE_ACCESS,
+    scan_rate_ms=RELOAD_ALARM_SCAN_RATE_MS, configured_node_id=RELOAD_ALARM_NODE,
+)
+
+
+def inspect_reload_opc(path: str, configured_node_id: str) -> dict:
+    try:
+        snapshot, _attempt = asyncio.run(ExactOpcTagResolver(
+            OPC_URL, attempts=1, retry_delay=0
+        ).resolve(path))
+        resolved = snapshot.node_id
+        probe = AlarmReloadReadinessProbe(OPC_URL, resolved).run()
+        return {
+            **probe,
+            "resolved_node_id": resolved,
+            "configured_node_id": configured_node_id or None,
+            "node_id_consistent": not configured_node_id or configured_node_id == resolved,
+        }
+    except OpcTagNotVisibleError:
+        return {
+            "opc_endpoint_reachable": True, "resolved_node_id": None,
+            "configured_node_id": configured_node_id or None,
+            "node_id_consistent": False, "reload_node_readable": False,
+            "reload_datatype_supported": False, "reload_read_error": "reload_node_not_resolved",
+        }
+    except Exception:
+        return {
+            "opc_endpoint_reachable": False, "resolved_node_id": None,
+            "configured_node_id": configured_node_id or None,
+            "node_id_consistent": False, "reload_node_readable": False,
+            "reload_datatype_supported": False, "reload_read_error": "reload_node_not_resolved",
+        }
+
+
+kepware_system_control = KepwareSystemControl(
+    kepware_config_api, reload_contract,
+    bootstrap_enabled=RELOAD_ALARM_BOOTSTRAP_ENABLED,
+    repair_enabled=RELOAD_ALARM_REPAIR_ENABLED,
+    self_heal_enabled=RELOAD_ALARM_SELF_HEAL_ENABLED,
+    opc_inspector=inspect_reload_opc,
+)
 alarm_reload_notifier = AlarmReloadNotifier(
     enabled=ALARM_RELOAD_ENABLED,
     opc_url=OPC_URL,
     reload_node=RELOAD_ALARM_NODE,
+    self_healer=kepware_system_control.ensure_for_reload_failure,
 )
 alarm_service = AlarmService(
     connection_factory=get_conn,
@@ -317,6 +390,7 @@ alarm_preflight = AlarmPreflight(
     alarm_write_enabled=ALARM_WRITE_ENABLED,
     alarm_reload_enabled=ALARM_RELOAD_ENABLED,
     reload_probe=AlarmReloadReadinessProbe(OPC_URL, RELOAD_ALARM_NODE),
+    system_control=kepware_system_control,
 )
 historian_cutover_preflight = HistorianCutoverPreflight(
     connection_factory=get_conn,

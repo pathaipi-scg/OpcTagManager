@@ -377,3 +377,10 @@ Revert Git Commit
 - Removed the now-unused `pyModbusTCP` dependency while retaining unrelated legacy Modbus configuration entries.
 - Hardened the development alarm_sound reference so every OPC session loads current SQL mappings before subscriptions, rebuilds added/removed NodeIds, preserves transition state, safely baselines new mappings, and tracks structured reload/reconnect/health status.
 - Kepware hierarchy bootstrap, control-Tag creation, property repair, `PROJECT_ID` concurrency, self-healing retry, historian exclusion changes, and production deployment remain deferred to Slice 2B.
+
+# Phase 4.11C Slice 2B — 2026-08-22
+
+- Added gated ownership, inspection, bootstrap, safe Tag repair, concurrency handling, and bounded reload self-healing for the Memory Based alarm reload control hierarchy.
+- Kept alarm readiness strictly read-only and exposed structured system-control state and mutation gates.
+- Excluded only `SYSTEM/OpcTagManager/RELOAD_ALARM` from normal discovery/historian registration by default.
+- Added the live-discovered greenfield deployment contract. No live mutation or cutover was performed.

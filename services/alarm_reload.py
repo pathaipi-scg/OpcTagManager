@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import asdict, dataclass
 
 from asyncua import Client, ua
+from asyncua.ua.uaerrors import UaStatusCodeError
 
 
 INTEGER_VARIANT_BOUNDS = {
@@ -49,21 +50,31 @@ class ReloadResult:
 
 
 class AlarmReloadNotifier:
-    def __init__(self, enabled: bool, opc_url: str, reload_node: str, client_factory=Client) -> None:
+    def __init__(self, enabled: bool, opc_url: str, reload_node: str, client_factory=Client,
+                 self_healer=None) -> None:
         self.enabled = enabled
         self.opc_url = opc_url
         self.reload_node = reload_node
         self.client_factory = client_factory
+        self.self_healer = self_healer
 
-    async def _notify(self) -> ReloadResult:
+    @staticmethod
+    def _is_missing_node(exc: Exception) -> bool:
+        if not isinstance(exc, UaStatusCodeError):
+            return False
+        return "BadNodeIdUnknown" in str(exc) or "BadNodeIdInvalid" in str(exc)
+
+    async def _notify(self, node_id: str) -> ReloadResult:
         try:
             client_context = self.client_factory(self.opc_url)
             async with client_context as client:
                 try:
-                    node = client.get_node(self.reload_node)
+                    node = client.get_node(node_id)
                     data_value = await node.read_data_value()
                     variant = data_value.Value
-                except Exception:
+                except Exception as exc:
+                    if self._is_missing_node(exc):
+                        return ReloadResult(False, "missing_node")
                     return ReloadResult(False, "read_failed")
                 try:
                     next_variant = increment_integer_variant(variant)
@@ -83,7 +94,14 @@ class AlarmReloadNotifier:
         if not self.opc_url or not self.reload_node:
             return ReloadResult(False, "connection_error")
         try:
-            return asyncio.run(self._notify())
+            first = asyncio.run(self._notify(self.reload_node))
+            if first.category != "missing_node" or self.self_healer is None:
+                return first
+            healed = self.self_healer()
+            resolved = healed.get("resolved_node_id") if isinstance(healed, dict) else None
+            if not resolved:
+                return first
+            return asyncio.run(self._notify(resolved))
         except Exception:
             return ReloadResult(False, "connection_error")
 

@@ -187,6 +187,27 @@ def test_successful_complete_browse_and_filter_parity():
     assert SKIP_ROOTS == {"LP_UA", "_Statistics", "_System", "_Scheduler", "_LocalHistorian"}
 
 
+def test_only_exact_system_control_path_is_excluded():
+    root = FakeNode("Objects", children=[
+        FakeNode("SYSTEM", children=[FakeNode("OpcTagManager", children=[
+            FakeNode("RELOAD_ALARM", NodeClass.Variable, "control")
+        ])]),
+        FakeNode("LINE", children=[FakeNode("PLC", children=[
+            FakeNode("RELOAD_ALARM", NodeClass.Variable, "process")
+        ])]),
+        FakeNode("SYSTEM", children=[FakeNode("Other", children=[
+            FakeNode("Normal", NodeClass.Variable, "normal")
+        ])]),
+    ])
+    discoverer = OpcTagDiscoverer(
+        "configured", lambda **_kwargs: FakeClient(root),
+        excluded_paths=("SYSTEM/OpcTagManager/RELOAD_ALARM",),
+    )
+    paths = [tag.path for tag in asyncio.run(discoverer.discover())]
+    assert "SYSTEM/OpcTagManager/RELOAD_ALARM" not in paths
+    assert paths == ["LINE/PLC/RELOAD_ALARM", "SYSTEM/Other/Normal"]
+
+
 @pytest.mark.parametrize("client", [
     FakeClient(enter_error=RuntimeError("connect failed")),
     FakeClient(FakeNode("Objects", children=[FakeNode("Line", fail="children")])),

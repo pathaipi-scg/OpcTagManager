@@ -292,3 +292,10 @@ Keep deferred until separately approved:
 - [x] Make alarm_sound mapping reload, subscription replacement, reconnect, and health behavior testable while preserving transition semantics.
 - [ ] Review and approve Slice 2A before any commit or push.
 - [ ] Slice 2B: prove and implement owned Kepware hierarchy/bootstrap, control-Tag creation, property repair, `PROJECT_ID` concurrency, and bounded self-healing.
+
+# Phase 4.11C Slice 2B
+
+- [x] Implement guarded Memory Based `SYSTEM/OpcTagManager/RELOAD_ALARM` ownership, drift, bootstrap, repair, bounded self-heal, readiness, and exact historian exclusion in source/tests.
+- [ ] Review regression evidence and explicitly approve a controlled live greenfield bootstrap; no live mutation has occurred.
+- [ ] Resolve the actual OPC UA NodeId after approved creation; never assume a namespace index.
+- [ ] Harden or explicitly accept Config API TLS certificate verification before deployment.

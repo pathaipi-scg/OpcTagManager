@@ -12,6 +12,7 @@ class AlarmPreflight:
     alarm_write_enabled: bool
     alarm_reload_enabled: bool
     reload_probe: object
+    system_control: object | None = None
 
     def run(self) -> dict:
         try:
@@ -44,6 +45,7 @@ class AlarmPreflight:
             and missing_mp3_count == 0
         )
         reload_status = self.reload_probe.run()
+        system_control_status = self.system_control.inspect() if self.system_control else None
         reload_ready = bool(
             reload_status["opc_url_configured"]
             and reload_status["reload_node_configured"]
@@ -68,6 +70,7 @@ class AlarmPreflight:
             **reload_status,
             "alarm_write_enabled": self.alarm_write_enabled,
             "alarm_reload_enabled": self.alarm_reload_enabled,
+            "system_control": system_control_status,
             "mapping_counts": {
                 "total": integrity["total_mappings"],
                 "distinct_tag_ids": integrity["distinct_tag_ids"],

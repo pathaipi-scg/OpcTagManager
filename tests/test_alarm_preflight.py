@@ -147,3 +147,24 @@ def test_reload_readiness_probe_reads_but_never_writes_or_calls_kepware():
     assert node.write_calls == []
     assert client.post_calls == []
     assert client.put_calls == []
+
+
+def test_preflight_uses_only_system_control_inspection():
+    class SystemControl:
+        def __init__(self):
+            self.calls = []
+        def inspect(self):
+            self.calls.append("inspect")
+            return {"read_only": True, "state": "missing_tag"}
+        def bootstrap(self):
+            raise AssertionError("readiness must not bootstrap")
+        def repair(self):
+            raise AssertionError("readiness must not repair")
+        def ensure_for_reload_failure(self):
+            raise AssertionError("readiness must not self-heal")
+    control = SystemControl()
+    preflight = AlarmPreflight(Service(), Repository(None), "legacy_alarm_system",
+                               "development_ready", False, False, Probe(), control)
+    result = preflight.run()
+    assert result["system_control"]["state"] == "missing_tag"
+    assert control.calls == ["inspect"]

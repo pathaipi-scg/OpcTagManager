@@ -22,17 +22,21 @@ class FakeResponse:
 
 
 class FakeSession:
-    def __init__(self, responses, post_response=None):
+    def __init__(self, responses, post_response=None, put_response=None):
         self.responses = responses
         self.post_response = post_response
         self.calls = []
         self.post_calls = []
+        self.put_calls = []
+        self.put_response = put_response or FakeResponse(None, 200)
         self.auth = None
         self.verify = None
 
     def get(self, url, timeout):
         self.calls.append(("GET", url, timeout))
         response = self.responses[url]
+        if isinstance(response, list):
+            response = response.pop(0)
         if isinstance(response, Exception):
             raise response
         return response
@@ -42,6 +46,12 @@ class FakeSession:
         if isinstance(self.post_response, Exception):
             raise self.post_response
         return self.post_response
+
+    def put(self, url, json, timeout):
+        self.put_calls.append((url, json, timeout))
+        if isinstance(self.put_response, Exception):
+            raise self.put_response
+        return self.put_response
 
 
 class KepwareConfigApiTests(unittest.TestCase):
@@ -284,6 +294,53 @@ class KepwareConfigApiTests(unittest.TestCase):
                 "New Tag", "DB1.X0", 1, 100, 1,
             )
         self.assertEqual(len(session.post_calls), 1)
+
+    def test_channel_device_and_group_create_payloads_exclude_project_id(self):
+        settings = KepwareConfigSettings(**{**self.settings.__dict__, "write_enabled": True})
+        channel_collection = self.base + "/project/channels"
+        channel = {"common.ALLTYPES_NAME": "SYSTEM", "servermain.MULTIPLE_TYPES_DEVICE_DRIVER": "Memory Based",
+                   "memory_based.CHANNEL_ITEM_PERSISTENCE": False}
+        device_collection = self.base + "/project/channels/SYSTEM/devices"
+        device = {"common.ALLTYPES_NAME": "OpcTagManager", "servermain.MULTIPLE_TYPES_DEVICE_DRIVER": "Memory Based",
+                  "servermain.DEVICE_MODEL": 0, "servermain.DEVICE_ID_FORMAT": 1,
+                  "servermain.DEVICE_ID_STRING": "1", "servermain.DEVICE_DATA_COLLECTION": True}
+        group_collection = self.base + "/project/channels/SYSTEM/devices/OpcTagManager/tag_groups"
+        group = {"common.ALLTYPES_NAME": "Controls"}
+        session = FakeSession({channel_collection: [FakeResponse([]), FakeResponse([channel])],
+                               device_collection: [FakeResponse([]), FakeResponse([device])],
+                               group_collection: [FakeResponse([]), FakeResponse([group])]}, FakeResponse(None, 201))
+        client = KepwareConfigApi(settings, session)
+        client.create_channel("SYSTEM", "Memory Based", False)
+        client.create_device("SYSTEM", "OpcTagManager", "Memory Based", 0, 1, "1")
+        client.create_tag_group("SYSTEM", "OpcTagManager", [], "Controls")
+        self.assertEqual([call[1] for call in session.post_calls], [channel, device, group])
+        self.assertTrue(all("PROJECT_ID" not in payload for _, payload, _ in session.post_calls))
+
+    def test_update_tag_uses_fresh_project_id_never_force_and_verifies(self):
+        settings = KepwareConfigSettings(**{**self.settings.__dict__, "write_enabled": True})
+        path = self.base + "/project/channels/SYSTEM/devices/OpcTagManager/tags/RELOAD_ALARM"
+        before = {"PROJECT_ID": 42, "common.ALLTYPES_NAME": "RELOAD_ALARM", "servermain.TAG_ADDRESS": "D4"}
+        after = {"PROJECT_ID": 43, "common.ALLTYPES_NAME": "RELOAD_ALARM", "servermain.TAG_ADDRESS": "D0000"}
+        session = FakeSession({path: [FakeResponse(before), FakeResponse(after)]})
+        client = KepwareConfigApi(settings, session)
+        client.update_tag("SYSTEM", "OpcTagManager", [], "RELOAD_ALARM",
+                          {"servermain.TAG_ADDRESS": "D0000"})
+        payload = session.put_calls[0][1]
+        self.assertEqual(payload["PROJECT_ID"], 42)
+        self.assertNotIn("FORCE_UPDATE", payload)
+
+    def test_update_tag_rejects_not_applied_and_concurrency_without_retry(self):
+        settings = KepwareConfigSettings(**{**self.settings.__dict__, "write_enabled": True})
+        path = self.base + "/project/channels/SYSTEM/devices/OpcTagManager/tags/RELOAD_ALARM"
+        current = FakeResponse({"PROJECT_ID": 7, "common.ALLTYPES_NAME": "RELOAD_ALARM"})
+        for response, message in [(FakeResponse({"not_applied": {"servermain.TAG_ADDRESS": "D4"}}, 200), "did not apply"),
+                                  (FakeResponse({}, 409), "concurrency conflict")]:
+            session = FakeSession({path: current}, put_response=response)
+            client = KepwareConfigApi(settings, session)
+            with self.assertRaisesRegex(KepwareConfigError, message):
+                client.update_tag("SYSTEM", "OpcTagManager", [], "RELOAD_ALARM",
+                                  {"servermain.TAG_ADDRESS": "D0000"})
+            self.assertEqual(len(session.put_calls), 1)
 
 
 if __name__ == "__main__":

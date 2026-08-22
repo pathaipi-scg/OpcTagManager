@@ -1,4 +1,5 @@
 from asyncua import ua
+from asyncua.ua.uaerrors import UaStatusCodeError
 import pytest
 
 from services.alarm_reload import AlarmReloadNotifier, increment_integer_variant
@@ -121,3 +122,55 @@ def test_reload_reports_sanitized_connection_read_and_write_failures():
     assert (read.notified, read.category) == (False, "read_failed")
     assert (write.notified, write.category) == (False, "write_failed")
     assert "secret" not in str((connection, read, write))
+
+
+def test_missing_node_triggers_one_heal_and_exactly_one_retry():
+    missing = FakeNode(ua.Variant(1), read_error=UaStatusCodeError(ua.StatusCodes.BadNodeIdUnknown))
+    healthy = FakeNode(ua.Variant(9, ua.VariantType.Int32))
+    clients = []
+    nodes = [missing, healthy]
+
+    def factory(_url):
+        client = FakeClient(nodes[len(clients)])
+        clients.append(client)
+        return client
+
+    heals = []
+    subject = AlarmReloadNotifier(True, "opc.tcp://configured", "old-node", factory,
+                                  lambda: heals.append(True) or {"resolved_node_id": "resolved-node"})
+    result = subject.notify()
+    assert result.notified is True
+    assert heals == [True]
+    assert len(clients) == 2
+    assert clients[1].requested_nodes == ["resolved-node"]
+
+
+@pytest.mark.parametrize("category,error", [
+    ("read_failed", RuntimeError("generic")),
+    ("connection_error", None),
+])
+def test_non_missing_failures_never_self_heal(category, error):
+    heals = []
+    if category == "connection_error":
+        subject = notifier(FakeNode(ua.Variant(1)), enter_error=RuntimeError("offline"))[0]
+        subject.self_healer = lambda: heals.append(True)
+    else:
+        subject = notifier(FakeNode(ua.Variant(1), read_error=error))[0]
+        subject.self_healer = lambda: heals.append(True)
+    assert subject.notify().category == category
+    assert heals == []
+
+
+def test_failed_retry_does_not_recurse_or_heal_twice():
+    missing_error = UaStatusCodeError(ua.StatusCodes.BadNodeIdUnknown)
+    clients = []
+    def factory(_url):
+        client = FakeClient(FakeNode(ua.Variant(1), read_error=missing_error))
+        clients.append(client)
+        return client
+    heals = []
+    result = AlarmReloadNotifier(True, "opc.tcp://configured", "node", factory,
+                                 lambda: heals.append(True) or {"resolved_node_id": "new"}).notify()
+    assert result.category == "missing_node"
+    assert len(clients) == 2
+    assert heals == [True]

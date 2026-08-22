@@ -216,6 +216,47 @@ class KepwareConfigApi:
                 f"Kepware Tag creation returned HTTP {response.status_code}."
             )
 
+    def _post_object(self, path: str, payload: dict[str, Any], object_type: str) -> None:
+        if "PROJECT_ID" in payload or "FORCE_UPDATE" in payload:
+            raise KepwareConfigError("Create payload contains a forbidden concurrency property.")
+        try:
+            self._request_count += 1
+            response = self.session.post(
+                f"{self.base_url}{path}", json=payload, timeout=self.settings.timeout
+            )
+        except requests.exceptions.RequestException as exc:
+            raise KepwareConfigError(f"Kepware {object_type} creation request failed.") from exc
+        if response.status_code == 409:
+            raise KepwareConfigError(f"Kepware reported a {object_type} name conflict.")
+        if response.status_code >= 400:
+            raise KepwareConfigError(
+                f"Kepware {object_type} creation returned HTTP {response.status_code}: "
+                f"{self._safe_response_detail(response)}"
+            )
+
+    def _put_object(self, path: str, payload: dict[str, Any]) -> None:
+        if "PROJECT_ID" not in payload:
+            raise KepwareConfigError("Kepware update requires a fresh PROJECT_ID.")
+        if "FORCE_UPDATE" in payload:
+            raise KepwareConfigError("FORCE_UPDATE is forbidden.")
+        try:
+            self._request_count += 1
+            response = self.session.put(
+                f"{self.base_url}{path}", json=payload, timeout=self.settings.timeout
+            )
+        except requests.exceptions.RequestException as exc:
+            raise KepwareConfigError("Kepware update request failed.") from exc
+        if response.status_code in {409, 412}:
+            raise KepwareConfigError("Kepware configuration concurrency conflict.")
+        if response.status_code >= 400:
+            raise KepwareConfigError(f"Kepware update returned HTTP {response.status_code}.")
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
+        if isinstance(body, dict) and body.get("not_applied"):
+            raise KepwareConfigError("Kepware did not apply every requested property.")
+
     @staticmethod
     def _collection(data: Any, object_type: str) -> list[dict[str, Any]]:
         if not isinstance(data, list) or not all(isinstance(item, dict) for item in data):
@@ -279,6 +320,12 @@ class KepwareConfigApi:
             raise KepwareConfigError("Kepware returned an unexpected project response.")
         return _redact_sensitive(project)
 
+    def get_drivers(self) -> list[dict[str, Any]]:
+        return self._collection(self._get("/doc/drivers", use_cache=False), "Driver")
+
+    def has_driver(self, display_name: str) -> bool:
+        return any(item.get("display_name") == display_name for item in self.get_drivers())
+
     def get_channels(self) -> list[dict[str, Any]]:
         channels = self._collection(self._get("/project/channels"), "Channel")
         return [
@@ -291,6 +338,20 @@ class KepwareConfigApi:
             )
             for properties in channels
         ]
+
+    @staticmethod
+    def _exact(nodes: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
+        matches = [node for node in nodes if node["name"].casefold() == name.casefold()]
+        if len(matches) > 1:
+            raise KepwareConfigError("Kepware returned duplicate case-insensitive identities.")
+        return matches[0] if matches else None
+
+    def get_channel(self, channel: str) -> dict[str, Any] | None:
+        return self._exact(self.get_channels_uncached(), channel)
+
+    def get_channels_uncached(self) -> list[dict[str, Any]]:
+        data = self._collection(self._get("/project/channels", use_cache=False), "Channel")
+        return [self._node("Channel", name := self._name(p, "Channel"), name, p, {"channel": name}) for p in data]
 
     def get_devices(self, channel: str) -> list[dict[str, Any]]:
         api_path = f"/project/channels/{self._segment(channel, 'Channel')}/devices"
@@ -305,6 +366,96 @@ class KepwareConfigApi:
             )
             for properties in devices
         ]
+
+    def get_device(self, channel: str, device: str) -> dict[str, Any] | None:
+        path = f"/project/channels/{self._segment(channel, 'Channel')}/devices"
+        data = self._collection(self._get(path, use_cache=False), "Device")
+        nodes = [self._node("Device", name := self._name(p, "Device"), f"{channel}.{name}", p) for p in data]
+        return self._exact(nodes, device)
+
+    def get_tag_group(self, channel: str, device: str, group_path: list[str]) -> dict[str, Any] | None:
+        if not group_path:
+            raise KepwareConfigError("A Tag Group path is required.")
+        parent = self._device_path(channel, device)
+        for group in group_path[:-1]:
+            parent += f"/tag_groups/{self._segment(group, 'Tag Group')}"
+        data = self._collection(self._get(f"{parent}/tag_groups", use_cache=False), "Tag Group")
+        nodes = [self._node("Tag Group", name := self._name(p, "Tag Group"), ".".join([channel, device, *group_path[:-1], name]), p) for p in data]
+        return self._exact(nodes, group_path[-1])
+
+    def _device_path(self, channel: str, device: str) -> str:
+        return f"/project/channels/{self._segment(channel, 'Channel')}/devices/{self._segment(device, 'Device')}"
+
+    def _tag_parent_path(self, channel: str, device: str, group_path: list[str]) -> str:
+        path = self._device_path(channel, device)
+        for group in group_path:
+            path += f"/tag_groups/{self._segment(group, 'Tag Group')}"
+        return path
+
+    def get_property_definitions(self, path: str) -> list[dict[str, Any]]:
+        data = self._get(f"{path}?content=property_definitions", use_cache=False)
+        definitions = data.get("property_definitions") if isinstance(data, dict) else None
+        return self._collection(definitions, "property definition")
+
+    def get_property_states(self, path: str) -> Any:
+        return self._get(f"{path}?content=property_states", use_cache=False)
+
+    def create_channel(self, name: str, driver: str, persistence: bool = False) -> dict[str, Any]:
+        payload = {NAME_PROPERTY: name, "servermain.MULTIPLE_TYPES_DEVICE_DRIVER": driver,
+                   "memory_based.CHANNEL_ITEM_PERSISTENCE": persistence}
+        return self._create_verified("/project/channels", name, "Channel", payload, self.get_channel)
+
+    def create_device(self, channel: str, name: str, driver: str, model: int,
+                      device_id_format: int, device_id: str) -> dict[str, Any]:
+        collection = f"/project/channels/{self._segment(channel, 'Channel')}/devices"
+        payload = {NAME_PROPERTY: name, "servermain.MULTIPLE_TYPES_DEVICE_DRIVER": driver,
+                   "servermain.DEVICE_MODEL": model, "servermain.DEVICE_ID_FORMAT": device_id_format,
+                   "servermain.DEVICE_ID_STRING": device_id, "servermain.DEVICE_DATA_COLLECTION": True}
+        return self._create_verified(collection, name, "Device", payload, lambda value: self.get_device(channel, value))
+
+    def create_tag_group(self, channel: str, device: str, parent_groups: list[str], name: str) -> dict[str, Any]:
+        collection = f"{self._tag_parent_path(channel, device, parent_groups)}/tag_groups"
+        return self._create_verified(collection, name, "Tag Group", {NAME_PROPERTY: name},
+                                     lambda value: self.get_tag_group(channel, device, [*parent_groups, value]))
+
+    def _create_verified(self, collection: str, name: str, object_type: str,
+                         payload: dict[str, Any], getter) -> dict[str, Any]:
+        if not self.settings.write_enabled:
+            raise KepwareConfigError("Kepware configuration write mode is disabled.")
+        with self._write_lock:
+            if getter(name) is not None:
+                raise KepwareConfigError(f"A {object_type} named '{name}' already exists.")
+            self._post_object(collection, payload, object_type)
+            self._invalidate_paths(collection)
+            created = getter(name)
+            if created is None:
+                raise KepwareConfigError(f"Kepware {object_type} creation verification failed.")
+            for key, expected in payload.items():
+                if created["properties"].get(key) != expected:
+                    raise KepwareConfigError(f"Kepware {object_type} creation verification failed.")
+            return created
+
+    def update_tag(self, channel: str, device: str, group_path: list[str],
+                   tag_name: str, properties: dict[str, Any]) -> dict[str, Any]:
+        if not self.settings.write_enabled:
+            raise KepwareConfigError("Kepware configuration write mode is disabled.")
+        allowed = {"servermain.TAG_ADDRESS", "servermain.TAG_DATA_TYPE",
+                   "servermain.TAG_READ_WRITE_ACCESS", "servermain.TAG_SCAN_RATE_MILLISECONDS",
+                   "common.ALLTYPES_DESCRIPTION"}
+        if not properties or not set(properties).issubset(allowed):
+            raise KepwareConfigError("Tag update contains a disallowed property.")
+        path = f"{self._tag_parent_path(channel, device, group_path)}/tags/{self._segment(tag_name, 'Tag')}"
+        with self._write_lock:
+            current = self._get(path, use_cache=False)
+            project_id = current.get("PROJECT_ID") if isinstance(current, dict) else None
+            if not isinstance(project_id, int):
+                raise KepwareConfigError("Kepware Tag response has no valid PROJECT_ID.")
+            self._put_object(path, {**properties, "PROJECT_ID": project_id})
+            self._invalidate_paths(path)
+            verified = self._get(path, use_cache=False)
+            if not isinstance(verified, dict) or any(verified.get(k) != v for k, v in properties.items()):
+                raise KepwareConfigError("Kepware Tag update verification failed.")
+            return self._node("Tag", self._name(verified, "Tag"), ".".join([channel, device, *group_path, tag_name]), verified)
 
     def get_device_children(self, channel: str, device: str) -> list[dict[str, Any]]:
         api_path = (

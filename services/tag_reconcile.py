@@ -71,13 +71,16 @@ def validate_snapshot(tags: Iterable[TagSnapshot]) -> tuple[TagSnapshot, ...]:
 class OpcTagDiscoverer:
     """Strict OPC traversal that returns a complete in-memory snapshot or fails."""
 
-    def __init__(self, opc_url: str, client_factory: Callable[..., Client] = Client) -> None:
+    def __init__(self, opc_url: str, client_factory: Callable[..., Client] = Client,
+                 excluded_paths: Iterable[str] = ()) -> None:
         self._opc_url = opc_url
         self._client_factory = client_factory
+        self._excluded_paths = frozenset(excluded_paths)
 
     async def _browse_node(self, node, path: str, tags: list[TagSnapshot]) -> None:
         node_class = await node.read_node_class()
-        if node_class == NodeClass.Variable and is_allowed_path(path):
+        if (node_class == NodeClass.Variable and is_allowed_path(path)
+                and path not in self._excluded_paths):
             data_type = (await node.read_data_type_as_variant_type()).name
             tags.append(TagSnapshot(path=path, node_id=node.nodeid.to_string(), data_type=data_type))
 

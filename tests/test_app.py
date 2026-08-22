@@ -219,6 +219,7 @@ class OpcTagManagerAppTests(unittest.TestCase):
             patch.object(OpcTagManager, "alarm_preflight", preflight),
             patch.object(OpcTagManager.kepware_config_api.session, "post") as post,
             patch.object(OpcTagManager.kepware_config_api.session, "put") as put,
+            patch.object(OpcTagManager.kepware_config_api.session, "delete") as delete,
         ):
             status, body = self.request("GET", "/api/runtime/alarm-readiness")
         self.assertEqual(status, 200)
@@ -226,6 +227,7 @@ class OpcTagManagerAppTests(unittest.TestCase):
         preflight.run.assert_called_once_with()
         post.assert_not_called()
         put.assert_not_called()
+        delete.assert_not_called()
 
     def test_create_route_requires_all_explicit_operational_properties(self):
         status, body = self.request(
