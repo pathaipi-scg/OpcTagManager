@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import asdict, dataclass
+import logging
+import re
 
 from asyncua import Client, ua
 from asyncua.ua.uaerrors import UaStatusCodeError
@@ -17,6 +19,26 @@ INTEGER_VARIANT_BOUNDS = {
     ua.VariantType.Int64: (-9223372036854775808, 9223372036854775807),
     ua.VariantType.UInt64: (0, 18446744073709551615),
 }
+logger = logging.getLogger("opctagmanager.alarm_reload")
+SENSITIVE_MESSAGE = re.compile(
+    r"(?i)(password|passwd|username|credential|secret|token|appkey)|(?:opc\.tcp|https?)://"
+)
+
+
+def _safe_exception_message(exc: Exception) -> str:
+    message = " ".join(str(exc).split())
+    if not message or SENSITIVE_MESSAGE.search(message):
+        return "[redacted]"
+    return message[:200]
+
+
+def _log_failure(phase: str, exc: Exception) -> None:
+    logger.warning(
+        "alarm_reload_failure phase=%s exception=%s message=%s",
+        phase,
+        type(exc).__name__,
+        _safe_exception_message(exc),
+    )
 
 
 def is_supported_integer_variant(variant) -> bool:
@@ -44,6 +66,10 @@ def increment_integer_variant(variant) -> ua.Variant:
 class ReloadResult:
     notified: bool
     category: str | None = None
+    phase: str | None = None
+    write_attempted: bool = False
+    write_succeeded: bool = False
+    cleanup_error: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -65,45 +91,99 @@ class AlarmReloadNotifier:
         return "BadNodeIdUnknown" in str(exc) or "BadNodeIdInvalid" in str(exc)
 
     async def _notify(self, node_id: str) -> ReloadResult:
+        client_context = None
+        client = None
+        primary: ReloadResult | None = None
         try:
-            client_context = self.client_factory(self.opc_url)
-            async with client_context as client:
+            try:
+                client_context = self.client_factory(self.opc_url)
+            except Exception as exc:
+                _log_failure("client_construction", exc)
+                return ReloadResult(False, "connection_error", "client_construction")
+            try:
+                client = await client_context.__aenter__()
+            except Exception as exc:
+                _log_failure("connect", exc)
+                return ReloadResult(False, "connection_error", "connect")
+            try:
                 try:
                     node = client.get_node(node_id)
-                    data_value = await node.read_data_value()
-                    variant = data_value.Value
                 except Exception as exc:
-                    if self._is_missing_node(exc):
-                        return ReloadResult(False, "missing_node")
-                    return ReloadResult(False, "read_failed")
+                    _log_failure("get_node", exc)
+                    primary = ReloadResult(False, "node_read_error", "get_node")
+                if primary is None:
+                    try:
+                        data_value = await node.read_data_value()
+                        variant = data_value.Value
+                    except Exception as exc:
+                        category = "missing_node" if self._is_missing_node(exc) else "node_read_error"
+                        _log_failure("read", exc)
+                        primary = ReloadResult(False, category, "read")
+                if primary is None:
+                    try:
+                        next_variant = increment_integer_variant(variant)
+                    except (TypeError, ValueError) as exc:
+                        _log_failure("datatype_preparation", exc)
+                        primary = ReloadResult(False, "datatype_error", "datatype_preparation")
+                if primary is None:
+                    try:
+                        await node.write_value(
+                            ua.DataValue(Value=next_variant, StatusCode=None)
+                        )
+                        primary = ReloadResult(True, phase="write", write_attempted=True, write_succeeded=True)
+                    except Exception as exc:
+                        _log_failure("write", exc)
+                        primary = ReloadResult(False, "write_error", "write", write_attempted=True)
+            finally:
                 try:
-                    next_variant = increment_integer_variant(variant)
-                except (TypeError, ValueError):
-                    return ReloadResult(False, "unsupported_datatype")
-                try:
-                    await node.write_value(next_variant)
-                except Exception:
-                    return ReloadResult(False, "write_failed")
-                return ReloadResult(True)
-        except Exception:
-            return ReloadResult(False, "connection_error")
+                    await client_context.__aexit__(None, None, None)
+                except Exception as exc:
+                    _log_failure("disconnect", exc)
+                    if primary is None:
+                        primary = ReloadResult(False, "cleanup_error", "disconnect", cleanup_error=True)
+                    elif primary.write_succeeded:
+                        primary = ReloadResult(
+                            True, "cleanup_error", "disconnect", True, True, True
+                        )
+                    else:
+                        primary = ReloadResult(
+                            primary.notified, primary.category, primary.phase,
+                            primary.write_attempted, primary.write_succeeded, True,
+                        )
+            return primary or ReloadResult(False, "client_runtime_error", "asyncio_boundary")
+        except Exception as exc:
+            _log_failure("client_runtime", exc)
+            return ReloadResult(False, "client_runtime_error", "client_runtime")
+
+    def _run_notify(self, node_id: str) -> ReloadResult:
+        coroutine = self._notify(node_id)
+        try:
+            return asyncio.run(coroutine)
+        except RuntimeError as exc:
+            coroutine.close()
+            _log_failure("asyncio_boundary", exc)
+            return ReloadResult(False, "client_runtime_error", "asyncio_boundary")
+        except Exception as exc:
+            _log_failure("asyncio_boundary", exc)
+            return ReloadResult(False, "client_runtime_error", "asyncio_boundary")
 
     def notify(self) -> ReloadResult:
         if not self.enabled:
             return ReloadResult(False, "disabled")
         if not self.opc_url or not self.reload_node:
             return ReloadResult(False, "connection_error")
+        first = self._run_notify(self.reload_node)
+        if first.category != "missing_node" or self.self_healer is None:
+            return first
         try:
-            first = asyncio.run(self._notify(self.reload_node))
-            if first.category != "missing_node" or self.self_healer is None:
-                return first
             healed = self.self_healer()
-            resolved = healed.get("resolved_node_id") if isinstance(healed, dict) else None
-            if not resolved:
-                return first
-            return asyncio.run(self._notify(resolved))
-        except Exception:
-            return ReloadResult(False, "connection_error")
+        except Exception as exc:
+            _log_failure("self_heal", exc)
+            return ReloadResult(False, "client_runtime_error", "self_heal")
+        resolved = healed.get("resolved_node_id") if isinstance(healed, dict) else None
+        if not resolved:
+            return first
+        return self._run_notify(resolved)
 
 
 class AlarmReloadReadinessProbe:
