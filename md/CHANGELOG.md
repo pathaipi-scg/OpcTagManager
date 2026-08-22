@@ -7,6 +7,16 @@ All significant project changes should be documented here.
 
 ## Unreleased
 
+### 2026-08-23 — Phase 4.11C single-tag sync and Alarm end-to-end live validation
+
+Added `POST /api/opc-tags/sync-one`, an explicitly confirmed operation that resolves one exact existing OPC Variable and reuses `TagRegistry.sync_tag()` without Kepware mutation, Alarm reload, broad tree traversal, Full Reconcile, or historian rebuild. The operation rejects noncanonical identities and preserves the configured exact reload-control historian exclusion. Focused tests cover endpoint safety, exact identity enforcement, exclusion behavior, single-row registry effects, BrowserRun completion, unrelated-row preservation, idempotency, and TagId preservation.
+
+Live greenfield validation registered `SERVER/SYSTEM/TEST_ALM` as TagId 3, created AlarmId 1 through the real Alarm API, changed `RELOAD_ALARM` from 1 to 2, and proved the same `alarm_sound_v11` process reloaded and safely baselined the new mapping. A controlled UInt16 `0 -> 20 -> 0` sequence generated exactly one HIGH transition, one physical `DINGDONG.mp3` playback, and one Alarm_History row, with no duplicate playback/history, reconnect, or runtime error.
+
+Verdict: `PHASE_4_11C_ALARM_END_TO_END_LIVE_VALIDATED`
+
+This was Development Notebook/greenfield commissioning only. No production deployment or cutover occurred. Controlled test records remain pending separately approved cleanup.
+
 ### 2026-06-26 (reload signal via InfluxDB instead of Modbus)
 
 Change Summary

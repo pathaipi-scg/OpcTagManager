@@ -336,6 +336,8 @@ def test_fast_sync_insert_retry_identity_reactivation_metadata_and_level_orderin
     assert changed.state == "changed"
     assert retried.state == "unchanged"
     assert retried.tag_id == inserted.tag_id
+    assert len(database.tags) == 2
+    assert set(database.tags) == {"Line/Device/New", "Line/Device/Existing"}
     assert database.tags["Line/Device/Existing"]["TagId"] == 7
     assert database.tags["Line/Device/Existing"]["NodeId"] == "new-existing"
     assert database.tags["Line/Device/Existing"]["DataType"] == "Float"
@@ -343,6 +345,8 @@ def test_fast_sync_insert_retry_identity_reactivation_metadata_and_level_orderin
     levels = [level[1:] for level in database.levels if level[0] == inserted.tag_id]
     assert levels == [(0, "Line"), (1, "Device"), (2, "New")]
     assert all(row["IsActive"] for row in database.tags.values())
+    assert len(database.runs) == 3
+    assert all(run["EndTime"] is not None and run["TotalTags"] == 1 for run in database.runs.values())
 
 
 def test_fast_sync_sql_failure_rolls_back_run_tag_and_levels_together():

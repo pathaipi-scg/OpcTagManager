@@ -186,6 +186,12 @@ class FullReconcileRequest(BaseModel):
     confirm: Literal["FULL_RECONCILE"]
 
 
+class SyncExistingTagRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str = Field(min_length=1)
+    confirm: Literal["SYNC_ONE_EXISTING_TAG"]
+
+
 class TagKnowledgeIdentityRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     channel: str
@@ -322,6 +328,7 @@ tag_fast_sync_service = TagFastSyncService(
     ),
     registry=tag_registry,
     on_registry_changed=runtime_supervisor.notify_registry_changed,
+    excluded_paths=() if RELOAD_ALARM_HISTORIAN_ENABLED else (reload_control_path,),
 )
 alarm_audio_repository = AlarmAudioRepository(MP3_FOLDER)
 reload_contract = SystemControlContract(
@@ -715,6 +722,32 @@ def kepware_group_children(
 def refresh_kepware_cache():
     kepware_config_api.clear_cache()
     return kepware_browse_response(kepware_config_api.get_channels)
+
+
+@app.post("/api/opc-tags/sync-one")
+def sync_one_existing_tag(payload: SyncExistingTagRequest):
+    try:
+        synced = asyncio.run(tag_fast_sync_service.sync_existing_tag(payload.path))
+    except (FastSyncError, TagRegistryError) as exc:
+        return JSONResponse(
+            {
+                "success": False,
+                "operation": "single_existing_tag_sync",
+                "kepware_mutation": "not_requested",
+                "alarm_reload": "not_requested",
+                "historian_subscription_sync": {"status": "not_requested"},
+                "error": str(exc),
+            },
+            status_code=400,
+        )
+    return {
+        "success": True,
+        "operation": "single_existing_tag_sync",
+        **synced.to_dict(),
+        "kepware_mutation": "not_requested",
+        "alarm_reload": "not_requested",
+        "historian_subscription_sync": {"status": "not_requested"},
+    }
 
 
 @app.post("/api/kepware/tags")

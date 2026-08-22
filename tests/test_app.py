@@ -188,6 +188,53 @@ class OpcTagManagerAppTests(unittest.TestCase):
         status, _body = self.request("POST", "/api/runtime/full-reconcile", {"confirm": "no"})
         self.assertEqual(status, 422)
 
+    def test_single_existing_tag_sync_requires_confirmation(self):
+        status, _body = self.request(
+            "POST",
+            "/api/opc-tags/sync-one",
+            {"path": "Line/Device/Tag", "confirm": "no"},
+        )
+        self.assertEqual(status, 422)
+
+    def test_single_existing_tag_sync_has_no_kepware_alarm_or_historian_mutation(self):
+        synced = FastSyncResult(
+            path="Line/Device/Tag",
+            node_id="ns=2;s=Line.Device.Tag",
+            data_type="Boolean",
+            tag_id=12,
+            registry_state="added",
+            run_id=8,
+            attempts=1,
+            duration=0.02,
+            historian_rebuild_requested=False,
+        )
+        with (
+            patch.object(
+                OpcTagManager.tag_fast_sync_service,
+                "sync_existing_tag",
+                new=AsyncMock(return_value=synced),
+            ) as sync,
+            patch.object(OpcTagManager.kepware_config_api, "create_tag") as create,
+            patch.object(OpcTagManager.alarm_reload_notifier, "notify") as notify,
+            patch.object(OpcTagManager.runtime_supervisor, "notify_registry_changed") as historian,
+        ):
+            status, body = self.request(
+                "POST",
+                "/api/opc-tags/sync-one",
+                {"path": "Line/Device/Tag", "confirm": "SYNC_ONE_EXISTING_TAG"},
+            )
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["operation"], "single_existing_tag_sync")
+        self.assertEqual(payload["kepware_mutation"], "not_requested")
+        self.assertEqual(payload["alarm_reload"], "not_requested")
+        self.assertEqual(payload["historian_subscription_sync"]["status"], "not_requested")
+        sync.assert_awaited_once_with("Line/Device/Tag")
+        create.assert_not_called()
+        notify.assert_not_called()
+        historian.assert_not_called()
+
     @patch.object(OpcTagManager, "get_conn", return_value=FakeConnection())
     def test_runtime_status_is_read_only_and_separates_development_from_production_ownership(self, _get_conn):
         status, body = self.request("GET", "/api/runtime/status")

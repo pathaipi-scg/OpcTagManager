@@ -1,5 +1,16 @@
 # OpcTagManager TODO
 
+## Phase 4.11C — Single-tag sync and Alarm end-to-end validation
+
+- [x] Add a canonical `POST /api/opc-tags/sync-one` path that registers exactly one existing OPC Variable through `TagRegistry.sync_tag()`.
+- [x] Prevent single-existing-tag sync from mutating Kepware configuration, notifying Alarm reload, or rebuilding historian subscriptions.
+- [x] Preserve the exact `SYSTEM/OpcTagManager/RELOAD_ALARM` historian exclusion while permitting normal selected tags.
+- [x] Prove BrowserRun, TagMaster, and TagLevel single-tag lifecycle and repeat-sync identity behavior with focused tests.
+- [x] Register `SERVER/SYSTEM/TEST_ALM` as TagId 3 on the approved greenfield environment.
+- [x] Validate one Alarm mapping, `RELOAD_ALARM` `1 -> 2`, consumer reload, UInt16 trigger `0 -> 20 -> 0`, one physical `DINGDONG.mp3` playback, and one Alarm_History row.
+- [x] Record `PHASE_4_11C_ALARM_END_TO_END_LIVE_VALIDATED` without claiming production cutover.
+- [ ] Perform cleanup of the controlled greenfield test mapping and registry/history records only after separate approval.
+
 ## Phase 4.11B Slice 1 — Alarm domain and existing mapping integration
 
 - [x] Audit the current `alarm_system`, `alarm_sound`, and live read-only `Alarm_Lists` contract.

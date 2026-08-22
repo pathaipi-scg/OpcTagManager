@@ -102,17 +102,23 @@ class ExactOpcTagResolver:
 
 
 class TagFastSyncService:
-    def __init__(self, resolver: ExactOpcTagResolver, registry: TagRegistry, on_registry_changed=None) -> None:
+    def __init__(self, resolver: ExactOpcTagResolver, registry: TagRegistry,
+                 on_registry_changed=None, excluded_paths: tuple[str, ...] = ()) -> None:
         self._resolver = resolver
         self._registry = registry
         self._on_registry_changed = on_registry_changed
+        self._excluded_paths = frozenset(excluded_paths)
 
-    async def sync(self, path: str) -> FastSyncResult:
+    async def _sync(self, path: str, *, notify_registry_changed: bool) -> FastSyncResult:
+        if path != path.strip() or path in self._excluded_paths:
+            raise FastSyncError("The requested OPC Tag Path is excluded from registry synchronization.")
         started = perf_counter()
         snapshot, attempts = await self._resolver.resolve(path)
+        if snapshot.path != path:
+            raise FastSyncError("Resolved OPC Tag identity did not match the requested exact Path.")
         applied = self._registry.sync_tag(snapshot)
         rebuild_requested = False
-        if self._on_registry_changed is not None:
+        if notify_registry_changed and self._on_registry_changed is not None:
             try:
                 rebuild_requested = bool(self._on_registry_changed(applied.run_id))
             except Exception:
@@ -128,3 +134,11 @@ class TagFastSyncService:
             duration=round(perf_counter() - started, 3),
             historian_rebuild_requested=rebuild_requested,
         )
+
+    async def sync(self, path: str) -> FastSyncResult:
+        """Synchronize one Tag created through the Kepware configuration workflow."""
+        return await self._sync(path, notify_registry_changed=True)
+
+    async def sync_existing_tag(self, path: str) -> FastSyncResult:
+        """Register one exact existing OPC Tag without Kepware or historian mutation."""
+        return await self._sync(path, notify_registry_changed=False)

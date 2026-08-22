@@ -132,3 +132,55 @@ def test_resolution_failure_does_not_touch_registry_or_notify_generation():
         asyncio.run(service.sync("Line/Device/Tag"))
     assert registry.snapshots == []
     assert notifications == []
+
+
+def test_existing_tag_sync_registers_exactly_one_without_historian_notification():
+    registry = Registry()
+    notifications = []
+    service = TagFastSyncService(Resolver(), registry, notifications.append)
+
+    result = asyncio.run(service.sync_existing_tag("Line/Device/Tag"))
+
+    assert result.path == "Line/Device/Tag"
+    assert result.tag_id == 9
+    assert result.historian_rebuild_requested is False
+    assert registry.snapshots == [TagSnapshot("Line/Device/Tag", "node", "Boolean")]
+    assert notifications == []
+
+
+def test_existing_tag_sync_rejects_exact_system_control_exclusion_before_resolution():
+    class TrackingResolver:
+        def __init__(self):
+            self.paths = []
+
+        async def resolve(self, path):
+            self.paths.append(path)
+            return TagSnapshot(path, "reload-node", "Int32"), 1
+
+    resolver = TrackingResolver()
+    registry = Registry()
+    service = TagFastSyncService(
+        resolver,
+        registry,
+        excluded_paths=("SYSTEM/OpcTagManager/RELOAD_ALARM",),
+    )
+
+    with pytest.raises(FastSyncError, match="excluded"):
+        asyncio.run(service.sync_existing_tag("SYSTEM/OpcTagManager/RELOAD_ALARM"))
+
+    assert resolver.paths == []
+    assert registry.snapshots == []
+
+
+def test_existing_tag_sync_rejects_noncanonical_resolved_identity_without_registry_write():
+    class MismatchedResolver:
+        async def resolve(self, _path):
+            return TagSnapshot("Line/Other/Tag", "node", "Boolean"), 1
+
+    registry = Registry()
+    service = TagFastSyncService(MismatchedResolver(), registry)
+
+    with pytest.raises(FastSyncError, match="did not match"):
+        asyncio.run(service.sync_existing_tag("Line/Device/Tag"))
+
+    assert registry.snapshots == []
