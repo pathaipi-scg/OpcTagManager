@@ -180,6 +180,21 @@ def test_update_preserves_alarm_id_and_tag_id_and_supports_enable_disable(audio)
     assert updated["repeat"] == 5
 
 
+def test_each_alarm_mutation_notifies_exactly_once(audio):
+    database = Database()
+    notifier = Notifier()
+    alarm_service = service(database, audio, notifier)
+    created = alarm_service.create(10, values())
+    assert notifier.calls == 1
+    alarm_id = created["mapping"]["alarm_id"]
+    alarm_service.update(alarm_id, values(enable_alarm=False))
+    assert notifier.calls == 2
+    alarm_service.update(alarm_id, values(enable_alarm=True))
+    assert notifier.calls == 3
+    alarm_service.delete(alarm_id)
+    assert notifier.calls == 4
+
+
 def test_delete_commits_then_notifies(audio):
     database = Database()
     notifier = Notifier()

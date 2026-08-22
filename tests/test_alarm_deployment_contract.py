@@ -30,3 +30,13 @@ def test_ownership_defaults_remain_legacy_and_development_only():
     assert "OPCTAGMANAGER_ALARM_CAPABILITY=development_ready" in example
     assert "ALARM_WRITE_ENABLED=false" in example
     assert "ALARM_RELOAD_ENABLED=false" in example
+    assert "RELOAD_ALARM_NODE=" in example
+    assert "RELOAD_ALARM_ADDR=" not in example
+
+
+def test_alarm_reload_transport_has_no_python_modbus_dependency():
+    reload_source = (ROOT / "services" / "alarm_reload.py").read_text(encoding="utf-8")
+    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    assert "pyModbusTCP" not in reload_source
+    assert "pyModbusTCP" not in requirements
+    assert "OPC_URL" in (ROOT / "config" / ".env.example").read_text(encoding="utf-8")

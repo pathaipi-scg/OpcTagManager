@@ -42,11 +42,9 @@ from config.config import (
     KM_TAG_WRITE_ENABLED,
     KM_RESOURCE_WRITE_ENABLED,
     KM_RESOURCE_MAX_UPLOAD_MB,
-    KEPWARE_MODBUS_HOST,
-    KEPWARE_MODBUS_PORT,
     MP3_FOLDER,
     PRODUCTION_LINE,
-    RELOAD_ALARM_ADDR,
+    RELOAD_ALARM_NODE,
     PRODUCTION_ALARM_OWNER,
     OPCTAGMANAGER_ALARM_CAPABILITY,
     SQL_DB,
@@ -84,7 +82,7 @@ from services.runtime_supervisor import HistorianSupervisor
 from services.historian_cutover import HistorianCutoverPreflight
 from services.sql_connection import connect_sql
 from services.alarm_audio import AlarmAudioError, AlarmAudioRepository
-from services.alarm_reload import AlarmReloadNotifier
+from services.alarm_reload import AlarmReloadNotifier, AlarmReloadReadinessProbe
 from services.alarm_service import AlarmService, AlarmServiceError, AlarmValues
 from services.alarm_preflight import AlarmPreflight
 
@@ -302,9 +300,8 @@ tag_fast_sync_service = TagFastSyncService(
 alarm_audio_repository = AlarmAudioRepository(MP3_FOLDER)
 alarm_reload_notifier = AlarmReloadNotifier(
     enabled=ALARM_RELOAD_ENABLED,
-    host=KEPWARE_MODBUS_HOST,
-    port=KEPWARE_MODBUS_PORT,
-    address=RELOAD_ALARM_ADDR,
+    opc_url=OPC_URL,
+    reload_node=RELOAD_ALARM_NODE,
 )
 alarm_service = AlarmService(
     connection_factory=get_conn,
@@ -319,9 +316,7 @@ alarm_preflight = AlarmPreflight(
     capability=OPCTAGMANAGER_ALARM_CAPABILITY,
     alarm_write_enabled=ALARM_WRITE_ENABLED,
     alarm_reload_enabled=ALARM_RELOAD_ENABLED,
-    reload_host=KEPWARE_MODBUS_HOST,
-    reload_port=KEPWARE_MODBUS_PORT,
-    reload_address=RELOAD_ALARM_ADDR,
+    reload_probe=AlarmReloadReadinessProbe(OPC_URL, RELOAD_ALARM_NODE),
 )
 historian_cutover_preflight = HistorianCutoverPreflight(
     connection_factory=get_conn,

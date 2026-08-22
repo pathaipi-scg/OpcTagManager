@@ -279,4 +279,16 @@ Keep deferred until separately approved:
 - [x] Complete full OpcTagManager, alarm runtime, alarm_sound syntax, JavaScript syntax, and deployment-value regression checks.
 - [x] Record `PHASE_4_11C_SLICE1_INTEGRATED_NOTEBOOK_RUNTIME_VALIDATED` without claiming production cutover.
 - [ ] Review and approve Slice 1 finalization before any commit or push.
-- [ ] Later, under separate approval: begin the OPC-UA Alarm reload and system-control self-healing refactor.
+- [x] Begin the separately approved OPC-UA Alarm reload refactor as Slice 2A; retain system-control self-healing for Slice 2B.
+
+## Phase 4.11C Slice 2A - OPC-UA Alarm reload and health hardening
+
+- [x] Replace the Alarm reload Modbus path with an OPC-UA counter read and explicitly typed write.
+- [x] Support scalar signed/unsigned 8/16/32/64-bit increment and datatype-safe wrap.
+- [x] Preserve post-commit Alarm reload response semantics and exactly-one notification behavior.
+- [x] Keep ordinary Kepware Tag creation independent from Alarm reload.
+- [x] Add strictly read-only OPC reload readiness without test writes or Kepware configuration mutations.
+- [x] Remove `pyModbusTCP` after confirming it has no remaining active OpcTagManager consumer.
+- [x] Make alarm_sound mapping reload, subscription replacement, reconnect, and health behavior testable while preserving transition semantics.
+- [ ] Review and approve Slice 2A before any commit or push.
+- [ ] Slice 2B: prove and implement owned Kepware hierarchy/bootstrap, control-Tag creation, property repair, `PROJECT_ID` concurrency, and bounded self-healing.

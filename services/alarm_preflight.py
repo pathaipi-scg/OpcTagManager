@@ -11,9 +11,7 @@ class AlarmPreflight:
     capability: str
     alarm_write_enabled: bool
     alarm_reload_enabled: bool
-    reload_host: str
-    reload_port: int
-    reload_address: int
+    reload_probe: object
 
     def run(self) -> dict:
         try:
@@ -45,6 +43,15 @@ class AlarmPreflight:
             and integrity["unsupported_modes"] == 0
             and missing_mp3_count == 0
         )
+        reload_status = self.reload_probe.run()
+        reload_ready = bool(
+            reload_status["opc_url_configured"]
+            and reload_status["reload_node_configured"]
+            and reload_status["opc_endpoint_reachable"]
+            and reload_status["reload_node_exists"]
+            and reload_status["reload_node_readable"]
+            and reload_status["reload_datatype_supported"]
+        )
         return {
             "read_only": True,
             "ready": data_ready,
@@ -54,7 +61,11 @@ class AlarmPreflight:
             "sql_reachable": sql_reachable,
             "mp3_repository_configured": repository_configured,
             "mp3_repository_reachable": repository_reachable,
-            "reload_configuration_present": bool(self.reload_host and self.reload_port > 0 and self.reload_address >= 0),
+            "reload_configuration_present": bool(
+                reload_status["opc_url_configured"] and reload_status["reload_node_configured"]
+            ),
+            "reload_ready": reload_ready,
+            **reload_status,
             "alarm_write_enabled": self.alarm_write_enabled,
             "alarm_reload_enabled": self.alarm_reload_enabled,
             "mapping_counts": {

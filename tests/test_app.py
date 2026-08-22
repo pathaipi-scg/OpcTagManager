@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from urllib.parse import urlsplit
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import OpcTagManager
 from starlette.datastructures import UploadFile
@@ -211,6 +211,22 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertEqual(json.loads(body), expected)
         run.assert_called_once_with()
 
+    def test_alarm_readiness_endpoint_never_calls_kepware_write_methods(self):
+        expected = {"read_only": True, "ready": True, "reload_ready": True}
+        preflight = MagicMock()
+        preflight.run.return_value = expected
+        with (
+            patch.object(OpcTagManager, "alarm_preflight", preflight),
+            patch.object(OpcTagManager.kepware_config_api.session, "post") as post,
+            patch.object(OpcTagManager.kepware_config_api.session, "put") as put,
+        ):
+            status, body = self.request("GET", "/api/runtime/alarm-readiness")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), expected)
+        preflight.run.assert_called_once_with()
+        post.assert_not_called()
+        put.assert_not_called()
+
     def test_create_route_requires_all_explicit_operational_properties(self):
         status, body = self.request(
             "POST",
@@ -296,6 +312,26 @@ class OpcTagManagerAppTests(unittest.TestCase):
         create.assert_called_once()
         sync.assert_awaited_once()
         reconcile.assert_not_awaited()
+
+    def test_normal_kepware_tag_creation_never_notifies_alarm_reload(self):
+        synced = type("Synced", (), {
+            "historian_rebuild_requested": False,
+            "to_dict": lambda self: {"path": "Line/Device/Group/NewTag"},
+        })()
+        runtime = {
+            "supervisor_enabled": False,
+            "rebuild_pending": True,
+            "registry_generation": 3,
+        }
+        with (
+            patch.object(OpcTagManager.kepware_config_api, "create_tag", return_value=self.created_tag_result()),
+            patch.object(OpcTagManager.tag_fast_sync_service, "sync", new=AsyncMock(return_value=synced)),
+            patch.object(OpcTagManager.runtime_supervisor, "status", return_value=runtime),
+            patch.object(OpcTagManager.alarm_reload_notifier, "notify") as notify,
+        ):
+            status, _body = self.request("POST", "/api/kepware/tags", self.create_payload())
+        self.assertEqual(status, 200)
+        notify.assert_not_called()
 
     @patch.object(OpcTagManager.tag_knowledge_store, "save")
     @patch.object(OpcTagManager, "KM_TAG_WRITE_ENABLED", False)

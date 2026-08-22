@@ -111,9 +111,7 @@ if SQL_ENCRYPT not in {"", "yes", "no"}:
 ALARM_WRITE_ENABLED = get_bool_default("ALARM_WRITE_ENABLED", False)
 MP3_FOLDER = get_optional("MP3_FOLDER")
 ALARM_RELOAD_ENABLED = get_bool_default("ALARM_RELOAD_ENABLED", False)
-RELOAD_ALARM_ADDR = get_int_default("RELOAD_ALARM_ADDR", 0)
-if RELOAD_ALARM_ADDR < 0 or RELOAD_ALARM_ADDR > 65535:
-    raise RuntimeError("Configuration RELOAD_ALARM_ADDR must be between 0 and 65535")
+RELOAD_ALARM_NODE = get_optional("RELOAD_ALARM_NODE")
 PRODUCTION_ALARM_OWNER = get_optional("PRODUCTION_ALARM_OWNER") or "legacy_alarm_system"
 OPCTAGMANAGER_ALARM_CAPABILITY = get_optional("OPCTAGMANAGER_ALARM_CAPABILITY") or "development_ready"
 if PRODUCTION_ALARM_OWNER not in {"legacy_alarm_system", "opctagmanager"}:

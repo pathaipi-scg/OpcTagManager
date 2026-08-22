@@ -357,3 +357,23 @@ Revert Git Commit
 - Corrected the stale ownership-label test and completed final regression: 210 OpcTagManager tests and 5 alarm runtime tests passed; Python and JavaScript syntax checks passed; deployment-value scans found no active-source matches.
 - Recorded `PHASE_4_11C_SLICE1_INTEGRATED_NOTEBOOK_RUNTIME_VALIDATED` as a Notebook validation verdict only. No production cutover occurred.
 - Did not start the OPC-UA Alarm reload or Kepware system-control auto-bootstrap/self-healing refactor.
+
+## 2026-08-22 - Phase 4.11C Slice 2A: OPC-UA Alarm Reload and Health Hardening
+
+- Replaced the OpcTagManager Alarm reload Modbus register client with an asyncua OPC-UA read/increment/typed-write notifier using `OPC_URL` and `RELOAD_ALARM_NODE`.
+- Added scalar signed/unsigned 8/16/32/64-bit datatype validation and safe wrap; Boolean, floating-point, array, null, and unsupported values are rejected without writing.
+- Kept Alarm mutation transaction semantics unchanged and kept ordinary Kepware Tag creation isolated from Alarm reload.
+- Extended Alarm readiness with strictly read-only OPC endpoint, reload-node, datatype, and support checks; it performs no OPC write or Kepware configuration mutation.
+- Removed the now-unused `pyModbusTCP` dependency while retaining unrelated legacy Modbus configuration entries.
+- Hardened the development alarm_sound reference so every OPC session loads current SQL mappings before subscriptions, rebuilds added/removed NodeIds, preserves transition state, safely baselines new mappings, and tracks structured reload/reconnect/health status.
+- Kepware hierarchy bootstrap, control-Tag creation, property repair, `PROJECT_ID` concurrency, self-healing retry, historian exclusion changes, and production deployment remain deferred to Slice 2B.
+
+## 2026-08-22 - Phase 4.11C Slice 2A: OPC-UA Alarm Reload and Health Hardening
+
+- Replaced the OpcTagManager Alarm reload Modbus register client with an asyncua OPC-UA read/increment/typed-write notifier using `OPC_URL` and `RELOAD_ALARM_NODE`.
+- Added scalar signed/unsigned 8/16/32/64-bit datatype validation and safe wrap; Boolean, floating-point, array, null, and unsupported values are rejected without writing.
+- Kept Alarm mutation transaction semantics unchanged and kept ordinary Kepware Tag creation isolated from Alarm reload.
+- Extended Alarm readiness with strictly read-only OPC endpoint, reload-node, datatype, and support checks; it performs no OPC write or Kepware configuration mutation.
+- Removed the now-unused `pyModbusTCP` dependency while retaining unrelated legacy Modbus configuration entries.
+- Hardened the development alarm_sound reference so every OPC session loads current SQL mappings before subscriptions, rebuilds added/removed NodeIds, preserves transition state, safely baselines new mappings, and tracks structured reload/reconnect/health status.
+- Kepware hierarchy bootstrap, control-Tag creation, property repair, `PROJECT_ID` concurrency, self-healing retry, historian exclusion changes, and production deployment remain deferred to Slice 2B.
