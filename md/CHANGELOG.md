@@ -7,6 +7,14 @@ All significant project changes should be documented here.
 
 ## Unreleased
 
+### 2026-08-23 — Phase 4.11C final closeout and greenfield deployment readiness
+
+Recorded the completed historian/runtime validation, OPC-UA Alarm reload and system-control work, Value-only Kepware write correction, dedicated SQL identities, exact single-existing-tag sync, full Alarm end-to-end live validation, and guarded cleanup. The commissioning SQL records were removed while the approved Kepware test/control tags remained unchanged. Final offline regression passed 267 OpcTagManager tests, 12 alarm_sound reference tests, Python and JavaScript syntax, deployment/site-value and secret/config scans, and the active `pyModbusTCP` reload-dependency scan.
+
+Documented the greenfield source, SQL, OPC, InfluxDB, Kepware, identity, gate, NodeId-resolution, and physical playback deployment contract. This closeout records readiness for deployment review only; it does not claim production cutover or transfer production historian/Alarm ownership.
+
+Final Phase 4.11C verdict: `DEVELOPMENT_AND_GREENFIELD_COMMISSIONING_VALIDATED`. Preserved milestones are `PHASE_4_11C_SLICE1_INTEGRATED_NOTEBOOK_RUNTIME_VALIDATED` and `PHASE_4_11C_ALARM_END_TO_END_LIVE_VALIDATED`. Production blockers, non-blocking hardening, and future enhancements are classified in the closeout document. The recommended next phase is Phase 4.12 — Production Deployment Readiness and Controlled Cutover; implementation has not started.
+
 ### 2026-08-23 — Phase 4.11C single-tag sync and Alarm end-to-end live validation
 
 Added `POST /api/opc-tags/sync-one`, an explicitly confirmed operation that resolves one exact existing OPC Variable and reuses `TagRegistry.sync_tag()` without Kepware mutation, Alarm reload, broad tree traversal, Full Reconcile, or historian rebuild. The operation rejects noncanonical identities and preserves the configured exact reload-control historian exclusion. Focused tests cover endpoint safety, exact identity enforcement, exclusion behavior, single-row registry effects, BrowserRun completion, unrelated-row preservation, idempotency, and TagId preservation.

@@ -289,7 +289,7 @@ Keep deferred until separately approved:
 - [x] Correct the stale ownership-label test without reverting the intended UI.
 - [x] Complete full OpcTagManager, alarm runtime, alarm_sound syntax, JavaScript syntax, and deployment-value regression checks.
 - [x] Record `PHASE_4_11C_SLICE1_INTEGRATED_NOTEBOOK_RUNTIME_VALIDATED` without claiming production cutover.
-- [ ] Review and approve Slice 1 finalization before any commit or push.
+- [x] Review, approve, commit, and push Slice 1 finalization.
 - [x] Begin the separately approved OPC-UA Alarm reload refactor as Slice 2A; retain system-control self-healing for Slice 2B.
 
 ## Phase 4.11C Slice 2A - OPC-UA Alarm reload and health hardening
@@ -301,12 +301,37 @@ Keep deferred until separately approved:
 - [x] Add strictly read-only OPC reload readiness without test writes or Kepware configuration mutations.
 - [x] Remove `pyModbusTCP` after confirming it has no remaining active OpcTagManager consumer.
 - [x] Make alarm_sound mapping reload, subscription replacement, reconnect, and health behavior testable while preserving transition semantics.
-- [ ] Review and approve Slice 2A before any commit or push.
-- [ ] Slice 2B: prove and implement owned Kepware hierarchy/bootstrap, control-Tag creation, property repair, `PROJECT_ID` concurrency, and bounded self-healing.
+- [x] Review, approve, commit, and push Slice 2A.
+- [x] Slice 2B: prove and implement owned Kepware hierarchy/bootstrap, control-Tag creation, property repair, `PROJECT_ID` concurrency, and bounded self-healing.
 
 # Phase 4.11C Slice 2B
 
 - [x] Implement guarded Memory Based `SYSTEM/OpcTagManager/RELOAD_ALARM` ownership, drift, bootstrap, repair, bounded self-heal, readiness, and exact historian exclusion in source/tests.
-- [ ] Review regression evidence and explicitly approve a controlled live greenfield bootstrap; no live mutation has occurred.
-- [ ] Resolve the actual OPC UA NodeId after approved creation; never assume a namespace index.
+- [x] Review regression evidence and complete the controlled live greenfield Memory Based bootstrap.
+- [x] Resolve and validate the actual OPC UA NodeId after creation without assuming a namespace index.
 - [ ] Harden or explicitly accept Config API TLS certificate verification before deployment.
+
+# Phase 4.11C final closeout
+
+- [x] Validate canonical single-existing-tag registration without Kepware, Alarm reload, or historian side effects.
+- [x] Live-validate one complete Alarm mapping, reload, subscription, trigger, physical playback, history, and clear lifecycle.
+- [x] Clean up only the controlled greenfield SQL commissioning rows and retain the approved Kepware control/test tags.
+- [x] Run final OpcTagManager and alarm_sound regressions, syntax checks, deployment/secret scans, and active reload-dependency scan.
+- [x] Record the split Notebook architecture and greenfield deployment requirements.
+- [x] Classify production blockers, non-blocking hardening, and future enhancements.
+- [x] Record `DEVELOPMENT_AND_GREENFIELD_COMMISSIONING_VALIDATED` while preserving both Phase 4.11C milestone verdicts.
+- [x] Mark Phase 4.11C implementation and greenfield commissioning complete.
+- [ ] Complete production-specific deployment review and explicit cutover authorization; Phase 4.11C closeout does not grant cutover.
+
+# Phase 4.12 - Production Deployment Readiness and Controlled Cutover
+
+- [ ] Define and validate each site's ignored deployment `.env` contract.
+- [ ] Bootstrap and verify production SQL plus dedicated application identities.
+- [ ] Verify Kepware system-control bootstrap and browse-resolved reload NodeId.
+- [ ] Prove real PLC/process OPC quality and network connectivity.
+- [ ] Verify the production historian destination and ownership transition.
+- [ ] Deploy and supervise alarm_sound with validated MP3 repository access.
+- [ ] Define Windows service/startup ownership and duplicate-owner prevention.
+- [ ] Approve backup/restore and rollback procedures.
+- [ ] Execute the deployment smoke-test checklist before separately authorized cutover.
+- [ ] Perform controlled production cutover and post-cutover observation only after explicit approval.
