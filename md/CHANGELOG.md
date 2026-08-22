@@ -347,3 +347,13 @@ Revert Git Commit
 - Removed unused Influx/browser/poller/Modbus/test-node configuration from development alarm_sound.
 - Documented Server/MiniPC deployment, startup, dual-writer, staged cutover, observation, and rollback contracts.
 - Declared development functional parity complete while retaining legacy production ownership.
+
+## 2026-08-18 - Phase 4.11C Slice 1: Integrated Notebook Runtime Validation
+
+- Validated all 1,641 active Notebook historian tags subscribed with zero failures and local Influx writes advancing.
+- Validated controlled worker restart, two stability observations, graceful shutdown without orphan workers, and clean application recovery.
+- Added explicit development-runtime and production-owner status fields and UI labels while retaining legacy production historian ownership.
+- Added detailed runtime diagnostics for worker PID, subscription counts/completion, generations, last write, restart count, and last error.
+- Corrected the stale ownership-label test and completed final regression: 210 OpcTagManager tests and 5 alarm runtime tests passed; Python and JavaScript syntax checks passed; deployment-value scans found no active-source matches.
+- Recorded `PHASE_4_11C_SLICE1_INTEGRATED_NOTEBOOK_RUNTIME_VALIDATED` as a Notebook validation verdict only. No production cutover occurred.
+- Did not start the OPC-UA Alarm reload or Kepware system-control auto-bootstrap/self-healing refactor.

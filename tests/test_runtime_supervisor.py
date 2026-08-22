@@ -107,6 +107,8 @@ def test_disabled_default_never_spawns_and_tracks_pending_generation():
     assert status["registry_generation"] == 1
     assert status["rebuild_pending"] is True
     assert status["historian_ownership"] == "legacy_opc_service"
+    assert status["development_historian_runtime"] == "disabled"
+    assert status["production_historian_owner"] == "legacy_opc_service"
 
 
 def test_start_duplicate_prevention_status_rebuild_and_graceful_stop():

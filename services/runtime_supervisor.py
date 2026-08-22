@@ -31,6 +31,8 @@ class HistorianSupervisor:
         self._status = {
             "supervisor_enabled": enabled,
             "historian_ownership": "legacy_opc_service",
+            "development_historian_runtime": "canonical" if enabled else "disabled",
+            "production_historian_owner": "legacy_opc_service",
             "worker_state": "stopped" if enabled else "disabled",
             "worker_pid": None,
             "restart_count": 0,

@@ -269,3 +269,14 @@ Keep deferred until separately approved:
 - [x] Slice 4: exact-Tag Fast Sync after Kepware create, atomic registry update, pending historian rebuild, and legacy compatibility plan.
 - [ ] Obtain explicit LIVE cutover authorization only after preflight passes and all manual prerequisites are recorded.
 - [ ] Later: compatibility wrappers and startup ownership, only after explicit approval.
+
+## Phase 4.11C Slice 1 - Integrated Notebook runtime validation
+
+- [x] Validate all 1,641 active tags subscribed with zero failures and Notebook-local Influx writes advancing.
+- [x] Validate controlled historian-worker restart, stable observation periods, graceful shutdown, and clean recovery.
+- [x] Separate `Development Historian Runtime` from `Production Historian Owner` in runtime status and UI.
+- [x] Correct the stale ownership-label test without reverting the intended UI.
+- [x] Complete full OpcTagManager, alarm runtime, alarm_sound syntax, JavaScript syntax, and deployment-value regression checks.
+- [x] Record `PHASE_4_11C_SLICE1_INTEGRATED_NOTEBOOK_RUNTIME_VALIDATED` without claiming production cutover.
+- [ ] Review and approve Slice 1 finalization before any commit or push.
+- [ ] Later, under separate approval: begin the OPC-UA Alarm reload and system-control self-healing refactor.

@@ -102,6 +102,8 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertIn('id="alarm-mp3-warning"', html)
         self.assertIn('id="production-alarm-owner">legacy_alarm_system', html)
         self.assertIn('id="alarm-capability">development_ready', html)
+        self.assertIn('id="development-historian-runtime"', html)
+        self.assertIn('id="production-historian-owner"', html)
         self.assertIn('<html lang="en" data-theme="dark">', html)
         self.assertIn('id="theme-toggle"', html)
         self.assertIn('opcTagManagerTheme', html)
@@ -115,7 +117,8 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertIn('<h2>OPC Tag List</h2>', html)
         self.assertIn('id="full-reconcile"', html)
         self.assertIn("Production subscriber ownership has not moved yet.", html)
-        self.assertIn("Historian ownership", html)
+        self.assertIn("Development Historian Runtime", html)
+        self.assertIn("Production Historian Owner", html)
         self.assertIn("Refresh Configuration", html)
         self.assertIn('<select id="new-tag-data-type"', html)
         self.assertIn('<option value="5">Word</option>', html)
@@ -186,13 +189,14 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertEqual(status, 422)
 
     @patch.object(OpcTagManager, "get_conn", return_value=FakeConnection())
-    def test_runtime_status_is_read_only_and_reports_legacy_disabled_ownership(self, _get_conn):
+    def test_runtime_status_is_read_only_and_separates_development_from_production_ownership(self, _get_conn):
         status, body = self.request("GET", "/api/runtime/status")
         payload = json.loads(body)
         self.assertEqual(status, 200)
         self.assertEqual(payload["historian_ownership"], "legacy_opc_service")
-        self.assertFalse(payload["supervisor_enabled"])
-        self.assertEqual(payload["worker_state"], "disabled")
+        self.assertTrue(payload["supervisor_enabled"])
+        self.assertEqual(payload["development_historian_runtime"], "canonical")
+        self.assertEqual(payload["production_historian_owner"], "legacy_opc_service")
         self.assertEqual(payload["legacy_historian_process_state"], "unknown")
 
     def test_cutover_preflight_endpoint_is_read_only_and_never_claims_live_ready(self):

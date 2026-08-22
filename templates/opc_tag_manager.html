@@ -65,16 +65,26 @@
                 <strong>Safe Tag Reconcile Core</strong>
                 <p>Production subscriber ownership has not moved yet.</p>
                 <dl class="object-properties runtime-status-grid">
-                    <dt>Historian ownership</dt><dd id="historian-ownership">Legacy expected / process unknown</dd>
+                    <dt>Development Historian Runtime</dt><dd id="development-historian-runtime">{{ runtime_status.development_historian_runtime }}</dd>
+                    <dt>Production Historian Owner</dt><dd id="production-historian-owner">{{ runtime_status.production_historian_owner }}</dd>
                     <dt>Production Alarm owner</dt><dd id="production-alarm-owner">{{ production_alarm_owner }}</dd>
                     <dt>OpcTagManager Alarm capability</dt><dd id="alarm-capability">{{ opctagmanager_alarm_capability }}</dd>
                     <dt>Supervisor</dt><dd id="supervisor-state">{{ 'Enabled' if runtime_status.supervisor_enabled else 'Disabled' }}</dd>
                     <dt>Worker</dt><dd id="worker-state">{{ runtime_status.worker_state }}</dd>
+                    <dt>Worker PID</dt><dd id="worker-pid">{{ runtime_status.worker_pid if runtime_status.worker_pid is not none else 'None' }}</dd>
                     <dt>OPC UA</dt><dd id="runtime-opc-state">{{ runtime_status.opc_state }}</dd>
                     <dt>TagMaster</dt><dd id="runtime-tag-count">Unknown</dd>
                     <dt>Subscriber</dt><dd id="runtime-subscriber-count">{{ runtime_status.subscribed_tag_count if runtime_status.subscribed_tag_count is not none else 'Unknown' }}</dd>
+                    <dt>Requested subscriptions</dt><dd id="runtime-requested-count">{{ runtime_status.requested_subscription_count if runtime_status.requested_subscription_count is not none else 'Unknown' }}</dd>
+                    <dt>Failed subscriptions</dt><dd id="runtime-failed-count">{{ runtime_status.failed_subscription_count if runtime_status.failed_subscription_count is not none else 'Unknown' }}</dd>
+                    <dt>Subscription complete</dt><dd id="runtime-subscription-complete">{{ 'Yes' if runtime_status.subscription_complete else 'No' }}</dd>
                     <dt>InfluxDB</dt><dd id="runtime-influx-state">{{ runtime_status.influx_state }}</dd>
                     <dt>Subscriber sync</dt><dd id="runtime-rebuild-state">{{ 'Pending' if runtime_status.rebuild_pending else 'No pending rebuild' }}</dd>
+                    <dt>Registry generation</dt><dd id="runtime-registry-generation">{{ runtime_status.registry_generation }}</dd>
+                    <dt>Acknowledged generation</dt><dd id="runtime-ack-generation">{{ runtime_status.acknowledged_generation }}</dd>
+                    <dt>Last Influx write</dt><dd id="runtime-last-write">{{ runtime_status.last_write_time or 'None' }}</dd>
+                    <dt>Restart count</dt><dd id="runtime-restart-count">{{ runtime_status.restart_count }}</dd>
+                    <dt>Last error</dt><dd id="runtime-last-error">{{ runtime_status.last_error or 'None' }}</dd>
                 </dl>
                 <p id="reconcile-result">
                     {% if last_reconcile_result %}

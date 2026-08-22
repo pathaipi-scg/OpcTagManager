@@ -423,19 +423,27 @@ async function loadRuntimeStatus() {
     try {
         const response = await fetch("/api/runtime/status");
         const data = await response.json();
-        document.getElementById("historian-ownership").textContent =
-            data.historian_ownership === "legacy_opc_service"
-                ? `Legacy expected / process ${data.legacy_historian_process_state || "unknown"}`
-                : data.historian_ownership;
+        document.getElementById("development-historian-runtime").textContent =
+            `${data.development_historian_runtime || "unknown"} / ${data.worker_state || "unknown"}`;
+        document.getElementById("production-historian-owner").textContent = data.production_historian_owner || "unknown";
         document.getElementById("supervisor-state").textContent = data.supervisor_enabled ? "Enabled" : "Disabled";
         document.getElementById("worker-state").textContent = data.worker_state || "unknown";
+        document.getElementById("worker-pid").textContent = data.worker_pid ?? "None";
         document.getElementById("runtime-opc-state").textContent = data.opc_state || "unknown";
         document.getElementById("runtime-tag-count").textContent =
             data.tagmaster_active_count == null ? "Unknown" : `${data.tagmaster_active_count} Active`;
         document.getElementById("runtime-subscriber-count").textContent =
             data.subscribed_tag_count == null ? "Unknown" : data.subscribed_tag_count;
+        document.getElementById("runtime-requested-count").textContent = data.requested_subscription_count ?? "Unknown";
+        document.getElementById("runtime-failed-count").textContent = data.failed_subscription_count ?? "Unknown";
+        document.getElementById("runtime-subscription-complete").textContent = data.subscription_complete ? "Yes" : "No";
         document.getElementById("runtime-influx-state").textContent = data.influx_state || "unknown";
         document.getElementById("runtime-rebuild-state").textContent = data.rebuild_pending ? "Pending" : "No pending rebuild";
+        document.getElementById("runtime-registry-generation").textContent = data.registry_generation ?? "Unknown";
+        document.getElementById("runtime-ack-generation").textContent = data.acknowledged_generation ?? "Unknown";
+        document.getElementById("runtime-last-write").textContent = data.last_write_time || "None";
+        document.getElementById("runtime-restart-count").textContent = data.restart_count ?? "Unknown";
+        document.getElementById("runtime-last-error").textContent = data.last_error || "None";
     } catch (_error) {
         document.getElementById("worker-state").textContent = "status unavailable";
     }
