@@ -330,6 +330,8 @@ Keep deferred until separately approved:
 - [x] Complete Checkpoint 3 read-only readiness verification; record sustained Siemens quality, intermittent Modbus reads, target-local Influx decision input, and the blocked Windows ownership/backup evidence.
 - [x] Complete Checkpoint 4A deployment preparation; approve the Development Notebook as temporary playback host, preserve alarm_sound host portability, characterize the Modbus read-mode difference, and prepare non-executed backup/supervision contracts.
 - [x] Complete Checkpoint 4B evidence work; create and verify the SQL backup, prove Notebook alarm_sound is stopped with current MP3 access denied, and retain historian ownership plus Kepware/Influx backup access as blockers.
+- [x] Complete Checkpoint 4C integrated Notebook full-stack runtime validation with isolated `opc_TEST_LP2`, bounded registry sync, typed Alarm trigger/playback/history, exact cleanup, and single-owner proof.
+- [x] Checkpoint 4C.1: replace hardcoded `legacy_opc_service` historian ownership reporting/cutover assumptions with a validated `PRODUCTION_HISTORIAN_OWNER` deployment contract and record `YES_CONFIG_ONLY_DEPLOYMENT` without activating either writer.
 - [ ] Define and validate each site's ignored deployment `.env` contract.
 - [ ] Bootstrap and verify production SQL plus dedicated application identities.
 - [ ] Verify Kepware system-control bootstrap and browse-resolved reload NodeId.

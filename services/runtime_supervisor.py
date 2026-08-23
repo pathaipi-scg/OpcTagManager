@@ -19,7 +19,13 @@ def utc_now() -> str:
 class HistorianSupervisor:
     """Supervises only the known OpcTagManager historian worker module."""
 
-    def __init__(self, enabled: bool, process_factory=subprocess.Popen, restart_delay: float = 10.0) -> None:
+    def __init__(
+        self,
+        enabled: bool,
+        process_factory=subprocess.Popen,
+        restart_delay: float = 10.0,
+        production_historian_owner: str = "legacy_opc_service",
+    ) -> None:
         self.enabled = enabled
         self._process_factory = process_factory
         self._restart_delay = restart_delay
@@ -30,9 +36,9 @@ class HistorianSupervisor:
         self._intentional_stop = False
         self._status = {
             "supervisor_enabled": enabled,
-            "historian_ownership": "legacy_opc_service",
+            "historian_ownership": production_historian_owner,
             "development_historian_runtime": "canonical" if enabled else "disabled",
-            "production_historian_owner": "legacy_opc_service",
+            "production_historian_owner": production_historian_owner,
             "worker_state": "stopped" if enabled else "disabled",
             "worker_pid": None,
             "restart_count": 0,
@@ -42,7 +48,9 @@ class HistorianSupervisor:
             "registry_generation": 0,
             "acknowledged_generation": 0,
             "rebuild_pending": False,
-            "legacy_historian_ownership": "expected",
+            "legacy_historian_ownership": (
+                "expected" if production_historian_owner == "legacy_opc_service" else "not_expected"
+            ),
             "legacy_historian_process_state": "unknown",
             "active_tag_count": None,
             "requested_subscription_count": None,

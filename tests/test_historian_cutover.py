@@ -116,3 +116,25 @@ def test_preflight_never_starts_or_stops_either_writer(tmp_path):
     assert calls == ["status"]
     assert "start" not in result and "stop" not in result
     assert result["ready_for_live_cutover"] is False
+
+
+def test_preflight_and_supervisor_share_explicit_owner_without_activation(tmp_path):
+    from services.runtime_supervisor import HistorianSupervisor
+
+    launcher = tmp_path / "poller.bat"
+    launcher.touch()
+    supervisor = HistorianSupervisor(False, production_historian_owner="opc_tag_manager")
+    preflight = HistorianCutoverPreflight(
+        lambda: CountConnection(1),
+        supervisor.status,
+        configuration(),
+        str(launcher),
+        production_historian_owner="opc_tag_manager",
+    )
+
+    result = preflight.run()
+    assert supervisor.status()["production_historian_owner"] == "opc_tag_manager"
+    assert result["production_historian_ownership"] == "opc_tag_manager"
+    assert supervisor.status()["worker_state"] == "disabled"
+    assert result["ready_for_live_cutover"] is False
+    assert "start" not in result and "stop" not in result

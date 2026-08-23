@@ -7,6 +7,22 @@ All significant project changes should be documented here.
 
 ## Unreleased
 
+### 2026-08-23 - Phase 4.12 Checkpoint 4C.1 historian ownership portability
+
+Added the validated `PRODUCTION_HISTORIAN_OWNER` deployment contract with exactly `legacy_opc_service` and `opc_tag_manager` as supported values. An absent setting retains the safe legacy default, while invalid values fail deterministically. Historian-supervisor status and read-only cutover preflight now consume the same canonical configured value.
+
+Ownership selection remains descriptive and independently gated: changing it alone cannot start or stop a historian writer or authorize cutover. The generic `.env.example` documents the contract; the real ignored deployment `.env` was not changed. Focused tests prove defaulting, both supported values, invalid-value handling, supervisor/preflight consistency, and zero activation.
+
+The original Checkpoint 4C blocker remains recorded in its validation history. After this narrow remediation, the source-level portability verdict is `YES_CONFIG_ONLY_DEPLOYMENT`. No live commissioning was repeated and no production ownership, deployment, or cutover was activated.
+
+### 2026-08-23 — Phase 4.12 Checkpoint 4C integrated Notebook validation
+
+Validated the complete Development Notebook topology against remote greenfield Kepware/SQL and isolated Notebook InfluxDB. Bounded sync-one calls proved exact registry state and idempotence. The integrated historian subscribed 1/1 with zero failures/restarts and wrote exactly one Bool-normalized point to isolated `opc_TEST_LP2`; local `opc_LP2` and `opc_SCGLS` were unchanged.
+
+The real Alarm API created one controlled HIGH mapping, incremented RELOAD_ALARM from 2 to 3, and the same alarm_sound process reloaded and baselined it. Typed Value-only TEST_ALM `0 -> 20 -> 0` produced one transition, one `DINGDONG.mp3` playback, one Alarm_History row, and a clear without duplicates. All temporary SQL rows and the isolated Influx database were removed, TEST_ALM returned to zero, runtimes stopped, and mutation gates returned false.
+
+Notebook integration is validated, but Checkpoint 4C remains blocked for final configuration-only portability because historian supervisor/cutover status hardcodes `legacy_opc_service`. A narrow `PRODUCTION_HISTORIAN_OWNER` configuration slice is required before recording `YES_CONFIG_ONLY_DEPLOYMENT`. No production deployment, cutover, or ownership activation occurred.
+
 ### 2026-08-23 — Phase 4.11C final closeout and greenfield deployment readiness
 
 Recorded the completed historian/runtime validation, OPC-UA Alarm reload and system-control work, Value-only Kepware write correction, dedicated SQL identities, exact single-existing-tag sync, full Alarm end-to-end live validation, and guarded cleanup. The commissioning SQL records were removed while the approved Kepware test/control tags remained unchanged. Final offline regression passed 267 OpcTagManager tests, 12 alarm_sound reference tests, Python and JavaScript syntax, deployment/site-value and secret/config scans, and the active `pyModbusTCP` reload-dependency scan.

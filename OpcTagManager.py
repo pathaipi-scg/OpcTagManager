@@ -30,6 +30,7 @@ from config.config import (
     KEPWARE_TAG_DEFAULT_DATA_TYPE,
     KEPWARE_TAG_DEFAULT_SCAN_RATE_MS,
     LEGACY_POLLER_LAUNCHER,
+    PRODUCTION_HISTORIAN_OWNER,
     LOG_LEVEL,
     INFLUX_DB,
     INFLUX_HOST,
@@ -110,7 +111,10 @@ from services.kepware_system_control import KepwareSystemControl, SystemControlC
 
 BASE_DIR = Path(__file__).resolve().parent
 
-runtime_supervisor = HistorianSupervisor(OPC_RUNTIME_SUPERVISOR_ENABLED)
+runtime_supervisor = HistorianSupervisor(
+    OPC_RUNTIME_SUPERVISOR_ENABLED,
+    production_historian_owner=PRODUCTION_HISTORIAN_OWNER,
+)
 
 
 @asynccontextmanager
@@ -411,6 +415,7 @@ historian_cutover_preflight = HistorianCutoverPreflight(
         "influx_db": INFLUX_DB,
     },
     legacy_poller_launcher=LEGACY_POLLER_LAUNCHER,
+    production_historian_owner=PRODUCTION_HISTORIAN_OWNER,
 )
 last_reconcile_result: dict | None = None
 

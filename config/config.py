@@ -76,6 +76,14 @@ def get_bool_default(name: str, default: bool = False) -> bool:
     raise RuntimeError(f"Configuration {name} must be true or false")
 
 
+def get_choice_default(name: str, allowed: set[str], default: str) -> str:
+    value = get_optional(name) or default
+    if value not in allowed:
+        choices = ", ".join(sorted(allowed))
+        raise RuntimeError(f"Configuration {name} must be one of: {choices}")
+    return value
+
+
 # Application
 APP_HOST = get_required("APP_HOST")
 APP_PORT = get_int("APP_PORT")
@@ -169,6 +177,11 @@ INFLUX_PASS = get_configured("INFLUX_PASS")
 POLL_INTERVAL = get_int("POLL_INTERVAL")
 OPC_RUNTIME_SUPERVISOR_ENABLED = get_bool_default("OPC_RUNTIME_SUPERVISOR_ENABLED", False)
 LEGACY_POLLER_LAUNCHER = get_optional("LEGACY_POLLER_LAUNCHER")
+PRODUCTION_HISTORIAN_OWNER = get_choice_default(
+    "PRODUCTION_HISTORIAN_OWNER",
+    {"legacy_opc_service", "opc_tag_manager"},
+    "legacy_opc_service",
+)
 
 # Kepware Modbus
 KEPWARE_MODBUS_HOST = get_required("KEPWARE_MODBUS_HOST")

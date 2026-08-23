@@ -111,6 +111,23 @@ def test_disabled_default_never_spawns_and_tracks_pending_generation():
     assert status["production_historian_owner"] == "legacy_opc_service"
 
 
+def test_explicit_opc_tag_manager_ownership_does_not_activate_disabled_supervisor():
+    factory = ProcessFactory()
+    supervisor = HistorianSupervisor(
+        False,
+        factory,
+        production_historian_owner="opc_tag_manager",
+    )
+
+    assert not supervisor.start()
+    assert factory.processes == []
+    status = supervisor.status()
+    assert status["historian_ownership"] == "opc_tag_manager"
+    assert status["production_historian_owner"] == "opc_tag_manager"
+    assert status["legacy_historian_ownership"] == "not_expected"
+    assert status["worker_state"] == "disabled"
+
+
 def test_start_duplicate_prevention_status_rebuild_and_graceful_stop():
     factory = ProcessFactory()
     supervisor = HistorianSupervisor(True, factory, restart_delay=0.01)

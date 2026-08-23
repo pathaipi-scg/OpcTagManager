@@ -16,11 +16,13 @@ class HistorianCutoverPreflight:
         supervisor_status: Callable[[], dict],
         contract_config: dict,
         legacy_poller_launcher: str,
+        production_historian_owner: str = "legacy_opc_service",
     ) -> None:
         self.connection_factory = connection_factory
         self.supervisor_status = supervisor_status
         self.contract_config = contract_config
         self.legacy_poller_launcher = legacy_poller_launcher
+        self.production_historian_owner = production_historian_owner
 
     @staticmethod
     def _check(ok: bool, message: str, severity: str = "required") -> dict:
@@ -101,7 +103,7 @@ class HistorianCutoverPreflight:
         all_required_ok = all(item["ok"] for item in checks.values())
         return {
             "mode": "READ-ONLY",
-            "production_historian_ownership": "legacy_opc_service",
+            "production_historian_ownership": self.production_historian_owner,
             "legacy_process_state": "unknown",
             "requires_manual_verification": True,
             "ready_for_live_cutover": False,
