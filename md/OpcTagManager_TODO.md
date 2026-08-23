@@ -332,6 +332,9 @@ Keep deferred until separately approved:
 - [x] Complete Checkpoint 4B evidence work; create and verify the SQL backup, prove Notebook alarm_sound is stopped with current MP3 access denied, and retain historian ownership plus Kepware/Influx backup access as blockers.
 - [x] Complete Checkpoint 4C integrated Notebook full-stack runtime validation with isolated `opc_TEST_LP2`, bounded registry sync, typed Alarm trigger/playback/history, exact cleanup, and single-owner proof.
 - [x] Checkpoint 4C.1: replace hardcoded `legacy_opc_service` historian ownership reporting/cutover assumptions with a validated `PRODUCTION_HISTORIAN_OWNER` deployment contract and record `YES_CONFIG_ONLY_DEPLOYMENT` without activating either writer.
+- [x] Complete Checkpoint 5 functional Notebook Task Scheduler, Browser, isolated historian, Alarm, and restart dry run; retain the controlled SQL rows intentionally as `ACCEPTED_AS_INITIAL_DEPLOYMENT_STATE` and record `CHECKPOINT_5_NOTEBOOK_DEPLOYMENT_DRY_RUN_VALIDATED`.
+- [ ] Add generic direct-executable Task Scheduler install/remove templates and bounded rotating runtime logging before target-host supervision deployment.
+- [ ] Complete `REAL_REBOOT_VALIDATION_PENDING` on the selected deployment host as a separate operational deployment gate.
 - [ ] Define and validate each site's ignored deployment `.env` contract.
 - [ ] Bootstrap and verify production SQL plus dedicated application identities.
 - [ ] Verify Kepware system-control bootstrap and browse-resolved reload NodeId.

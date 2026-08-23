@@ -7,6 +7,14 @@ All significant project changes should be documented here.
 
 ## Unreleased
 
+### 2026-08-23 - Phase 4.12 Checkpoint 5 Notebook supervision dry run
+
+Validated Notebook Task Scheduler supervision using direct venv Python actions, explicit working directories, restart policy, and `IgnoreNew` duplicate suppression. The initial batch action left an orphaned process tree on stop; changing the local task action to direct Python fixed clean stop/restart ownership without changing application source.
+
+The bounded live dry run proved sync-one idempotence, one isolated Boolean historian subscription/write in `opc_TEST_LP2`, one Alarm mapping and reload `3 -> 4`, typed TEST_ALM `0 -> 20 -> 0`, one Alarm_History row, and restart baseline without duplicate history. Runtimes/tasks stopped, TEST_ALM returned to zero, gates were restored, and the isolated Influx database was removed.
+
+The first cleanup attempt correctly stopped because least-privilege runtime identities cannot delete Alarm_History, TagMaster, or BrowserRun; their permissions were not broadened. The user subsequently accepted the five controlled commissioning record sets as `ACCEPTED_AS_INITIAL_DEPLOYMENT_STATE`, so administrator cleanup is no longer required. Reassessed verdict: `CHECKPOINT_5_NOTEBOOK_DEPLOYMENT_DRY_RUN_VALIDATED`. `REAL_REBOOT_VALIDATION_PENDING` remains a separate operational deployment gate. No production deployment or cutover occurred.
+
 ### 2026-08-23 - Phase 4.12 Checkpoint 4C.1 historian ownership portability
 
 Added the validated `PRODUCTION_HISTORIAN_OWNER` deployment contract with exactly `legacy_opc_service` and `opc_tag_manager` as supported values. An absent setting retains the safe legacy default, while invalid values fail deterministically. Historian-supervisor status and read-only cutover preflight now consume the same canonical configured value.
