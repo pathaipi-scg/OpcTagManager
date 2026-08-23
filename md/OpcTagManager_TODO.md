@@ -327,6 +327,7 @@ Keep deferred until separately approved:
 
 - [x] Audit known legacy and greenfield deployment classes and record a reversible per-site deployment/cutover plan.
 - [x] Complete Checkpoint 2 read-only greenfield target inventory; record current Good sampled Modbus/Siemens reads and retain host routing, ownership, historian selection, alarm_sound, and backup readiness as explicit blockers/unverified items.
+- [x] Complete Checkpoint 3 read-only readiness verification; record sustained Siemens quality, intermittent Modbus reads, target-local Influx decision input, and the blocked Windows ownership/backup evidence.
 - [ ] Define and validate each site's ignored deployment `.env` contract.
 - [ ] Bootstrap and verify production SQL plus dedicated application identities.
 - [ ] Verify Kepware system-control bootstrap and browse-resolved reload NodeId.
