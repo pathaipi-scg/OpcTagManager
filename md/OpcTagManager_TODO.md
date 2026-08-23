@@ -328,10 +328,11 @@ Keep deferred until separately approved:
 - [x] Audit known legacy and greenfield deployment classes and record a reversible per-site deployment/cutover plan.
 - [x] Complete Checkpoint 2 read-only greenfield target inventory; record current Good sampled Modbus/Siemens reads and retain host routing, ownership, historian selection, alarm_sound, and backup readiness as explicit blockers/unverified items.
 - [x] Complete Checkpoint 3 read-only readiness verification; record sustained Siemens quality, intermittent Modbus reads, target-local Influx decision input, and the blocked Windows ownership/backup evidence.
+- [x] Complete Checkpoint 4A deployment preparation; approve the Development Notebook as temporary playback host, preserve alarm_sound host portability, characterize the Modbus read-mode difference, and prepare non-executed backup/supervision contracts.
 - [ ] Define and validate each site's ignored deployment `.env` contract.
 - [ ] Bootstrap and verify production SQL plus dedicated application identities.
 - [ ] Verify Kepware system-control bootstrap and browse-resolved reload NodeId.
-- [ ] Prove real PLC/process OPC quality and network connectivity.
+- [ ] Prove representative real PLC/process quality through Kepware OPC UA on a normal production day; classify holiday/maintenance shutdowns as `NOT_TESTED_TODAY` or `UNAVAILABLE_DUE_TO_PLANT_STATE`, not software failure.
 - [ ] Verify the production historian destination and ownership transition.
 - [ ] Deploy and supervise alarm_sound with validated MP3 repository access.
 - [ ] Define Windows service/startup ownership and duplicate-owner prevention.
