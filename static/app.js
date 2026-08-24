@@ -387,6 +387,7 @@ viewTabs.forEach((tab) => {
         }
         if (!isKepware) {
             loadRuntimeStatus();
+            loadAlarmSummary();
         }
     });
 });
@@ -444,8 +445,19 @@ async function loadRuntimeStatus() {
         document.getElementById("runtime-last-write").textContent = data.last_write_time || "None";
         document.getElementById("runtime-restart-count").textContent = data.restart_count ?? "Unknown";
         document.getElementById("runtime-last-error").textContent = data.last_error || "None";
+        document.getElementById("operator-opc-state").textContent =
+            data.opc_state === "connected" ? "Connected" : "Disconnected";
+        document.getElementById("operator-historian-state").textContent =
+            ["running", "rebuilding", "starting"].includes(data.worker_state) ? "Running" : "Stopped";
+        document.getElementById("operator-tag-count").textContent =
+            data.tagmaster_active_count == null ? "Unknown" : data.tagmaster_active_count;
+        document.getElementById("operator-last-error").textContent = data.last_error || "None";
     } catch (_error) {
         document.getElementById("worker-state").textContent = "status unavailable";
+        document.getElementById("operator-opc-state").textContent = "Disconnected";
+        document.getElementById("operator-historian-state").textContent = "Stopped";
+        document.getElementById("operator-tag-count").textContent = "Unknown";
+        document.getElementById("operator-last-error").textContent = "Status unavailable";
     }
 }
 

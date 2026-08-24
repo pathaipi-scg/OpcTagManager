@@ -32,9 +32,6 @@
     <h1>OpcTagManager</h1>
 
     <div class="header-actions">
-        <button type="button" id="full-reconcile" class="refresh-button hidden">
-            Full Reconcile
-        </button>
         <button type="button" id="theme-toggle" class="theme-toggle" aria-label="Switch to Light theme">☀ Light</button>
     </div>
 </header>
@@ -52,8 +49,13 @@
                 <button type="button" class="alarm-filter-button active" data-alarm-filter="all">All Tags</button>
                 <button type="button" class="alarm-filter-button" data-alarm-filter="alarm">Alarm Tags</button>
             </div>
-            <section id="alarm-summary" class="alarm-summary hidden" aria-live="polite">
-                <div class="alarm-summary-heading"><strong>Alarm Mapping Summary</strong><span id="alarm-summary-count"></span></div>
+            {% if tree %}
+                {{ render_tree(tree) }}
+            {% else %}
+                <p>No tag data found.</p>
+            {% endif %}
+            <section id="alarm-summary" class="alarm-summary" aria-live="polite">
+                <div class="alarm-summary-heading"><strong>Current Alarm Mapping</strong><span id="alarm-summary-count"></span></div>
                 <div class="alarm-summary-scroll">
                     <table>
                         <thead><tr><th>Tag Path</th><th>Mode / Threshold</th><th>MP3</th><th>Enabled</th><th>Priority</th><th>Health</th></tr></thead>
@@ -61,10 +63,22 @@
                     </table>
                 </div>
             </section>
-            <section class="runtime-reconcile-status" aria-live="polite">
-                <strong>Safe Tag Reconcile Core</strong>
-                <p>Production subscriber ownership has not moved yet.</p>
-                <dl class="object-properties runtime-status-grid">
+            <section class="operator-health" aria-label="Operational health" aria-live="polite">
+                <h3>Operational Health</h3>
+                <dl class="health-grid">
+                    <dt>OPC UA</dt><dd id="operator-opc-state">Checking...</dd>
+                    <dt>Historian</dt><dd id="operator-historian-state">Checking...</dd>
+                    <dt>Active Tags</dt><dd id="operator-tag-count">Checking...</dd>
+                    <dt>Last Error</dt><dd id="operator-last-error">None</dd>
+                </dl>
+            </section>
+            <details class="diagnostics-panel">
+                <summary>Advanced / Diagnostics</summary>
+                <div class="diagnostics-content" aria-live="polite">
+                    <div class="diagnostics-actions">
+                        <button type="button" id="full-reconcile" class="refresh-button hidden">Full Reconcile</button>
+                    </div>
+                    <dl class="object-properties runtime-status-grid">
                     <dt>Development Historian Runtime</dt><dd id="development-historian-runtime">{{ runtime_status.development_historian_runtime }}</dd>
                     <dt>Production Historian Owner</dt><dd id="production-historian-owner">{{ runtime_status.production_historian_owner }}</dd>
                     <dt>Production Alarm owner</dt><dd id="production-alarm-owner">{{ production_alarm_owner }}</dd>
@@ -85,8 +99,8 @@
                     <dt>Last Influx write</dt><dd id="runtime-last-write">{{ runtime_status.last_write_time or 'None' }}</dd>
                     <dt>Restart count</dt><dd id="runtime-restart-count">{{ runtime_status.restart_count }}</dd>
                     <dt>Last error</dt><dd id="runtime-last-error">{{ runtime_status.last_error or 'None' }}</dd>
-                </dl>
-                <p id="reconcile-result">
+                    </dl>
+                    <p id="reconcile-result">
                     {% if last_reconcile_result %}
                         {% if last_reconcile_result.success %}
                             Last result: {{ last_reconcile_result.total_discovered }} discovered,
@@ -99,14 +113,9 @@
                     {% else %}
                         No Full Reconcile has run in this web process.
                     {% endif %}
-                </p>
-            </section>
-
-            {% if tree %}
-                {{ render_tree(tree) }}
-            {% else %}
-                <p>No tag data found.</p>
-            {% endif %}
+                    </p>
+                </div>
+            </details>
         </div>
 
         <div
@@ -185,7 +194,7 @@
                         <label for="alarm-mp3-search">Search MP3 files</label>
                         <input id="alarm-mp3-search" type="search" placeholder="Search exact filenames…" autocomplete="off">
                     </div>
-                    <div class="field-group"><label for="alarm-mp3">MP3 File</label><select id="alarm-mp3"></select></div>
+                    <div class="field-group"><label for="alarm-mp3">MP3 Files - click to select</label><select id="alarm-mp3" class="alarm-mp3-list" size="8"></select></div>
                     <p id="alarm-mp3-warning" class="warning-message hidden"></p>
                     <p class="tree-counts">RepeatEnable is retained for legacy compatibility; alarm_sound currently uses Repeat directly.</p>
                     <div class="preview-actions">

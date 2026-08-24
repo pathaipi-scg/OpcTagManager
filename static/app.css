@@ -151,6 +151,16 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 .alarm-filter-button.active { background: var(--accent); color: var(--accent-text); }
 #alarm-panel input[type="checkbox"] { width: auto; }
 #alarm-preview-audio { width: 100%; margin-top: 10px; }
+.alarm-mp3-list { min-height: 180px; }
+.operator-health { margin: 10px 0 12px; padding: 12px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-card); }
+.operator-health h3 { margin: 0 0 10px; }
+.health-grid { display: grid; grid-template-columns: repeat(4, minmax(100px, 1fr)); gap: 8px 16px; margin: 0; }
+.health-grid dt { color: var(--text-secondary); font-size: 0.78rem; font-weight: bold; text-transform: uppercase; }
+.health-grid dd { margin: 0; overflow-wrap: anywhere; font-weight: bold; }
+.diagnostics-panel { margin: 10px 0 14px; border: 1px solid var(--border-color); border-radius: 5px; background: var(--bg-card); }
+.diagnostics-panel > summary { padding: 9px 11px; cursor: pointer; color: var(--text-secondary); font-weight: bold; }
+.diagnostics-content { padding: 0 11px 11px; }
+.diagnostics-actions { display: flex; justify-content: flex-end; margin-bottom: 10px; }
 
 .kepware-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .kepware-controls { display: flex; align-items: center; gap: 8px; }
@@ -210,4 +220,5 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
     .header-bar, .kepware-heading { align-items: stretch; flex-direction: column; }
     .header-actions, .kepware-controls { flex-wrap: wrap; }
     .workspace { height: auto; min-height: 0; }
+    .health-grid { grid-template-columns: repeat(2, minmax(100px, 1fr)); }
 }
