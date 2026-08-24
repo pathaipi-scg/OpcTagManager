@@ -438,6 +438,7 @@ function selectMappedAlarm(alarm) {
         loadedTag.classList.add("selected-object");
     }
     showAlarmForm(alarm);
+    loadOperationalTagContext(knowledgeNodeFromAlarm(alarm));
 }
 
 function alarmNumber(id) {
@@ -596,6 +597,7 @@ async function selectKepwareAlarmTag(node) {
         nodeId: tagDetails.node_id || "",
         dataType: tagDetails.data_type ?? "",
     };
+    loadOperationalTagContext(node);
     showAlarmForm(null);
     document.getElementById("selected-tag-path").value = canonicalPath;
     document.getElementById("selected-tag-id").value = "Not registered";
@@ -749,6 +751,11 @@ const runtimeMp3Panel = document.getElementById("runtime-mp3-panel");
 const runtimeSecondaryHost = document.getElementById("runtime-secondary-host");
 const operatorHealth = document.querySelector(".operator-health");
 const diagnosticsPanel = document.querySelector(".diagnostics-panel");
+const runtimeKnowledgeHost = document.getElementById("runtime-knowledge-host");
+runtimeKnowledgeHost.append(
+    document.getElementById("tag-knowledge-panel"),
+    document.getElementById("tag-resources-panel"),
+);
 const kmTagWriteEnabled = kepwareTreeView.dataset.kmWriteEnabled === "true";
 const kmResourceWriteEnabled = kepwareTreeView.dataset.kmResourceWriteEnabled === "true";
 const configuredTagDefaults = {
@@ -940,6 +947,7 @@ function createKepwareNode(node, parentDetails, parentChildren) {
             ...(node.context.group_path || []),
             node.name,
         ].join("/");
+        button.classList.toggle("selected-object", button.dataset.canonicalPath === selectedRuntimeTag?.path);
     }
     button.kepwareParentDetails = parentDetails;
     button.kepwareParentChildren = parentChildren;
@@ -1093,16 +1101,11 @@ function selectKepwareObject(button, node) {
             "hidden",
             !kepwareWriteEnabled,
         );
-        loadTagKnowledge(node);
-        loadTagResources(node);
     } else {
         resetCreateTagPanel();
         selectedTemplateCandidate = null;
         document.getElementById("use-tag-template").classList.add("hidden");
-        resetTagKnowledgePanel();
     }
-
-    if (node.object_type !== "Tag") resetTagKnowledgePanel();
 }
 
 function displayKepwareObject(node) {
@@ -1327,6 +1330,35 @@ function knowledgeIdentityPayload(node = selectedKnowledgeTag) {
         group_path: node.context.group_path || [],
         tag_name: node.name,
     };
+}
+
+function knowledgeNodeFromAlarm(alarm) {
+    const parts = String(alarm?.tag_path || "").split("/").filter(Boolean);
+    if (parts.length < 3) return null;
+    return {
+        name: parts.at(-1),
+        object_type: "Tag",
+        full_path: parts.join("."),
+        context: {
+            channel: parts[0],
+            device: parts[1],
+            group_path: parts.slice(2, -1),
+        },
+        tag_details: {
+            node_id: alarm.node_id || "",
+            data_type: alarm.data_type ?? "",
+        },
+    };
+}
+
+function loadOperationalTagContext(node) {
+    if (!node) {
+        resetTagKnowledgePanel();
+        return;
+    }
+    selectedKnowledgeTag = node;
+    loadTagKnowledge(node);
+    loadTagResources(node);
 }
 
 function knowledgeFieldsPayload() {
