@@ -104,7 +104,7 @@ if OPC_FAST_SYNC_RETRY_DELAY_SEC < 0 or OPC_FAST_SYNC_RETRY_DELAY_SEC > 60:
 PRODUCTION_LINE = get_required("PRODUCTION_LINE")
 
 # SQL
-SQL_DRIVER = get_required("SQL_DRIVER")
+SQL_DRIVER = get_optional("SQL_DRIVER") or "AUTO"
 SQL_SERVER = get_required("SQL_SERVER")
 SQL_DB = get_required("SQL_DB")
 SQL_USER = get_required("SQL_USER")
