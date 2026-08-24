@@ -272,6 +272,7 @@ class AlarmService:
         reload_result = self.reload_notifier.notify()
         return {
             "mapping_saved": True,
+            "mapping_deleted": True,
             "deleted_alarm_id": alarm_id,
             "reload_notified": reload_result.notified,
             "reload_error": reload_result.category,

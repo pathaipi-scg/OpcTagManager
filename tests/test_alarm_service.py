@@ -200,10 +200,30 @@ def test_delete_commits_then_notifies(audio):
     notifier = Notifier()
     alarm_service = service(database, audio, notifier)
     alarm_id = alarm_service.create(10, values())["mapping"]["alarm_id"]
+    retained_alarm_id = alarm_service.create(11, values(mp3_file="other.MP3"))["mapping"]["alarm_id"]
     result = alarm_service.delete(alarm_id)
     assert result["mapping_saved"] is True
+    assert result["mapping_deleted"] is True
+    assert result["deleted_alarm_id"] == alarm_id
     assert alarm_service.get_for_tag(10) is None
-    assert notifier.calls == 2
+    assert alarm_service.get_for_tag(11)["alarm_id"] == retained_alarm_id
+    assert list(database.alarms) == [retained_alarm_id]
+    assert 10 in database.tags
+    assert 11 in database.tags
+    assert notifier.calls == 3
+
+
+def test_delete_write_gate_blocks_without_touching_mapping_or_notifier(audio):
+    database = Database()
+    notifier = Notifier()
+    writable = service(database, audio, notifier)
+    alarm_id = writable.create(10, values())["mapping"]["alarm_id"]
+    blocked = AlarmService(database.connection, audio, notifier, write_enabled=False)
+    with pytest.raises(AlarmServiceError, match="write mode is disabled"):
+        blocked.delete(alarm_id)
+    assert alarm_id in database.alarms
+    assert 10 in database.tags
+    assert notifier.calls == 1
 
 
 def test_commit_success_reload_failure_remains_saved(audio):

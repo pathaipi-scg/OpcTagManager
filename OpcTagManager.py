@@ -1,6 +1,7 @@
 from pathlib import Path
 import asyncio
 from contextlib import asynccontextmanager
+import logging
 import re
 from datetime import datetime
 from typing import Literal
@@ -10,6 +11,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field
+
+logger = logging.getLogger("opctagmanager")
 
 from config.config import (
     ALARM_RELOAD_ENABLED,
@@ -420,29 +423,6 @@ historian_cutover_preflight = HistorianCutoverPreflight(
 last_reconcile_result: dict | None = None
 
 
-def build_tree(rows):
-    tree = {}
-
-    for row in rows:
-        tagid, path, dtype = row[0], row[1], row[2]
-        has_alarm = bool(row[3]) if len(row) > 3 else False
-        parts = path.split("/")
-        node = tree
-
-        for part in parts[:-1]:
-            node = node.setdefault(part, {})
-
-        node[parts[-1]] = {
-            "tagid": tagid,
-            "datatype": dtype,
-            "fullpath": path,
-            "has_alarm": has_alarm,
-            "_leaf": True,
-        }
-
-    return tree
-
-
 def search_runtime_tags(query: str, limit: int = 25, include_inactive: bool = False) -> list[dict]:
     needle = query.strip()
     if not needle or len(needle) > 500 or not 1 <= limit <= 100:
@@ -467,33 +447,11 @@ def search_runtime_tags(query: str, limit: int = 25, include_inactive: bool = Fa
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
-    conn = get_conn()
-
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT t.TagId, t.Path, t.DataType,
-                   CASE WHEN EXISTS (
-                       SELECT 1 FROM Alarm_Lists a WHERE a.TagId = t.TagId
-                   ) THEN 1 ELSE 0 END AS HasAlarm
-            FROM TagMaster t
-            WHERE t.IsActive = 1
-            AND (t.Path LIKE ? OR t.Path LIKE '%SERVER/SYSTEM%')
-            ORDER BY t.Path
-            """,
-            (f"%{PRODUCTION_LINE}%",),
-        )
-        tags = cur.fetchall()
-    finally:
-        conn.close()
-
     return templates.TemplateResponse(
         request,
         "opc_tag_manager.html",
         {
             "request": request,
-            "tree": build_tree(tags),
             "kepware_write_enabled": KEPWARE_CONFIG_WRITE_ENABLED,
             "kepware_tag_default_data_type": KEPWARE_TAG_DEFAULT_DATA_TYPE,
             "kepware_tag_default_scan_rate": KEPWARE_TAG_DEFAULT_SCAN_RATE_MS,
@@ -603,6 +561,31 @@ def get_tag_alarm(tag_id: int):
         return JSONResponse({"success": False, "error": "Alarm mapping could not be read."}, status_code=500)
 
 
+@app.get("/api/opc-tags/resolve/by-path")
+def resolve_registered_tag(path: str = Query(min_length=1, max_length=2000)):
+    """Resolve one exact Kepware path without registering or reconciling it."""
+    conn = get_conn()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT TagId, Path, NodeId, DataType
+               FROM TagMaster WHERE Path = ? AND IsActive = 1""",
+            path,
+        )
+        row = cursor.fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return {"success": True, "registered": False, "tag": None, "alarm": None}
+    tag_id = int(row[0])
+    return {
+        "success": True,
+        "registered": True,
+        "tag": {"tag_id": tag_id, "path": str(row[1]), "node_id": row[2], "data_type": row[3]},
+        "alarm": alarm_service.get_for_tag(tag_id),
+    }
+
+
 @app.post("/api/alarms")
 def create_alarm(payload: CreateAlarmRequest):
     try:
@@ -638,6 +621,7 @@ def delete_alarm(alarm_id: int):
     except AlarmServiceError as exc:
         return _alarm_failure(exc, write=True)
     except Exception:
+        logger.exception("Alarm mapping delete failed for AlarmId=%s", alarm_id)
         return JSONResponse(
             {"success": False, "mapping_saved": False, "reload_notified": False,
              "reload_error": None, "error": "Alarm database operation failed."},
