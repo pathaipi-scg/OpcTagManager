@@ -39,6 +39,8 @@ themeToggle.addEventListener("click", () => {
 const splitterStorageKey = "opcTagManager.mainPanelRatio";
 const minimumPanelWidth = 350;
 const workspace = document.querySelector(".workspace");
+const alarmTopWorkspace = document.getElementById("opc-tag-list-workspace");
+const tagConfigurationWorkspace = document.getElementById("tag-configuration-workspace");
 const treePanel = document.querySelector(".tree-panel");
 const detailsPanel = document.querySelector(".details-panel");
 const mainPanelSplitter = document.getElementById("main-panel-splitter");
@@ -51,7 +53,7 @@ const alarmMinimumHeights = { top: 280, mapping: 160 };
 const alarmHorizontalSplitter = document.getElementById("alarm-horizontal-splitter");
 const alarmMappingWorkspace = document.getElementById("alarm-summary");
 const initialViewportHeight = window.innerHeight;
-const initialAlarmTopHeight = workspace.getBoundingClientRect().height;
+const initialAlarmTopHeight = alarmTopWorkspace.getBoundingClientRect().height;
 const initialAlarmVerticalTotal = initialAlarmTopHeight + alarmMappingWorkspace.getBoundingClientRect().height;
 let mainPanelRatio = readSavedPanelRatio();
 let resizeFrame = null;
@@ -242,20 +244,20 @@ function savedAlarmTopHeight() {
 
 function applyAlarmTopHeight(useDefault = false) {
     if (!workspace.classList.contains("runtime-mode") || workspace.clientWidth <= 980) {
-        workspace.style.removeProperty("height");
+        alarmTopWorkspace.style.removeProperty("height");
         alarmMappingWorkspace.style.removeProperty("height");
         return;
     }
     const requested = useDefault ? initialAlarmTopHeight : (savedAlarmTopHeight() ?? initialAlarmTopHeight);
     const topHeight = clampAlarmTopHeight(requested);
-    workspace.style.height = `${topHeight}px`;
+    alarmTopWorkspace.style.height = `${topHeight}px`;
     alarmMappingWorkspace.style.height = `${alarmVerticalTotalHeight() - topHeight}px`;
     alarmHorizontalSplitter.setAttribute("aria-valuenow", String(Math.round(topHeight)));
 }
 
 function persistAlarmTopHeight() {
     try {
-        localStorage.setItem(alarmTopHeightKey, String(workspace.getBoundingClientRect().height));
+        localStorage.setItem(alarmTopHeightKey, String(alarmTopWorkspace.getBoundingClientRect().height));
     } catch (_error) {
         // Horizontal resizing remains available when browser storage is unavailable.
     }
@@ -264,14 +266,14 @@ function persistAlarmTopHeight() {
 function beginAlarmHorizontalResize(event) {
     if (!workspace.classList.contains("runtime-mode") || workspace.clientWidth <= 980 || event.button !== 0) return;
     const startY = event.clientY;
-    const startTopHeight = workspace.getBoundingClientRect().height;
+    const startTopHeight = alarmTopWorkspace.getBoundingClientRect().height;
     alarmHorizontalSplitter.classList.add("dragging");
     document.body.style.userSelect = "none";
     alarmHorizontalSplitter.setPointerCapture?.(event.pointerId);
 
     const onPointerMove = (moveEvent) => {
         const topHeight = clampAlarmTopHeight(startTopHeight + moveEvent.clientY - startY);
-        workspace.style.height = `${topHeight}px`;
+        alarmTopWorkspace.style.height = `${topHeight}px`;
         alarmMappingWorkspace.style.height = `${alarmVerticalTotalHeight() - topHeight}px`;
         alarmHorizontalSplitter.setAttribute("aria-valuenow", String(Math.round(topHeight)));
     };
@@ -785,6 +787,9 @@ viewTabs.forEach((tab) => {
         document.getElementById("kepware-details-view").classList.toggle("hidden", !isKepware);
         document.getElementById("full-reconcile").classList.toggle("hidden", isKepware);
         workspace.classList.toggle("runtime-mode", !isKepware);
+        alarmTopWorkspace.classList.toggle("hidden", isKepware);
+        tagConfigurationWorkspace.classList.toggle("hidden", !isKepware);
+        (isKepware ? tagConfigurationWorkspace : alarmTopWorkspace).appendChild(workspace);
         runtimeMp3Panel.classList.toggle("hidden", isKepware);
         alarmCenterSplitter.classList.toggle("hidden", isKepware);
         document.getElementById("alarm-summary").classList.toggle("hidden", isKepware);
@@ -795,6 +800,10 @@ viewTabs.forEach((tab) => {
         if (isKepware && !kepwareLoaded) {
             kepwareLoaded = true;
             loadKepwareChannels();
+        }
+        if (isKepware) {
+            applyAlarmTopHeight();
+            applyMainPanelRatio();
         }
         if (!isKepware) {
             applyAlarmPaneWidths();
