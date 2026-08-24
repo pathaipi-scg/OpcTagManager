@@ -237,12 +237,20 @@ class OpcTagManagerAppTests(unittest.TestCase):
 
     @patch.object(OpcTagManager, "get_conn", return_value=FakeConnection())
     def test_runtime_status_is_read_only_and_separates_development_from_production_ownership(self, _get_conn):
-        status, body = self.request("GET", "/api/runtime/status")
+        supervisor_status = {
+            "historian_ownership": "legacy_opc_service",
+            "supervisor_enabled": False,
+            "development_historian_runtime": "disabled",
+            "production_historian_owner": "legacy_opc_service",
+            "legacy_historian_process_state": "unknown",
+        }
+        with patch.object(OpcTagManager.runtime_supervisor, "status", return_value=supervisor_status):
+            status, body = self.request("GET", "/api/runtime/status")
         payload = json.loads(body)
         self.assertEqual(status, 200)
         self.assertEqual(payload["historian_ownership"], "legacy_opc_service")
-        self.assertTrue(payload["supervisor_enabled"])
-        self.assertEqual(payload["development_historian_runtime"], "canonical")
+        self.assertFalse(payload["supervisor_enabled"])
+        self.assertEqual(payload["development_historian_runtime"], "disabled")
         self.assertEqual(payload["production_historian_owner"], "legacy_opc_service")
         self.assertEqual(payload["legacy_historian_process_state"], "unknown")
 
