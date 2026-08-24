@@ -78,6 +78,35 @@ class OpcTagManagerAppTests(unittest.TestCase):
         )
         return status, content
 
+    @patch.object(OpcTagManager, "ALARM_WRITE_ENABLED", True)
+    @patch.object(OpcTagManager.alarm_service, "delete")
+    def test_delete_route_uses_exact_alarm_id_and_returns_reload_result(self, delete):
+        delete.return_value = {
+            "mapping_saved": True,
+            "mapping_deleted": True,
+            "deleted_alarm_id": 4,
+            "reload_notified": True,
+            "reload_error": None,
+        }
+        status, body = self.request("DELETE", "/api/alarms/4")
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["deleted_alarm_id"], 4)
+        self.assertTrue(payload["reload_notified"])
+        delete.assert_called_once_with(4)
+
+    @patch.object(OpcTagManager, "ALARM_WRITE_ENABLED", False)
+    @patch.object(OpcTagManager.alarm_service, "delete")
+    def test_delete_route_reports_disabled_alarm_write_gate(self, delete):
+        delete.side_effect = OpcTagManager.AlarmServiceError("Alarm configuration write mode is disabled.")
+        status, body = self.request("DELETE", "/api/alarms/3")
+        payload = json.loads(body)
+        self.assertEqual(status, 403)
+        self.assertFalse(payload["success"])
+        self.assertIn("write mode is disabled", payload["error"])
+        delete.assert_called_once_with(3)
+
     @patch.object(OpcTagManager, "KM_RESOURCE_WRITE_ENABLED", False)
     @patch.object(OpcTagManager, "KM_TAG_WRITE_ENABLED", False)
     @patch.object(OpcTagManager, "KEPWARE_CONFIG_WRITE_ENABLED", False)
@@ -110,16 +139,29 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertIn('id="operator-tag-count"', html)
         self.assertIn('id="operator-last-error"', html)
         self.assertIn('<strong>Current Alarm Mapping</strong>', html)
-        self.assertIn('class="alarm-mp3-list" size="8"', html)
+        self.assertIn('id="runtime-mp3-panel"', html)
+        self.assertIn('id="alarm-center-splitter"', html)
+        self.assertIn('id="alarm-horizontal-splitter"', html)
+        self.assertIn('aria-orientation="horizontal"', html)
+        self.assertIn('aria-label="Resize MP3 browser and Alarm editor"', html)
+        self.assertIn('class="alarm-mp3-list" role="listbox"', html)
+        self.assertIn('id="alarm-selected-mp3"', html)
+        self.assertIn('<th>Tag Path</th><th>MP3 File</th><th>Mode</th><th>High</th><th>Low</th>', html)
+        self.assertLess(html.index('id="runtime-tree-view"'), html.index('id="runtime-mp3-panel"'))
+        self.assertLess(html.index('id="runtime-mp3-panel"'), html.index('id="runtime-details-view"'))
+        self.assertLess(html.index('</main>'), html.index('id="alarm-summary"'))
+        self.assertIn('id="runtime-kepware-tree-host"', html)
+        self.assertIn("All Tags browses the live Kepware hierarchy", html)
+        self.assertNotIn('class="tag-name tag-click"', html)
         self.assertIn('<html lang="en" data-theme="dark">', html)
         self.assertIn('id="theme-toggle"', html)
         self.assertIn('opcTagManagerTheme', html)
         self.assertIn('saved === "light" || saved === "dark" ? saved : "dark"', html)
         self.assertIn('data-km-write-enabled="false"', html)
         self.assertIn('data-km-resource-write-enabled="false"', html)
-        self.assertIn('class="view-tab active" data-view="kepware">Tag Configuration</button>', html)
-        self.assertIn('class="view-tab" data-view="runtime">OPC Tag List</button>', html)
-        self.assertLess(html.index(">Tag Configuration</button>"), html.index(">OPC Tag List</button>"))
+        self.assertIn('class="view-tab active" data-view="runtime">OPC Tag List</button>', html)
+        self.assertIn('class="view-tab" data-view="kepware">Tag Configuration</button>', html)
+        self.assertLess(html.index(">OPC Tag List</button>"), html.index(">Tag Configuration</button>"))
         self.assertIn('<h2>Tag Configuration Tree</h2>', html)
         self.assertIn('<h2>OPC Tag List</h2>', html)
         self.assertIn('id="full-reconcile"', html)
@@ -134,7 +176,7 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertIn('<option value="1">Read/Write</option>', html)
         self.assertNotIn(">OPC Runtime</button>", html)
         javascript = Path("static/app.js").read_text(encoding="utf-8")
-        self.assertIn('document.querySelector(\'.view-tab[data-view="kepware"]\').click();', javascript)
+        self.assertIn('document.querySelector(\'.view-tab[data-view="runtime"]\').click();', javascript)
         self.assertIn('Number(document.getElementById("new-tag-data-type").value)', javascript)
         self.assertIn('selectEnumValue("new-tag-data-type", templateTag?.tag_details?.data_type', javascript)
         self.assertIn('friendlyEnumValue("new-tag-data-type", dataType)', javascript)
@@ -146,12 +188,116 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertIn('value === "dark" || value === "light" ? value : "dark"', javascript)
         self.assertIn('localStorage.setItem(themeStorageKey, safeTheme)', javascript)
         self.assertIn('applyTheme(document.documentElement.dataset.theme)', javascript)
-        self.assertLess(javascript.index('applyTheme(document.documentElement.dataset.theme)'), javascript.index('document.querySelector(\'.view-tab[data-view="kepware"]\').click();'))
+        self.assertLess(javascript.index('applyTheme(document.documentElement.dataset.theme)'), javascript.index('document.querySelector(\'.view-tab[data-view="runtime"]\').click();'))
+        self.assertIn("runtimeKepwareTreeHost", javascript)
+        self.assertIn('appendChild(kepwareTree)', javascript)
+        self.assertIn('fetch(`/api/opc-tags/resolve/by-path?path=', javascript)
+        self.assertIn('...(node.context.group_path || [])', javascript)
+        self.assertIn('.join("/")', javascript)
+        self.assertIn('if (!alarmId && !selectedRuntimeTag.tagId)', javascript)
+        self.assertIn('confirm: "SYNC_ONE_EXISTING_TAG"', javascript)
+        self.assertIn('payload.tag_id = selectedRuntimeTag.tagId', javascript)
+        self.assertIn('fetchWithTimeout("/api/runtime/status")', javascript)
+        self.assertIn('controller.abort()', javascript)
+        self.assertIn('loadAlarmMp3();', javascript)
+        self.assertIn('document.getElementById("alarm-selected-mp3").value', javascript)
+        self.assertIn('edit.addEventListener("click", () => selectMappedAlarm(alarm))', javascript)
+        self.assertIn('test.addEventListener("click", () => previewAlarmMp3(alarm.mp3_file))', javascript)
+        self.assertIn('remove.dataset.alarmId = String(alarm.alarm_id)', javascript)
+        self.assertIn('remove.dataset.tagId = String(alarm.tag_id)', javascript)
+        self.assertIn('remove.dataset.tagPath = alarm.tag_path', javascript)
+        self.assertIn('remove.addEventListener("click", () => deleteAlarmMapping(alarm))', javascript)
+        self.assertIn('fetch(`/api/alarms/${encodeURIComponent(alarmId)}`, { method: "DELETE" })', javascript)
+        self.assertNotIn('document.getElementById("delete-alarm").click()', javascript)
+        self.assertIn('await loadAlarmSummary()', javascript)
+        self.assertIn('selectedMp3 = ""', javascript)
+        self.assertIn('Mapping Delete        Failed', javascript)
+        self.assertIn('runtimeSecondaryHost.append(operatorHealth, diagnosticsPanel)', javascript)
+        self.assertIn('opcTagManager.alarmPane.leftWidth', javascript)
+        self.assertIn('opcTagManager.alarmPane.centerWidth', javascript)
+        self.assertIn('opcTagManager.alarmPane.topHeight', javascript)
+        self.assertIn('alarmMinimumWidths = { left: 260, center: 240, right: 320 }', javascript)
+        self.assertIn('localStorage.setItem(alarmLeftWidthKey', javascript)
+        self.assertIn('localStorage.setItem(alarmCenterWidthKey', javascript)
+        self.assertIn('localStorage.removeItem(alarmLeftWidthKey)', javascript)
+        self.assertIn('localStorage.removeItem(alarmCenterWidthKey)', javascript)
+        self.assertIn('applyAlarmPaneWidths(true)', javascript)
+        self.assertIn('bindAlarmPaneSplitter(mainPanelSplitter, "left")', javascript)
+        self.assertIn('bindAlarmPaneSplitter(alarmCenterSplitter, "center")', javascript)
+        self.assertIn('if (splitter.dataset.alarmResizeBound === "true") return', javascript)
+        self.assertIn('splitter.setPointerCapture?.(event.pointerId)', javascript)
+        self.assertIn('splitter.addEventListener("pointermove", onPointerMove)', javascript)
+        self.assertIn('splitter.addEventListener("pointercancel", finishResize)', javascript)
+        self.assertIn('splitter.releasePointerCapture(finishEvent.pointerId)', javascript)
+        self.assertIn('alarmMinimumHeights = { top: 280, mapping: 160 }', javascript)
+        self.assertIn('alarmHorizontalSplitter.addEventListener("pointerdown", beginAlarmHorizontalResize)', javascript)
+        self.assertIn('alarmHorizontalSplitter.setPointerCapture?.(event.pointerId)', javascript)
+        self.assertIn('alarmHorizontalSplitter.addEventListener("pointermove", onPointerMove)', javascript)
+        self.assertIn('alarmHorizontalSplitter.addEventListener("pointercancel", finishResize)', javascript)
+        self.assertIn('localStorage.setItem(alarmTopHeightKey', javascript)
+        self.assertIn('localStorage.removeItem(alarmTopHeightKey)', javascript)
+        self.assertIn('applyAlarmTopHeight(true)', javascript)
+        self.assertIn('Math.max(alarmMinimumHeights.top', javascript)
+        self.assertIn('total - alarmMinimumHeights.mapping', javascript)
+        self.assertIn('workspace.style.setProperty("--alarm-left-width", `${left}px`)', javascript)
+        self.assertIn('workspace.style.setProperty("--alarm-center-width", `${center}px`)', javascript)
+        self.assertIn('Math.max(alarmMinimumWidths.left', javascript)
+        self.assertIn('startLeft + startCenter - alarmMinimumWidths.center', javascript)
+        self.assertIn('startCenter + startRight - alarmMinimumWidths.right', javascript)
+        self.assertIn('usedAlarmMp3 = new Map()', javascript)
+        self.assertIn('alarmIds.add(Number(alarm.alarm_id))', javascript)
+        self.assertIn('usedByAnotherAlarm = [...usedByAlarmIds].some', javascript)
+        self.assertIn('row.disabled = usedByAnotherAlarm', javascript)
+        self.assertIn('row.title = usedByAnotherAlarm ? "already used by an alarm"', javascript)
+        self.assertIn('`${file.filename} - already used by an alarm`', javascript)
+        self.assertIn('const currentAlarmId = Number(selectedAlarm?.alarm_id || 0)', javascript)
+        self.assertIn('loadedTag.classList.add("selected-object")', javascript)
+        self.assertGreaterEqual(javascript.count('await loadAlarmSummary();'), 2)
+        self.assertIn('function selectedAlarmMp3()', javascript)
+        self.assertIn('let selectedMp3 = ""', javascript)
+        self.assertIn('return selectedMp3', javascript)
+        self.assertIn('selectedUsedByAnotherAlarm = [...selectedUsedByIds].some', javascript)
+        self.assertIn('const ready = Boolean(selectedRuntimeTag?.path && selectedMp3)', javascript)
+        self.assertNotIn('writeEnabled && selectedRuntimeTag?.path', javascript)
+        self.assertIn('row.classList.toggle("mp3-selected-pending"', javascript)
+        self.assertIn('row.classList.toggle("mp3-used"', javascript)
+        self.assertIn('row.disabled = usedByAnotherAlarm', javascript)
+        self.assertIn('selectedMp3 = file.filename', javascript)
+        self.assertIn('function updateAlarmSaveReadiness()', javascript)
+        self.assertIn('selectedRuntimeTag?.path && selectedMp3', javascript)
+        self.assertIn('document.getElementById("save-alarm").disabled = !ready', javascript)
+        self.assertIn('loadAlarmMp3(alarm?.mp3_file ?? pendingMp3)', javascript)
+        self.assertIn('if (!selectedRuntimeTag?.path || !selectedAlarmMp3()) return', javascript)
+        self.assertLess(
+            javascript.index('document.getElementById("alarm-form").addEventListener("submit"'),
+            javascript.index('fetch("/api/opc-tags/sync-one"'),
+        )
+        self.assertIn('alarm_mode: document.getElementById("alarm-mode").value || "HIGH"', javascript)
+        self.assertIn('threshold_high: alarmNumber("alarm-threshold-high")', javascript)
+        self.assertIn('threshold_low: alarmNumber("alarm-threshold-low")', javascript)
+        self.assertIn('mp3_file: selectedAlarmMp3()', javascript)
+        self.assertIn('priority: Number(document.getElementById("alarm-priority").value || "1")', javascript)
+        self.assertIn('repeat: Number(document.getElementById("alarm-repeat").value || "3")', javascript)
+        self.assertIn('enable_alarm: document.getElementById("alarm-enable").checked', javascript)
+        _get_conn.assert_not_called()
         stylesheet = Path("static/app.css").read_text(encoding="utf-8")
         self.assertIn('[data-theme="dark"]', stylesheet)
         self.assertIn('[data-theme="light"]', stylesheet)
         self.assertIn('background: var(--bg-card)', stylesheet)
         self.assertNotIn('background: #f8fafc', stylesheet)
+        self.assertIn('min-width: 260px', stylesheet)
+        self.assertIn('min-width: 240px', stylesheet)
+        self.assertIn('min-width: 320px', stylesheet)
+        self.assertIn('flex: 0 0 10px', stylesheet)
+        self.assertIn('pointer-events: auto', stylesheet)
+        self.assertIn('cursor: col-resize', stylesheet)
+        self.assertIn('z-index: 3', stylesheet)
+        self.assertIn('.alarm-horizontal-splitter', stylesheet)
+        self.assertIn('height: 10px', stylesheet)
+        self.assertIn('cursor: row-resize', stylesheet)
+        self.assertIn('@media (max-width: 980px)', stylesheet)
+        self.assertIn('.alarm-mp3-row.mp3-selected-pending', stylesheet)
+        self.assertIn('.alarm-mp3-row.mp3-used', stylesheet)
         self.assertIn('data.status === "similar_resource_found"', javascript)
         self.assertIn("Upload as New Version", javascript)
         self.assertIn("Create Separate Resource", javascript)
@@ -194,6 +340,44 @@ class OpcTagManagerAppTests(unittest.TestCase):
     def test_full_reconcile_endpoint_requires_explicit_confirmation(self):
         status, _body = self.request("POST", "/api/runtime/full-reconcile", {"confirm": "no"})
         self.assertEqual(status, 422)
+
+    def test_all_tags_source_returns_live_kepware_nodes_without_tagmaster_access(self):
+        unregistered_channel = {
+            "name": "UNREGISTERED_CHANNEL",
+            "object_type": "Channel",
+            "full_path": "UNREGISTERED_CHANNEL",
+            "expandable": True,
+            "context": {"channel": "UNREGISTERED_CHANNEL", "device": "", "group_path": []},
+            "properties": {},
+        }
+        with patch.object(OpcTagManager.kepware_config_api, "get_channels", return_value=[unregistered_channel]), patch.object(
+            OpcTagManager, "get_conn"
+        ) as get_conn:
+            status, body = self.request("GET", "/api/kepware/channels")
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["connected"])
+        self.assertEqual(payload["nodes"], [unregistered_channel])
+        get_conn.assert_not_called()
+
+        unregistered_tag = {
+            "name": "NotYetRegistered",
+            "object_type": "Tag",
+            "full_path": "UNREGISTERED_CHANNEL.Device.Group.NotYetRegistered",
+            "expandable": False,
+            "context": {"channel": "UNREGISTERED_CHANNEL", "device": "Device", "group_path": ["Group"]},
+            "properties": {},
+            "tag_details": {"data_type": 1, "address": "X1"},
+        }
+        with patch.object(OpcTagManager.kepware_config_api, "get_group_children", return_value=[unregistered_tag]), patch.object(
+            OpcTagManager, "get_conn"
+        ) as get_conn:
+            status, body = self.request(
+                "GET", "/api/kepware/group-children?channel=UNREGISTERED_CHANNEL&device=Device&group_path=Group"
+            )
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["nodes"], [unregistered_tag])
+        get_conn.assert_not_called()
 
     def test_single_existing_tag_sync_requires_confirmation(self):
         status, _body = self.request(
@@ -241,6 +425,56 @@ class OpcTagManagerAppTests(unittest.TestCase):
         create.assert_not_called()
         notify.assert_not_called()
         historian.assert_not_called()
+
+    def test_exact_path_lookup_distinguishes_unregistered_and_reuses_registered_tag_id(self):
+        class LookupCursor:
+            def __init__(self, row):
+                self.row = row
+                self.query = None
+                self.path = None
+
+            def execute(self, query, path):
+                self.query = " ".join(query.split())
+                self.path = path
+
+            def fetchone(self):
+                return self.row
+
+        class LookupConnection:
+            def __init__(self, row):
+                self.lookup_cursor = LookupCursor(row)
+
+            def cursor(self):
+                return self.lookup_cursor
+
+            def close(self):
+                return None
+
+        missing = LookupConnection(None)
+        with patch.object(OpcTagManager, "get_conn", return_value=missing), patch.object(
+            OpcTagManager.tag_reconcile_service, "reconcile", new=AsyncMock()
+        ) as reconcile, patch.object(OpcTagManager.tag_fast_sync_service, "sync_existing_tag", new=AsyncMock()) as sync:
+            status, body = self.request("GET", "/api/opc-tags/resolve/by-path?path=Line%2FDevice%2FUnregistered")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"success": True, "registered": False, "tag": None, "alarm": None})
+        self.assertEqual(missing.lookup_cursor.path, "Line/Device/Unregistered")
+        reconcile.assert_not_awaited()
+        sync.assert_not_awaited()
+
+        registered = LookupConnection((42, "Line/Device/Registered", "ns=2;s=Line.Device.Registered", "Boolean"))
+        alarm = {"alarm_id": 7, "tag_id": 42, "tag_path": "Line/Device/Registered"}
+        with patch.object(OpcTagManager, "get_conn", return_value=registered), patch.object(
+            OpcTagManager.alarm_service, "get_for_tag", return_value=alarm
+        ) as get_alarm, patch.object(OpcTagManager.tag_fast_sync_service, "sync_existing_tag", new=AsyncMock()) as sync:
+            status, body = self.request("GET", "/api/opc-tags/resolve/by-path?path=Line%2FDevice%2FRegistered")
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["registered"])
+        self.assertEqual(payload["tag"]["tag_id"], 42)
+        self.assertEqual(payload["tag"]["node_id"], "ns=2;s=Line.Device.Registered")
+        self.assertEqual(payload["alarm"], alarm)
+        get_alarm.assert_called_once_with(42)
+        sync.assert_not_awaited()
 
     @patch.object(OpcTagManager, "get_conn", return_value=FakeConnection())
     def test_runtime_status_is_read_only_and_separates_development_from_production_ownership(self, _get_conn):

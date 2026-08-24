@@ -1,8 +1,9 @@
-const runtimeTags = document.querySelectorAll(".tag-click");
 let selectedRuntimeTag = null;
 let selectedAlarm = null;
 let alarmMp3Loaded = false;
 let alarmMp3Files = [];
+let usedAlarmMp3 = new Map();
+let selectedMp3 = "";
 
 const themeStorageKey = "opcTagManagerTheme";
 const themeToggle = document.getElementById("theme-toggle");
@@ -41,6 +42,17 @@ const workspace = document.querySelector(".workspace");
 const treePanel = document.querySelector(".tree-panel");
 const detailsPanel = document.querySelector(".details-panel");
 const mainPanelSplitter = document.getElementById("main-panel-splitter");
+const alarmCenterSplitter = document.getElementById("alarm-center-splitter");
+const alarmLeftWidthKey = "opcTagManager.alarmPane.leftWidth";
+const alarmCenterWidthKey = "opcTagManager.alarmPane.centerWidth";
+const alarmTopHeightKey = "opcTagManager.alarmPane.topHeight";
+const alarmMinimumWidths = { left: 260, center: 240, right: 320 };
+const alarmMinimumHeights = { top: 280, mapping: 160 };
+const alarmHorizontalSplitter = document.getElementById("alarm-horizontal-splitter");
+const alarmMappingWorkspace = document.getElementById("alarm-summary");
+const initialViewportHeight = window.innerHeight;
+const initialAlarmTopHeight = workspace.getBoundingClientRect().height;
+const initialAlarmVerticalTotal = initialAlarmTopHeight + alarmMappingWorkspace.getBoundingClientRect().height;
 let mainPanelRatio = readSavedPanelRatio();
 let resizeFrame = null;
 
@@ -102,6 +114,7 @@ function ratioFromPointer(clientX) {
 }
 
 mainPanelSplitter.addEventListener("pointerdown", (event) => {
+    if (workspace.classList.contains("runtime-mode")) return;
     if (event.button !== 0) return;
     mainPanelSplitter.classList.add("dragging");
     document.body.style.userSelect = "none";
@@ -124,6 +137,7 @@ mainPanelSplitter.addEventListener("pointerdown", (event) => {
 });
 
 mainPanelSplitter.addEventListener("keydown", (event) => {
+    if (workspace.classList.contains("runtime-mode")) return;
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     mainPanelRatio += event.key === "ArrowLeft" ? -0.02 : 0.02;
     mainPanelRatio = Math.max(0.05, Math.min(0.95, mainPanelRatio));
@@ -137,19 +151,213 @@ window.addEventListener("resize", () => {
     resizeFrame = requestAnimationFrame(() => {
         resizeFrame = null;
         applyMainPanelRatio();
+        if (workspace.classList.contains("runtime-mode")) {
+            applyAlarmPaneWidths();
+            applyAlarmTopHeight();
+        }
     });
 });
 
 applyMainPanelRatio();
 
-runtimeTags.forEach((tag) => {
-    tag.addEventListener("click", async () => {
-        runtimeTags.forEach((item) => item.classList.remove("selected-tag"));
-        tag.classList.add("selected-tag");
-        selectedRuntimeTag = tag;
-        document.getElementById("selected-tag-path").value = tag.dataset.path;
-        document.getElementById("selected-tag-id").value = tag.dataset.tagid || "";
-        await loadTagAlarm(tag.dataset.tagid);
+function alarmAvailableWidth() {
+    const splitterWidth = (splitter) => {
+        const style = getComputedStyle(splitter);
+        return splitter.getBoundingClientRect().width
+            + Number.parseFloat(style.marginLeft || "0")
+            + Number.parseFloat(style.marginRight || "0");
+    };
+    return Math.max(0, workspace.clientWidth - splitterWidth(mainPanelSplitter) - splitterWidth(alarmCenterSplitter));
+}
+
+function savedAlarmWidth(key) {
+    try {
+        const value = Number.parseFloat(localStorage.getItem(key));
+        return Number.isFinite(value) && value > 0 ? value : null;
+    } catch (_error) {
+        return null;
+    }
+}
+
+function normalizedAlarmWidths(left, center) {
+    const total = alarmAvailableWidth();
+    const maximumLeft = Math.max(alarmMinimumWidths.left, total - alarmMinimumWidths.center - alarmMinimumWidths.right);
+    const safeLeft = Math.max(alarmMinimumWidths.left, Math.min(left, maximumLeft));
+    const maximumCenter = Math.max(alarmMinimumWidths.center, total - safeLeft - alarmMinimumWidths.right);
+    const safeCenter = Math.max(alarmMinimumWidths.center, Math.min(center, maximumCenter));
+    return { left: safeLeft, center: safeCenter };
+}
+
+function defaultAlarmWidths() {
+    const total = alarmAvailableWidth();
+    return normalizedAlarmWidths(total * 0.42, total * 0.28);
+}
+
+function applyAlarmPaneWidths(useDefaults = false) {
+    if (workspace.clientWidth <= 980) {
+        workspace.style.removeProperty("--alarm-left-width");
+        workspace.style.removeProperty("--alarm-center-width");
+        return;
+    }
+    const defaults = defaultAlarmWidths();
+    const widths = useDefaults ? defaults : normalizedAlarmWidths(
+        savedAlarmWidth(alarmLeftWidthKey) ?? defaults.left,
+        savedAlarmWidth(alarmCenterWidthKey) ?? defaults.center,
+    );
+    workspace.style.setProperty("--alarm-left-width", `${widths.left}px`);
+    workspace.style.setProperty("--alarm-center-width", `${widths.center}px`);
+    mainPanelSplitter.setAttribute("aria-valuenow", String(Math.round(widths.left)));
+    alarmCenterSplitter.setAttribute("aria-valuenow", String(Math.round(widths.center)));
+}
+
+function persistAlarmPaneWidths() {
+    try {
+        localStorage.setItem(alarmLeftWidthKey, String(treePanel.getBoundingClientRect().width));
+        localStorage.setItem(alarmCenterWidthKey, String(runtimeMp3Panel.getBoundingClientRect().width));
+    } catch (_error) {
+        // Pane resizing remains available when browser storage is unavailable.
+    }
+}
+
+function alarmVerticalTotalHeight() {
+    return Math.max(
+        alarmMinimumHeights.top + alarmMinimumHeights.mapping,
+        initialAlarmVerticalTotal + (window.innerHeight - initialViewportHeight),
+    );
+}
+
+function clampAlarmTopHeight(height) {
+    const total = alarmVerticalTotalHeight();
+    return Math.max(alarmMinimumHeights.top, Math.min(height, total - alarmMinimumHeights.mapping));
+}
+
+function savedAlarmTopHeight() {
+    try {
+        const value = Number.parseFloat(localStorage.getItem(alarmTopHeightKey));
+        return Number.isFinite(value) && value > 0 ? value : null;
+    } catch (_error) {
+        return null;
+    }
+}
+
+function applyAlarmTopHeight(useDefault = false) {
+    if (!workspace.classList.contains("runtime-mode") || workspace.clientWidth <= 980) {
+        workspace.style.removeProperty("height");
+        alarmMappingWorkspace.style.removeProperty("height");
+        return;
+    }
+    const requested = useDefault ? initialAlarmTopHeight : (savedAlarmTopHeight() ?? initialAlarmTopHeight);
+    const topHeight = clampAlarmTopHeight(requested);
+    workspace.style.height = `${topHeight}px`;
+    alarmMappingWorkspace.style.height = `${alarmVerticalTotalHeight() - topHeight}px`;
+    alarmHorizontalSplitter.setAttribute("aria-valuenow", String(Math.round(topHeight)));
+}
+
+function persistAlarmTopHeight() {
+    try {
+        localStorage.setItem(alarmTopHeightKey, String(workspace.getBoundingClientRect().height));
+    } catch (_error) {
+        // Horizontal resizing remains available when browser storage is unavailable.
+    }
+}
+
+function beginAlarmHorizontalResize(event) {
+    if (!workspace.classList.contains("runtime-mode") || workspace.clientWidth <= 980 || event.button !== 0) return;
+    const startY = event.clientY;
+    const startTopHeight = workspace.getBoundingClientRect().height;
+    alarmHorizontalSplitter.classList.add("dragging");
+    document.body.style.userSelect = "none";
+    alarmHorizontalSplitter.setPointerCapture?.(event.pointerId);
+
+    const onPointerMove = (moveEvent) => {
+        const topHeight = clampAlarmTopHeight(startTopHeight + moveEvent.clientY - startY);
+        workspace.style.height = `${topHeight}px`;
+        alarmMappingWorkspace.style.height = `${alarmVerticalTotalHeight() - topHeight}px`;
+        alarmHorizontalSplitter.setAttribute("aria-valuenow", String(Math.round(topHeight)));
+    };
+    const finishResize = (finishEvent) => {
+        alarmHorizontalSplitter.classList.remove("dragging");
+        document.body.style.userSelect = "";
+        alarmHorizontalSplitter.removeEventListener("pointermove", onPointerMove);
+        alarmHorizontalSplitter.removeEventListener("pointerup", finishResize);
+        alarmHorizontalSplitter.removeEventListener("pointercancel", finishResize);
+        if (alarmHorizontalSplitter.hasPointerCapture?.(finishEvent.pointerId)) {
+            alarmHorizontalSplitter.releasePointerCapture(finishEvent.pointerId);
+        }
+        persistAlarmTopHeight();
+    };
+    alarmHorizontalSplitter.addEventListener("pointermove", onPointerMove);
+    alarmHorizontalSplitter.addEventListener("pointerup", finishResize);
+    alarmHorizontalSplitter.addEventListener("pointercancel", finishResize);
+    event.preventDefault();
+}
+
+alarmHorizontalSplitter.addEventListener("pointerdown", beginAlarmHorizontalResize);
+alarmHorizontalSplitter.addEventListener("dblclick", () => {
+    try {
+        localStorage.removeItem(alarmTopHeightKey);
+    } catch (_error) {
+        // Reset still applies for this page load.
+    }
+    applyAlarmTopHeight(true);
+});
+
+function beginAlarmPaneResize(splitter, event, side) {
+    if (!workspace.classList.contains("runtime-mode") || workspace.clientWidth <= 980 || event.button !== 0) return;
+    const startX = event.clientX;
+    const startLeft = treePanel.getBoundingClientRect().width;
+    const startCenter = runtimeMp3Panel.getBoundingClientRect().width;
+    const startRight = detailsPanel.getBoundingClientRect().width;
+    splitter.classList.add("dragging");
+    document.body.style.userSelect = "none";
+    splitter.setPointerCapture?.(event.pointerId);
+
+    const onPointerMove = (moveEvent) => {
+        const delta = moveEvent.clientX - startX;
+        let left = startLeft;
+        let center = startCenter;
+        if (side === "left") {
+            left = Math.max(alarmMinimumWidths.left, Math.min(startLeft + delta, startLeft + startCenter - alarmMinimumWidths.center));
+            center = startLeft + startCenter - left;
+        } else {
+            center = Math.max(alarmMinimumWidths.center, Math.min(startCenter + delta, startCenter + startRight - alarmMinimumWidths.right));
+        }
+        workspace.style.setProperty("--alarm-left-width", `${left}px`);
+        workspace.style.setProperty("--alarm-center-width", `${center}px`);
+    };
+    const finishResize = (finishEvent) => {
+        splitter.classList.remove("dragging");
+        document.body.style.userSelect = "";
+        splitter.removeEventListener("pointermove", onPointerMove);
+        splitter.removeEventListener("pointerup", finishResize);
+        splitter.removeEventListener("pointercancel", finishResize);
+        if (splitter.hasPointerCapture?.(finishEvent.pointerId)) splitter.releasePointerCapture(finishEvent.pointerId);
+        persistAlarmPaneWidths();
+    };
+    splitter.addEventListener("pointermove", onPointerMove);
+    splitter.addEventListener("pointerup", finishResize);
+    splitter.addEventListener("pointercancel", finishResize);
+    event.preventDefault();
+}
+
+function bindAlarmPaneSplitter(splitter, side) {
+    if (splitter.dataset.alarmResizeBound === "true") return;
+    splitter.dataset.alarmResizeBound = "true";
+    splitter.addEventListener("pointerdown", (event) => beginAlarmPaneResize(splitter, event, side));
+}
+
+bindAlarmPaneSplitter(mainPanelSplitter, "left");
+bindAlarmPaneSplitter(alarmCenterSplitter, "center");
+[mainPanelSplitter, alarmCenterSplitter].forEach((splitter) => {
+    splitter.addEventListener("dblclick", () => {
+        if (!workspace.classList.contains("runtime-mode")) return;
+        try {
+            localStorage.removeItem(alarmLeftWidthKey);
+            localStorage.removeItem(alarmCenterWidthKey);
+        } catch (_error) {
+            // Reset still applies for this page load.
+        }
+        applyAlarmPaneWidths(true);
     });
 });
 
@@ -165,17 +373,40 @@ async function loadAlarmSummary() {
         return;
     }
     document.getElementById("alarm-summary-count").textContent = `${data.alarms.length} mappings`;
+    usedAlarmMp3 = new Map();
+    data.alarms.filter((alarm) => alarm.mp3_file).forEach((alarm) => {
+        const key = alarm.mp3_file.toLocaleLowerCase();
+        const alarmIds = usedAlarmMp3.get(key) || new Set();
+        alarmIds.add(Number(alarm.alarm_id));
+        usedAlarmMp3.set(key, alarmIds);
+    });
+    if (alarmMp3Loaded) renderAlarmMp3Options();
     data.alarms.forEach((alarm) => {
         const row = document.createElement("tr");
         row.dataset.tagid = alarm.tag_id;
-        const threshold = alarm.alarm_mode === "HIGH" ? alarm.threshold_high : alarm.threshold_low;
-        [alarm.tag_path, `${alarm.alarm_mode} / ${threshold ?? "digital"}`, alarm.mp3_file,
-            alarm.enable_alarm ? "Yes" : "No", alarm.priority, alarm.health.join(", ")]
+        [alarm.tag_path, alarm.mp3_file, alarm.alarm_mode, alarm.threshold_high ?? "",
+            alarm.threshold_low ?? "", alarm.priority, alarm.repeat, alarm.enable_alarm ? "Yes" : "No"]
             .forEach((value) => { const cell = document.createElement("td"); cell.textContent = value; row.appendChild(cell); });
-        row.addEventListener("click", () => {
-            const tag = document.querySelector(`.tag-click[data-tagid="${CSS.escape(String(alarm.tag_id))}"]`);
-            if (tag) tag.click();
-        });
+        const actions = document.createElement("td");
+        actions.className = "mapping-actions";
+        const edit = document.createElement("button");
+        edit.type = "button";
+        edit.textContent = "Edit";
+        edit.addEventListener("click", () => selectMappedAlarm(alarm));
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "danger-button";
+        remove.textContent = "Delete";
+        remove.dataset.alarmId = String(alarm.alarm_id);
+        remove.dataset.tagId = String(alarm.tag_id);
+        remove.dataset.tagPath = alarm.tag_path;
+        remove.addEventListener("click", () => deleteAlarmMapping(alarm));
+        const test = document.createElement("button");
+        test.type = "button";
+        test.textContent = "Test";
+        test.addEventListener("click", () => previewAlarmMp3(alarm.mp3_file));
+        actions.append(edit, remove, test);
+        row.appendChild(actions);
         body.appendChild(row);
     });
 }
@@ -184,21 +415,47 @@ document.querySelectorAll(".alarm-filter-button").forEach((button) => {
     button.addEventListener("click", async () => {
         document.querySelectorAll(".alarm-filter-button").forEach((item) => item.classList.toggle("active", item === button));
         const alarmOnly = button.dataset.alarmFilter === "alarm";
-        runtimeTags.forEach((tag) => {
-            tag.closest("li.leaf").classList.toggle("hidden", alarmOnly && tag.dataset.hasAlarm !== "true");
-        });
+        document.getElementById("runtime-kepware-tree-host").classList.toggle("hidden", alarmOnly);
         if (alarmOnly) await loadAlarmSummary();
-        else document.getElementById("alarm-summary").classList.add("hidden");
     });
 });
+
+function selectMappedAlarm(alarm) {
+    selectedRuntimeTag = {
+        path: alarm.tag_path,
+        tagId: Number(alarm.tag_id),
+        nodeId: alarm.node_id || "",
+        dataType: alarm.data_type || "",
+    };
+    document.getElementById("selected-tag-path").value = selectedRuntimeTag.path;
+    document.getElementById("selected-tag-id").value = selectedRuntimeTag.tagId;
+    document.getElementById("selected-tag-node-id").value = selectedRuntimeTag.nodeId;
+    document.getElementById("selected-tag-data-type").value = selectedRuntimeTag.dataType;
+    document.getElementById("alarm-status").textContent = "Alarm configured";
+    const loadedTag = document.querySelector(`.kepware-object[data-canonical-path="${CSS.escape(alarm.tag_path)}"]`);
+    if (loadedTag) {
+        document.querySelectorAll(".kepware-object").forEach((item) => item.classList.remove("selected-object"));
+        loadedTag.classList.add("selected-object");
+    }
+    showAlarmForm(alarm);
+}
 
 function alarmNumber(id) {
     const value = document.getElementById(id).value;
     return value === "" ? null : Number(value);
 }
 
+function selectedAlarmMp3() {
+    return selectedMp3;
+}
+
+function updateAlarmSaveReadiness() {
+    const ready = Boolean(selectedRuntimeTag?.path && selectedMp3);
+    document.getElementById("save-alarm").disabled = !ready;
+    document.getElementById("alarm-selected-mp3").value = selectedMp3 || "No MP3 selected";
+}
+
 async function loadAlarmMp3(selected = "") {
-    const select = document.getElementById("alarm-mp3");
     if (!alarmMp3Loaded) {
         const response = await fetch("/api/alarm-mp3");
         const data = await response.json();
@@ -208,16 +465,62 @@ async function loadAlarmMp3(selected = "") {
     renderAlarmMp3Options(selected);
 }
 
-function renderAlarmMp3Options(selected = document.getElementById("alarm-mp3").value) {
-    const select = document.getElementById("alarm-mp3");
+function renderAlarmMp3Options(selected = selectedMp3) {
+    const list = document.getElementById("alarm-mp3");
     const search = document.getElementById("alarm-mp3-search").value.trim().toLocaleLowerCase();
     const visible = alarmMp3Files.filter((file) => file.filename.toLocaleLowerCase().includes(search));
-    select.replaceChildren(...visible.map((file) => new Option(file.filename, file.filename)));
+    const currentAlarmId = Number(selectedAlarm?.alarm_id || 0);
+    const rows = visible.map((file) => {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "alarm-mp3-row mp3-available";
+        row.dataset.filename = file.filename;
+        row.setAttribute("role", "option");
+        const usedByAlarmIds = usedAlarmMp3.get(file.filename.toLocaleLowerCase()) || new Set();
+        const usedByAnotherAlarm = [...usedByAlarmIds].some((alarmId) => alarmId !== currentAlarmId);
+        row.disabled = usedByAnotherAlarm;
+        row.classList.toggle("mp3-used", usedByAnotherAlarm);
+        row.classList.toggle("mp3-available", !usedByAnotherAlarm);
+        row.classList.toggle("mp3-selected-pending", file.filename === selected && !usedByAnotherAlarm);
+        row.setAttribute("aria-selected", String(file.filename === selected && !usedByAnotherAlarm));
+        row.title = usedByAnotherAlarm ? "already used by an alarm" : "";
+        row.textContent = usedByAnotherAlarm ? `${file.filename} - already used by an alarm` : file.filename;
+        row.addEventListener("click", () => {
+            selectedMp3 = file.filename;
+            renderAlarmMp3Options();
+            updateAlarmSaveReadiness();
+        });
+        return row;
+    });
     const exists = alarmMp3Files.some((file) => file.filename === selected);
     const selectedVisible = visible.some((file) => file.filename === selected);
-    if (selected && exists && !selectedVisible) select.add(new Option(`${selected} (current selection)`, selected));
-    if (selected && !exists) select.add(new Option(`${selected} (missing — retained legacy value)`, selected));
-    if (selected) select.value = selected;
+    const selectedUsedByIds = usedAlarmMp3.get(selected.toLocaleLowerCase()) || new Set();
+    const selectedUsedByAnotherAlarm = [...selectedUsedByIds].some((alarmId) => alarmId !== currentAlarmId);
+    if (selectedUsedByAnotherAlarm) selectedMp3 = "";
+    else if (selected) selectedMp3 = selected;
+    if (selected && exists && !selectedVisible && !selectedUsedByAnotherAlarm) {
+        const retained = document.createElement("button");
+        retained.type = "button";
+        retained.className = "alarm-mp3-row mp3-selected-pending";
+        retained.dataset.filename = selected;
+        retained.setAttribute("role", "option");
+        retained.setAttribute("aria-selected", "true");
+        retained.textContent = `${selected} (current selection)`;
+        rows.push(retained);
+    }
+    if (selected && !exists && selectedAlarm) {
+        const missing = document.createElement("button");
+        missing.type = "button";
+        missing.className = "alarm-mp3-row mp3-selected-pending";
+        missing.dataset.filename = selected;
+        missing.setAttribute("role", "option");
+        missing.setAttribute("aria-selected", "true");
+        missing.textContent = `${selected} (missing — retained legacy value)`;
+        rows.push(missing);
+        selectedMp3 = selected;
+    }
+    list.replaceChildren(...rows);
+    updateAlarmSaveReadiness();
     const warning = document.getElementById("alarm-mp3-warning");
     warning.classList.toggle("hidden", !selected || exists);
     warning.textContent = selected && !exists
@@ -226,8 +529,8 @@ function renderAlarmMp3Options(selected = document.getElementById("alarm-mp3").v
 }
 
 document.getElementById("alarm-mp3-search").addEventListener("input", () => renderAlarmMp3Options());
-
 function showAlarmForm(alarm) {
+    const pendingMp3 = selectedMp3;
     selectedAlarm = alarm;
     document.getElementById("use-tag-as-alarm").classList.add("hidden");
     document.getElementById("alarm-form").classList.remove("hidden");
@@ -251,7 +554,8 @@ function showAlarmForm(alarm) {
     document.getElementById("alarm-priority").value = alarm?.priority ?? 1;
     document.getElementById("alarm-repeat").value = alarm?.repeat ?? 3;
     document.getElementById("delete-alarm").classList.toggle("hidden", !alarm);
-    loadAlarmMp3(alarm?.mp3_file || "");
+    loadAlarmMp3(alarm?.mp3_file ?? pendingMp3);
+    updateAlarmSaveReadiness();
 }
 
 async function loadTagAlarm(tagId) {
@@ -278,23 +582,94 @@ async function loadTagAlarm(tagId) {
     }
 }
 
+async function selectKepwareAlarmTag(node) {
+    const tagDetails = node.tag_details || {};
+    const canonicalPath = [
+        node.context.channel,
+        node.context.device,
+        ...(node.context.group_path || []),
+        node.name,
+    ].join("/");
+    selectedRuntimeTag = {
+        path: canonicalPath,
+        tagId: null,
+        nodeId: tagDetails.node_id || "",
+        dataType: tagDetails.data_type ?? "",
+    };
+    showAlarmForm(null);
+    document.getElementById("selected-tag-path").value = canonicalPath;
+    document.getElementById("selected-tag-id").value = "Not registered";
+    document.getElementById("selected-tag-node-id").value = selectedRuntimeTag.nodeId || "Available after registration";
+    document.getElementById("selected-tag-data-type").value = selectedRuntimeTag.dataType;
+    const status = document.getElementById("alarm-status");
+    status.textContent = "Checking TagMaster registration...";
+    document.getElementById("use-tag-as-alarm").classList.add("hidden");
+    try {
+        const response = await fetch(`/api/opc-tags/resolve/by-path?path=${encodeURIComponent(canonicalPath)}`);
+        const data = await response.json();
+        if (!response.ok || !data.success) throw new Error("Tag lookup failed");
+        if (!data.registered) {
+            selectedAlarm = null;
+            status.textContent = "Not registered - it will be registered when the Alarm is saved.";
+            showAlarmForm(null);
+            return;
+        }
+        selectedRuntimeTag.tagId = Number(data.tag.tag_id);
+        selectedRuntimeTag.nodeId = data.tag.node_id || selectedRuntimeTag.nodeId;
+        selectedRuntimeTag.dataType = data.tag.data_type ?? selectedRuntimeTag.dataType;
+        document.getElementById("selected-tag-id").value = selectedRuntimeTag.tagId;
+        document.getElementById("selected-tag-node-id").value = selectedRuntimeTag.nodeId || "Unknown";
+        document.getElementById("selected-tag-data-type").value = selectedRuntimeTag.dataType;
+        if (data.alarm) {
+            status.textContent = "Alarm configured";
+            showAlarmForm(data.alarm);
+        } else {
+            selectedAlarm = null;
+            status.textContent = "Registered - no Alarm configured";
+            showAlarmForm(null);
+        }
+    } catch (_error) {
+        status.textContent = "Tag registration status unavailable.";
+    }
+}
+
 document.getElementById("use-tag-as-alarm").addEventListener("click", () => showAlarmForm(null));
 
 document.getElementById("alarm-form").addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (!selectedRuntimeTag) return;
+    if (!selectedRuntimeTag?.path || !selectedAlarmMp3()) return;
     const result = document.getElementById("alarm-result");
     const payload = {
-        alarm_mode: document.getElementById("alarm-mode").value,
+        alarm_mode: document.getElementById("alarm-mode").value || "HIGH",
         threshold_high: alarmNumber("alarm-threshold-high"),
         threshold_low: alarmNumber("alarm-threshold-low"),
-        mp3_file: document.getElementById("alarm-mp3").value,
-        priority: Number(document.getElementById("alarm-priority").value),
-        repeat: Number(document.getElementById("alarm-repeat").value),
+        mp3_file: selectedAlarmMp3(),
+        priority: Number(document.getElementById("alarm-priority").value || "1"),
+        repeat: Number(document.getElementById("alarm-repeat").value || "3"),
         enable_alarm: document.getElementById("alarm-enable").checked,
     };
     const alarmId = document.getElementById("alarm-id").value;
-    if (!alarmId) payload.tag_id = Number(selectedRuntimeTag.dataset.tagid);
+    if (!alarmId && !selectedRuntimeTag.tagId) {
+        const syncResponse = await fetch("/api/opc-tags/sync-one", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path: selectedRuntimeTag.path, confirm: "SYNC_ONE_EXISTING_TAG" }),
+        });
+        const syncData = await syncResponse.json();
+        if (!syncResponse.ok || !syncData.success) {
+            result.className = "create-result error-message";
+            result.classList.remove("hidden");
+            result.textContent = `Exact Tag Registration Failed\n${syncData.error || "Tag registration failed."}`;
+            return;
+        }
+        selectedRuntimeTag.tagId = Number(syncData.tag_id);
+        selectedRuntimeTag.nodeId = syncData.node_id || "";
+        selectedRuntimeTag.dataType = syncData.data_type ?? "";
+        document.getElementById("selected-tag-id").value = selectedRuntimeTag.tagId;
+        document.getElementById("selected-tag-node-id").value = selectedRuntimeTag.nodeId || "Unknown";
+        document.getElementById("selected-tag-data-type").value = selectedRuntimeTag.dataType;
+    }
+    if (!alarmId) payload.tag_id = selectedRuntimeTag.tagId;
     const response = await fetch(alarmId ? `/api/alarms/${alarmId}` : "/api/alarms", {
         method: alarmId ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
@@ -311,39 +686,54 @@ document.getElementById("alarm-form").addEventListener("submit", async (event) =
     result.textContent = data.reload_notified
         ? "Mapping Save          Succeeded\nAlarm Reload         Succeeded"
         : `Mapping Save          Succeeded\nAlarm Reload         ${data.reload_error === "disabled" ? "Disabled" : `Failed (${data.reload_error || "unknown"})`}`;
-    selectedRuntimeTag.dataset.hasAlarm = "true";
-    await loadTagAlarm(selectedRuntimeTag.dataset.tagid);
+    await loadAlarmSummary();
+    await loadTagAlarm(selectedRuntimeTag.tagId);
 });
 
-document.getElementById("delete-alarm").addEventListener("click", async () => {
-    if (!selectedAlarm || !window.confirm("Remove this Alarm mapping?")) return;
-    const response = await fetch(`/api/alarms/${selectedAlarm.alarm_id}`, { method: "DELETE" });
-    const data = await response.json();
+async function deleteAlarmMapping(alarm) {
     const result = document.getElementById("alarm-result");
     result.classList.remove("hidden");
-    if (!response.ok || !data.success) {
+    if (!alarm?.alarm_id || !window.confirm(`Delete Alarm mapping for ${alarm.tag_path}?`)) return;
+    const alarmId = Number(alarm.alarm_id);
+    try {
+        const response = await fetch(`/api/alarms/${encodeURIComponent(alarmId)}`, { method: "DELETE" });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || `Delete request failed with HTTP ${response.status}.`);
+        }
+        const deletingSelectedAlarm = Number(selectedAlarm?.alarm_id) === alarmId;
+        if (deletingSelectedAlarm) {
+            selectedAlarm = null;
+            selectedMp3 = "";
+            document.getElementById("alarm-form").classList.add("hidden");
+            document.getElementById("alarm-status").textContent = "Not configured";
+            document.getElementById("alarm-selected-mp3").value = "No MP3 selected";
+            document.getElementById("use-tag-as-alarm").classList.remove("hidden");
+            updateAlarmSaveReadiness();
+        }
+        result.className = data.reload_notified ? "create-result success-message" : "create-result warning-message";
+        result.textContent = data.reload_notified
+            ? "Mapping Delete        Succeeded\nAlarm Reload         Succeeded"
+            : `Mapping Delete        Succeeded\nAlarm Reload         ${data.reload_error === "disabled" ? "Disabled" : `Failed (${data.reload_error || "unknown"})`}`;
+        await loadAlarmSummary();
+    } catch (error) {
         result.className = "create-result error-message";
-        result.textContent = `Mapping Remove        Failed\nAlarm Reload         Not attempted\n${data.error || "Alarm delete failed."}`;
-        return;
+        result.textContent = `Mapping Delete        Failed\n${error.message || "Alarm delete failed."}`;
     }
-    selectedRuntimeTag.dataset.hasAlarm = "false";
-    selectedAlarm = null;
-    document.getElementById("alarm-form").classList.add("hidden");
-    document.getElementById("alarm-status").textContent = "Not configured";
-    document.getElementById("use-tag-as-alarm").classList.remove("hidden");
-    result.className = data.reload_notified ? "create-result success-message" : "create-result warning-message";
-    result.textContent = data.reload_notified
-        ? "Mapping Remove        Succeeded\nAlarm Reload         Succeeded"
-        : `Mapping Remove        Succeeded\nAlarm Reload         ${data.reload_error === "disabled" ? "Disabled" : `Failed (${data.reload_error || "unknown"})`}`;
-});
+}
 
-document.getElementById("preview-alarm-mp3").addEventListener("click", () => {
-    const filename = document.getElementById("alarm-mp3").value;
+document.getElementById("delete-alarm").addEventListener("click", () => deleteAlarmMapping(selectedAlarm));
+
+function previewAlarmMp3(filename) {
     if (!filename) return;
     const audio = document.getElementById("alarm-preview-audio");
     audio.src = `/api/alarm-mp3/${encodeURIComponent(filename)}/preview`;
     audio.classList.remove("hidden");
     audio.play();
+}
+
+document.getElementById("preview-alarm-mp3").addEventListener("click", () => {
+    previewAlarmMp3(selectedMp3);
 });
 
 const viewTabs = document.querySelectorAll(".view-tab");
@@ -352,6 +742,13 @@ let loadedCounts = { channels: 0, devices: 0, tag_groups: 0, tags: 0 };
 const kepwareWriteEnabled =
     document.getElementById("kepware-tree-view").dataset.writeEnabled === "true";
 const kepwareTreeView = document.getElementById("kepware-tree-view");
+const kepwareTree = document.getElementById("kepware-tree");
+const configurationKepwareTreeHost = document.getElementById("configuration-kepware-tree-host");
+const runtimeKepwareTreeHost = document.getElementById("runtime-kepware-tree-host");
+const runtimeMp3Panel = document.getElementById("runtime-mp3-panel");
+const runtimeSecondaryHost = document.getElementById("runtime-secondary-host");
+const operatorHealth = document.querySelector(".operator-health");
+const diagnosticsPanel = document.querySelector(".diagnostics-panel");
 const kmTagWriteEnabled = kepwareTreeView.dataset.kmWriteEnabled === "true";
 const kmResourceWriteEnabled = kepwareTreeView.dataset.kmResourceWriteEnabled === "true";
 const configuredTagDefaults = {
@@ -380,13 +777,24 @@ viewTabs.forEach((tab) => {
         document.getElementById("runtime-details-view").classList.toggle("hidden", isKepware);
         document.getElementById("kepware-details-view").classList.toggle("hidden", !isKepware);
         document.getElementById("full-reconcile").classList.toggle("hidden", isKepware);
+        workspace.classList.toggle("runtime-mode", !isKepware);
+        runtimeMp3Panel.classList.toggle("hidden", isKepware);
+        alarmCenterSplitter.classList.toggle("hidden", isKepware);
+        document.getElementById("alarm-summary").classList.toggle("hidden", isKepware);
+        alarmHorizontalSplitter.classList.toggle("hidden", isKepware);
+        runtimeSecondaryHost.classList.toggle("hidden", isKepware);
+        (isKepware ? configurationKepwareTreeHost : runtimeKepwareTreeHost).appendChild(kepwareTree);
 
         if (isKepware && !kepwareLoaded) {
             kepwareLoaded = true;
             loadKepwareChannels();
         }
         if (!isKepware) {
+            applyAlarmPaneWidths();
+            applyAlarmTopHeight();
+            runtimeSecondaryHost.append(operatorHealth, diagnosticsPanel);
             loadRuntimeStatus();
+            loadAlarmMp3();
             loadAlarmSummary();
         }
     });
@@ -420,9 +828,20 @@ document.getElementById("full-reconcile").addEventListener("click", async event 
     }
 });
 
+async function fetchWithTimeout(url, timeoutMs = 5000) {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fetch(url, { signal: controller.signal });
+    } finally {
+        window.clearTimeout(timeout);
+    }
+}
+
 async function loadRuntimeStatus() {
     try {
-        const response = await fetch("/api/runtime/status");
+        const response = await fetchWithTimeout("/api/runtime/status");
+        if (!response.ok) throw new Error("Runtime status unavailable");
         const data = await response.json();
         document.getElementById("development-historian-runtime").textContent =
             `${data.development_historian_runtime || "unknown"} / ${data.worker_state || "unknown"}`;
@@ -461,8 +880,8 @@ async function loadRuntimeStatus() {
     }
 }
 
-// Tag Configuration is intentionally the default on every full page load/refresh.
-document.querySelector('.view-tab[data-view="kepware"]').click();
+// Alarm authoring is the normal operator workflow on every full page load/refresh.
+document.querySelector('.view-tab[data-view="runtime"]').click();
 
 document.getElementById("refresh-kepware").addEventListener("click", async () => {
     await loadKepwareChannels(true);
@@ -514,6 +933,14 @@ function createKepwareNode(node, parentDetails, parentChildren) {
     button.type = "button";
     button.className = "kepware-object";
     button.textContent = node.name;
+    if (node.object_type === "Tag") {
+        button.dataset.canonicalPath = [
+            node.context.channel,
+            node.context.device,
+            ...(node.context.group_path || []),
+            node.name,
+        ].join("/");
+    }
     button.kepwareParentDetails = parentDetails;
     button.kepwareParentChildren = parentChildren;
     button.addEventListener("click", () => selectKepwareObject(button, node));
@@ -639,6 +1066,11 @@ function selectKepwareObject(button, node) {
         item.classList.remove("selected-object");
     });
     button.classList.add("selected-object");
+    const runtimeViewActive = document.querySelector('.view-tab[data-view="runtime"]').classList.contains("active");
+    if (runtimeViewActive) {
+        if (node.object_type === "Tag") selectKepwareAlarmTag(node);
+        return;
+    }
     displayKepwareObject(node);
 
     if (node.object_type === "Device" || node.object_type === "Tag Group") {

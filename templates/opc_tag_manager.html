@@ -1,32 +1,5 @@
 {% extends "base.html" %}
 
-{% macro render_tree(node) %}
-<ul class="tree">
-    {% for key, value in node.items() %}
-        {% if value is mapping and value.get('_leaf') %}
-            <li class="leaf">
-                <button
-                    type="button"
-                    class="tag-name tag-click"
-                    data-tagid="{{ value.tagid }}"
-                    data-path="{{ value.fullpath }}"
-                    data-has-alarm="{{ 'true' if value.has_alarm else 'false' }}"
-                >{{ '🔔 ' if value.has_alarm else '' }}{{ key }}</button>
-                <span class="tag-type">({{ value.datatype }})</span>
-                <span class="tag-id">ID: {{ value.tagid }}</span>
-            </li>
-        {% else %}
-            <li>
-                <details>
-                    <summary>{{ key }}</summary>
-                    {{ render_tree(value) }}
-                </details>
-            </li>
-        {% endif %}
-    {% endfor %}
-</ul>
-{% endmacro %}
-
 {% block content %}
 <header class="header-bar">
     <h1>OpcTagManager</h1>
@@ -37,32 +10,20 @@
 </header>
 
 <nav class="view-tabs" aria-label="Tag tree source">
-    <button type="button" class="view-tab active" data-view="kepware">Tag Configuration</button>
-    <button type="button" class="view-tab" data-view="runtime">OPC Tag List</button>
+    <button type="button" class="view-tab active" data-view="runtime">OPC Tag List</button>
+    <button type="button" class="view-tab" data-view="kepware">Tag Configuration</button>
 </nav>
 
-<main class="workspace">
+<main class="workspace runtime-mode">
     <section class="panel tree-panel" aria-label="Tag tree">
-        <div id="runtime-tree-view" class="tree-view hidden">
+        <div id="runtime-tree-view" class="tree-view">
             <h2>OPC Tag List</h2>
-            <div class="alarm-filter" role="group" aria-label="Filter OPC Tags">
+            <div class="alarm-filter" role="tablist" aria-label="Alarm authoring tag source">
                 <button type="button" class="alarm-filter-button active" data-alarm-filter="all">All Tags</button>
                 <button type="button" class="alarm-filter-button" data-alarm-filter="alarm">Alarm Tags</button>
             </div>
-            {% if tree %}
-                {{ render_tree(tree) }}
-            {% else %}
-                <p>No tag data found.</p>
-            {% endif %}
-            <section id="alarm-summary" class="alarm-summary" aria-live="polite">
-                <div class="alarm-summary-heading"><strong>Current Alarm Mapping</strong><span id="alarm-summary-count"></span></div>
-                <div class="alarm-summary-scroll">
-                    <table>
-                        <thead><tr><th>Tag Path</th><th>Mode / Threshold</th><th>MP3</th><th>Enabled</th><th>Priority</th><th>Health</th></tr></thead>
-                        <tbody id="alarm-summary-body"></tbody>
-                    </table>
-                </div>
-            </section>
+            <p class="tree-counts">All Tags browses the live Kepware hierarchy. Alarm Tags shows configured Alarm mappings.</p>
+            <div id="runtime-kepware-tree-host" aria-live="polite"></div>
             <section class="operator-health" aria-label="Operational health" aria-live="polite">
                 <h3>Operational Health</h3>
                 <dl class="health-grid">
@@ -120,7 +81,7 @@
 
         <div
             id="kepware-tree-view"
-            class="tree-view"
+            class="tree-view hidden"
             data-write-enabled="{{ 'true' if kepware_write_enabled else 'false' }}"
             data-km-write-enabled="{{ 'true' if km_tag_write_enabled else 'false' }}"
             data-km-resource-write-enabled="{{ 'true' if km_resource_write_enabled else 'false' }}"
@@ -144,7 +105,7 @@
             </div>
             <p id="kepware-error" class="error-message hidden"></p>
             <p id="kepware-counts" class="tree-counts hidden"></p>
-            <div id="kepware-tree" aria-live="polite"></div>
+            <div id="configuration-kepware-tree-host"><div id="kepware-tree" aria-live="polite"></div></div>
         </div>
     </section>
 
@@ -157,8 +118,32 @@
         tabindex="0"
     ></div>
 
+    <section id="runtime-mp3-panel" class="panel runtime-mp3-panel" aria-label="MP3 browser">
+        <h2>MP3 Browser</h2>
+        <div class="field-group">
+            <label for="alarm-mp3-search">Search MP3 files</label>
+            <input id="alarm-mp3-search" type="search" placeholder="Filter filenames..." autocomplete="off">
+        </div>
+        <div class="field-group">
+            <span id="alarm-mp3-label">MP3 Files</span>
+            <div id="alarm-mp3" class="alarm-mp3-list" role="listbox" aria-labelledby="alarm-mp3-label" tabindex="0"></div>
+        </div>
+        <p id="alarm-mp3-warning" class="warning-message hidden"></p>
+        <button type="button" id="preview-alarm-mp3">Preview Selected MP3</button>
+        <audio id="alarm-preview-audio" controls class="hidden"></audio>
+    </section>
+
+    <div
+        id="alarm-center-splitter"
+        class="main-panel-splitter alarm-pane-splitter"
+        role="separator"
+        aria-label="Resize MP3 browser and Alarm editor"
+        aria-orientation="vertical"
+        tabindex="0"
+    ></div>
+
     <section class="panel details-panel" aria-label="Selected object details">
-        <div id="runtime-details-view" class="details-view hidden">
+        <div id="runtime-details-view" class="details-view">
             <h2>Tag Details</h2>
 
             <div class="field-group">
@@ -169,6 +154,18 @@
             <div class="field-group">
                 <label for="selected-tag-id">Tag ID</label>
                 <input id="selected-tag-id" type="text" readonly value="">
+            </div>
+            <div class="field-group">
+                <label for="selected-tag-node-id">Node ID</label>
+                <input id="selected-tag-node-id" type="text" readonly value="">
+            </div>
+            <div class="field-group">
+                <label for="selected-tag-data-type">Data Type</label>
+                <input id="selected-tag-data-type" type="text" readonly value="">
+            </div>
+            <div class="field-group">
+                <label for="alarm-selected-mp3">Selected MP3</label>
+                <input id="alarm-selected-mp3" type="text" readonly value="No MP3 selected">
             </div>
 
             <section id="alarm-panel" class="add-tag-panel" data-write-enabled="{{ 'true' if alarm_write_enabled else 'false' }}">
@@ -190,25 +187,17 @@
                     <div class="field-group"><label for="alarm-threshold-low">Threshold Low (blank with HIGH/LOW for digital behavior)</label><input id="alarm-threshold-low" type="number" step="any"></div>
                     <div class="field-group"><label for="alarm-priority">Priority (stored; currently does not order playback)</label><input id="alarm-priority" type="number" min="1" value="1"></div>
                     <div class="field-group"><label for="alarm-repeat">Repeat count</label><input id="alarm-repeat" type="number" min="1" value="3"></div>
-                    <div class="field-group">
-                        <label for="alarm-mp3-search">Search MP3 files</label>
-                        <input id="alarm-mp3-search" type="search" placeholder="Search exact filenames…" autocomplete="off">
-                    </div>
-                    <div class="field-group"><label for="alarm-mp3">MP3 Files - click to select</label><select id="alarm-mp3" class="alarm-mp3-list" size="8"></select></div>
-                    <p id="alarm-mp3-warning" class="warning-message hidden"></p>
                     <p class="tree-counts">RepeatEnable is retained for legacy compatibility; alarm_sound currently uses Repeat directly.</p>
                     <div class="preview-actions">
-                        <button type="button" id="preview-alarm-mp3">Preview MP3</button>
-                        <button type="submit" id="save-alarm" class="refresh-button" {{ 'disabled' if not alarm_write_enabled else '' }}>Save Alarm</button>
+                        <button type="submit" id="save-alarm" class="refresh-button" disabled>Save Alarm</button>
                         <button type="button" id="delete-alarm" class="danger-button" {{ 'disabled' if not alarm_write_enabled else '' }}>Delete / Remove Alarm</button>
                     </div>
                 </form>
-                <audio id="alarm-preview-audio" controls class="hidden"></audio>
                 <p id="alarm-result" class="create-result hidden"></p>
             </section>
         </div>
 
-        <div id="kepware-details-view" class="details-view">
+        <div id="kepware-details-view" class="details-view hidden">
             <h2>Selected Kepware Object</h2>
             <p id="kepware-no-selection">Select an object in the Tag Configuration Tree.</p>
 
@@ -435,4 +424,25 @@
         </div>
     </section>
 </main>
+
+<div
+    id="alarm-horizontal-splitter"
+    class="alarm-horizontal-splitter"
+    role="separator"
+    aria-label="Resize Alarm authoring and Current Alarm Mapping"
+    aria-orientation="horizontal"
+    tabindex="0"
+    title="Drag to resize Current Alarm Mapping"
+></div>
+
+<section id="alarm-summary" class="alarm-summary alarm-mapping-workspace" aria-live="polite">
+    <div class="alarm-summary-heading"><strong>Current Alarm Mapping</strong><span id="alarm-summary-count"></span></div>
+    <div class="alarm-summary-scroll">
+        <table>
+            <thead><tr><th>Tag Path</th><th>MP3 File</th><th>Mode</th><th>High</th><th>Low</th><th>Priority</th><th>Repeat</th><th>Enabled</th><th>Actions</th></tr></thead>
+            <tbody id="alarm-summary-body"></tbody>
+        </table>
+    </div>
+</section>
+<div id="runtime-secondary-host" class="runtime-secondary-host"></div>
 {% endblock %}
