@@ -245,3 +245,51 @@ def test_activity_buffers_are_bounded_and_alarm_summary_tracks_transitions():
         "last_alarm_path": "Line/Alarm",
         "alarm_activity_state": "ready",
     }
+
+
+def test_active_alarm_snapshot_tracks_transitions_and_survives_activity_rollover():
+    supervisor = HistorianSupervisor(False)
+    supervisor._apply_event({"event": "alarm_activity_state", "state": "ready"})
+    supervisor._apply_event({
+        "event": "alarm_activity", "alarm_id": 7, "state": "ACTIVE", "transition": True,
+        "priority": 2, "value": 11, "path": "Line/Device/Alarm",
+        "time": "2026-08-25T00:00:00+00:00", "active_alarm_count": 1,
+    })
+    for index in range(205):
+        supervisor._apply_event({
+            "event": "alarm_activity", "alarm_id": 1000 + index, "state": "NORMAL",
+            "transition": False, "time": f"2026-08-25T00:01:{index % 60:02d}+00:00",
+            "active_alarm_count": 1,
+        })
+    snapshot = supervisor.active_alarm_activity()
+    assert len(supervisor.activity()["alarm"]) == 200
+    assert snapshot[0]["alarm_id"] == 7
+    assert snapshot[0]["activated_at"] == "2026-08-25T00:00:00+00:00"
+    snapshot[0]["value"] = 99
+    assert supervisor.active_alarm_activity()[0]["value"] == 11
+
+    supervisor._apply_event({
+        "event": "alarm_activity", "alarm_id": 7, "state": "ACTIVE", "transition": False,
+        "priority": 2, "value": 12, "path": "Line/Device/Alarm",
+        "time": "2026-08-25T00:02:00+00:00", "active_alarm_count": 1,
+    })
+    refreshed = supervisor.active_alarm_activity()[0]
+    assert refreshed["value"] == 12
+    assert refreshed["activated_at"] == "2026-08-25T00:00:00+00:00"
+
+    supervisor._apply_event({
+        "event": "alarm_activity", "alarm_id": 7, "state": "CLEARED", "transition": True,
+        "time": "2026-08-25T00:03:00+00:00", "active_alarm_count": 0,
+    })
+    assert supervisor.active_alarm_activity() == []
+
+
+def test_alarm_snapshot_clears_when_diagnostics_reinitialize():
+    supervisor = HistorianSupervisor(False)
+    supervisor._apply_event({
+        "event": "alarm_activity", "alarm_id": 7, "state": "ACTIVE", "transition": False,
+        "time": "2026-08-25T00:00:00+00:00", "active_alarm_count": 1,
+    })
+    assert supervisor.active_alarm_activity()[0]["activated_at"] is None
+    supervisor._apply_event({"event": "alarm_activity_state", "state": "ready"})
+    assert supervisor.active_alarm_activity() == []

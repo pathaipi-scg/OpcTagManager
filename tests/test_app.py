@@ -755,6 +755,198 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertEqual(args[:4], (identity, "how_to_check", "sensor.png", "image/png"))
         self.assertEqual(args[4], b"\x89PNG\r\n\x1a\nimage")
 
+    def test_current_knowledge_returns_flat_grafana_contract_with_guarded_image_urls(self):
+        identity = TagIdentity("LP2", "MIX", ["Faults"], "Cement_FML", "LP2.MIX.Faults.Cement_FML", "1", 5, 100, 1)
+        knowledge = {
+            "exists": True, "version": 3, "updated_at": "2026-08-25T18:53:39+07:00",
+            "fields": {
+                "description": "Meaning", "possible_cause": "Cause", "how_to_check": "Check",
+                "corrective_action": "Correct", "safety_warning": "Safe", "additional_notes": "Notes",
+            },
+            "attachments": {
+                "description": [{"caption": "Sensor", "relative_path": "attachments/description/image one.png"}],
+                "possible_cause": [], "how_to_check": [], "corrective_action": [],
+                "safety_warning": [], "additional_notes": [],
+            },
+        }
+        with patch.object(OpcTagManager, "_validated_knowledge_identity", return_value=(identity, {})) as validate, \
+             patch.object(OpcTagManager.tag_knowledge_store, "load", return_value=knowledge) as load:
+            status, body = self.request("GET", "/api/tag-knowledge/current?kepware_path=LP2.MIX.Faults.Cement_FML")
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["kepware_path"], identity.full_path)
+        self.assertEqual(payload["tag_name"], "Cement_FML")
+        self.assertTrue(payload["has_knowledge"])
+        self.assertEqual(payload["version"], 3)
+        self.assertEqual(payload["updated_at"], "2026-08-25T18:53:39+07:00")
+        self.assertEqual(list(payload["sections"]), [
+            "description", "possible_cause", "how_to_check", "corrective_action",
+            "safety_warning", "additional_notes",
+        ])
+        image = payload["sections"]["description"]["images"][0]
+        self.assertEqual(image["caption"], "Sensor")
+        self.assertTrue(image["url"].startswith("/api/tag-knowledge/attachment?"))
+        self.assertIn("relative_path=attachments%2Fdescription%2Fimage+one.png", image["url"])
+        self.assertNotIn("relative_path", image)
+        self.assertNotIn("km_directory", json.dumps(payload))
+        validate.assert_called_once()
+        validated_payload = validate.call_args.args[0]
+        self.assertEqual((validated_payload.channel, validated_payload.device), ("LP2", "MIX"))
+        self.assertEqual(validated_payload.group_path, ["Faults"])
+        self.assertEqual(validated_payload.tag_name, "Cement_FML")
+        load.assert_called_once_with(identity)
+
+    def test_current_knowledge_returns_empty_sections_for_valid_tag_without_knowledge(self):
+        identity = TagIdentity("LP2", "MIX", [], "Cement_FML", "LP2.MIX.Cement_FML", "1", 5, 100, 1)
+        empty_fields = {key: "" for key in (
+            "description", "possible_cause", "how_to_check", "corrective_action",
+            "safety_warning", "additional_notes",
+        )}
+        knowledge = {
+            "exists": False, "version": 0, "updated_at": None,
+            "fields": empty_fields, "attachments": {key: [] for key in empty_fields},
+        }
+        with patch.object(OpcTagManager, "_validated_knowledge_identity", return_value=(identity, {})), \
+             patch.object(OpcTagManager.tag_knowledge_store, "load", return_value=knowledge):
+            status, body = self.request("GET", "/api/tag-knowledge/current?kepware_path=LP2.MIX.Cement_FML")
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertFalse(payload["has_knowledge"])
+        self.assertIsNone(payload["version"])
+        self.assertIsNone(payload["updated_at"])
+        self.assertTrue(all(section == {"text": "", "images": []} for section in payload["sections"].values()))
+
+    def test_current_knowledge_rejects_malformed_path_without_kepware_or_storage_read(self):
+        with patch.object(OpcTagManager, "_validated_knowledge_identity") as validate, \
+             patch.object(OpcTagManager.tag_knowledge_store, "load") as load:
+            status, body = self.request("GET", "/api/tag-knowledge/current?kepware_path=LP2..Tag")
+        self.assertEqual(status, 422)
+        self.assertIn("channel, device, and tag", json.loads(body)["error"])
+        validate.assert_not_called()
+        load.assert_not_called()
+
+    def test_current_knowledge_returns_404_for_unknown_kepware_path_without_storage_read(self):
+        with patch.object(
+            OpcTagManager, "_validated_knowledge_identity",
+            side_effect=KepwareConfigError("Kepware Configuration API returned HTTP 404."),
+        ), patch.object(OpcTagManager.tag_knowledge_store, "load") as load:
+            status, body = self.request("GET", "/api/tag-knowledge/current?kepware_path=LP2.MIX.Missing")
+        self.assertEqual(status, 404)
+        self.assertEqual(json.loads(body)["kepware_path"], "LP2.MIX.Missing")
+        load.assert_not_called()
+
+    def test_current_knowledge_returns_500_for_corrupt_active_knowledge(self):
+        identity = TagIdentity("LP2", "MIX", [], "Cement_FML", "LP2.MIX.Cement_FML", "1", 5, 100, 1)
+        with patch.object(OpcTagManager, "_validated_knowledge_identity", return_value=(identity, {})), \
+             patch.object(
+                 OpcTagManager.tag_knowledge_store, "load",
+                 side_effect=OpcTagManager.TagKnowledgeError("The active Tag Knowledge index or Markdown file is invalid."),
+             ):
+            status, body = self.request("GET", "/api/tag-knowledge/current?kepware_path=LP2.MIX.Cement_FML")
+        payload = json.loads(body)
+        self.assertEqual(status, 500)
+        self.assertEqual(payload["error"], "The active Tag Knowledge record is invalid.")
+        self.assertNotIn("has_knowledge", payload)
+
+    def test_missing_knowledge_attachment_read_returns_404(self):
+        identity = TagIdentity("LP2", "MIX", [], "Cement_FML", "LP2.MIX.Cement_FML", "1", 5, 100, 1)
+        with patch.object(OpcTagManager, "_validated_knowledge_identity", return_value=(identity, {})), \
+             patch.object(
+                 OpcTagManager.tag_knowledge_store, "attachment_path",
+                 side_effect=OpcTagManager.TagKnowledgeError("The Tag Knowledge attachment does not exist."),
+             ):
+            result = OpcTagManager.read_tag_knowledge_attachment(
+                "LP2", "MIX", "Cement_FML", "attachments/description/missing.png",
+            )
+        self.assertEqual(result.status_code, 404)
+
+    def test_alarm_help_returns_no_alarm_contract_when_runtime_is_ready_and_empty(self):
+        with patch.object(OpcTagManager.runtime_supervisor, "status", return_value={"alarm_activity_state": "ready"}), \
+             patch.object(OpcTagManager.runtime_supervisor, "active_alarm_activity", return_value=[]):
+            status, body = self.request("GET", "/api/alarm-help/current")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"has_alarm": False, "alarm": None, "knowledge": None})
+
+    def test_alarm_help_selects_highest_priority_then_newest_and_returns_knowledge(self):
+        identity = TagIdentity("LP2", "MIX", [], "Newest", "LP2.MIX.Newest", "1", 5, 100, 1)
+        alarms = [
+            {"alarm_id": 1, "path": "LP2/MIX/Lower", "priority": 2, "state": "ACTIVE", "value": 1,
+             "activated_at": "2026-08-25T10:00:00+00:00", "active_order_time": "2026-08-25T10:00:00+00:00"},
+            {"alarm_id": 2, "path": "LP2/MIX/Older", "priority": 3, "state": "ACTIVE", "value": 2,
+             "activated_at": "2026-08-25T10:01:00+00:00", "active_order_time": "2026-08-25T10:01:00+00:00"},
+            {"alarm_id": 3, "path": "LP2/MIX/Newest", "priority": 3, "state": "ACTIVE", "value": 3,
+             "activated_at": "2026-08-25T10:02:00+00:00", "active_order_time": "2026-08-25T10:02:00+00:00"},
+            {"alarm_id": 4, "path": "LP2/MIX/Cleared", "priority": 99, "state": "CLEARED", "value": 0,
+             "activated_at": "2026-08-25T10:03:00+00:00", "active_order_time": "2026-08-25T10:03:00+00:00"},
+        ]
+        empty_fields = {key: "" for key in (
+            "description", "possible_cause", "how_to_check", "corrective_action",
+            "safety_warning", "additional_notes",
+        )}
+        knowledge = {
+            "exists": True, "version": 4, "updated_at": "2026-08-25T18:00:00+07:00",
+            "fields": {**empty_fields, "description": "Alarm help"},
+            "attachments": {key: [] for key in empty_fields},
+        }
+        with patch.object(OpcTagManager.runtime_supervisor, "status", return_value={"alarm_activity_state": "ready"}), \
+             patch.object(OpcTagManager.runtime_supervisor, "active_alarm_activity", return_value=alarms), \
+             patch.object(OpcTagManager, "_validated_knowledge_identity_from_path", return_value=(identity, {})) as validate, \
+             patch.object(OpcTagManager.tag_knowledge_store, "load", return_value=knowledge) as load:
+            status, body = self.request("GET", "/api/alarm-help/current")
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["has_alarm"])
+        self.assertEqual(payload["alarm"], {
+            "alarm_id": 3, "kepware_path": "LP2.MIX.Newest", "tag_name": "Newest",
+            "priority": 3, "state": "ACTIVE", "value": 3,
+            "activated_at": "2026-08-25T10:02:00+00:00",
+        })
+        self.assertEqual(payload["knowledge"]["version"], 4)
+        self.assertEqual(payload["knowledge"]["sections"]["description"]["text"], "Alarm help")
+        self.assertNotIn("kepware_path", payload["knowledge"])
+        validate.assert_called_once_with("LP2.MIX.Newest")
+        load.assert_called_once_with(identity)
+
+    def test_alarm_help_returns_empty_knowledge_for_selected_alarm_without_knowledge(self):
+        identity = TagIdentity("LP2", "MIX", [], "Alarm", "LP2.MIX.Alarm", "1", 5, 100, 1)
+        sections = ("description", "possible_cause", "how_to_check", "corrective_action", "safety_warning", "additional_notes")
+        knowledge = {
+            "exists": False, "version": 0, "updated_at": None,
+            "fields": {key: "" for key in sections}, "attachments": {key: [] for key in sections},
+        }
+        alarm = {"alarm_id": 7, "path": "LP2/MIX/Alarm", "priority": 1, "state": "ACTIVE",
+                 "value": True, "activated_at": None, "active_order_time": "2026-08-25T10:00:00+00:00"}
+        with patch.object(OpcTagManager.runtime_supervisor, "status", return_value={"alarm_activity_state": "ready"}), \
+             patch.object(OpcTagManager.runtime_supervisor, "active_alarm_activity", return_value=[alarm]), \
+             patch.object(OpcTagManager, "_validated_knowledge_identity_from_path", return_value=(identity, {})), \
+             patch.object(OpcTagManager.tag_knowledge_store, "load", return_value=knowledge):
+            status, body = self.request("GET", "/api/alarm-help/current")
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertFalse(payload["knowledge"]["has_knowledge"])
+        self.assertIsNone(payload["knowledge"]["version"])
+        self.assertTrue(all(value == {"text": "", "images": []} for value in payload["knowledge"]["sections"].values()))
+
+    def test_alarm_help_returns_503_when_runtime_state_is_unavailable(self):
+        with patch.object(OpcTagManager.runtime_supervisor, "status", return_value={"alarm_activity_state": "unknown"}), \
+             patch.object(OpcTagManager.runtime_supervisor, "active_alarm_activity") as active:
+            status, body = self.request("GET", "/api/alarm-help/current")
+        self.assertEqual(status, 503)
+        self.assertIn("unavailable", json.loads(body)["error"])
+        active.assert_not_called()
+
+    def test_alarm_help_returns_500_for_corrupt_knowledge(self):
+        identity = TagIdentity("LP2", "MIX", [], "Alarm", "LP2.MIX.Alarm", "1", 5, 100, 1)
+        alarm = {"alarm_id": 7, "path": "LP2/MIX/Alarm", "priority": 1, "state": "ACTIVE",
+                 "active_order_time": "2026-08-25T10:00:00+00:00"}
+        with patch.object(OpcTagManager.runtime_supervisor, "status", return_value={"alarm_activity_state": "ready"}), \
+             patch.object(OpcTagManager.runtime_supervisor, "active_alarm_activity", return_value=[alarm]), \
+             patch.object(OpcTagManager, "_validated_knowledge_identity_from_path", return_value=(identity, {})), \
+             patch.object(OpcTagManager.tag_knowledge_store, "load", side_effect=OpcTagManager.TagKnowledgeError("bad")):
+            status, body = self.request("GET", "/api/alarm-help/current")
+        self.assertEqual(status, 500)
+        self.assertEqual(json.loads(body)["error"], "The active Tag Knowledge record is invalid.")
+
     @patch.object(OpcTagManager.shared_resource_store, "link")
     @patch.object(OpcTagManager, "KM_RESOURCE_WRITE_ENABLED", False)
     @patch.object(OpcTagManager.kepware_config_api, "get_tag", return_value={

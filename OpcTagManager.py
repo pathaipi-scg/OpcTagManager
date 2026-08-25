@@ -6,6 +6,7 @@ import logging
 import re
 from datetime import datetime
 from typing import Literal
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -834,6 +835,70 @@ def _validated_knowledge_identity(payload: TagKnowledgeIdentityRequest):
     return tag_knowledge_store.identity_from_node(node), node
 
 
+def _validated_knowledge_identity_from_path(kepware_path: str):
+    parts = kepware_path.split(".")
+    if len(parts) < 3 or any(not part for part in parts):
+        raise ValueError("KepwarePath must contain channel, device, and tag components.")
+    payload = TagKnowledgeIdentityRequest(
+        channel=parts[0], device=parts[1], group_path=parts[2:-1], tag_name=parts[-1],
+    )
+    identity, node = _validated_knowledge_identity(payload)
+    if identity.full_path != kepware_path:
+        raise KepwareConfigError("The returned Kepware Tag did not match KepwarePath.")
+    return identity, node
+
+
+def _knowledge_attachment_url(identity, attachment: dict) -> str:
+    return "/api/tag-knowledge/attachment?" + urlencode({
+        "channel": identity.channel,
+        "device": identity.device,
+        "group_path": json.dumps(identity.group_path, ensure_ascii=False),
+        "tag_name": identity.tag_name,
+        "relative_path": attachment["relative_path"],
+    })
+
+
+def _grafana_knowledge_response(identity, knowledge: dict) -> dict:
+    fields = knowledge["fields"]
+    attachments = knowledge["attachments"]
+    sections = {}
+    for section in (
+        "description", "possible_cause", "how_to_check", "corrective_action",
+        "safety_warning", "additional_notes",
+    ):
+        sections[section] = {
+            "text": fields[section],
+            "images": [
+                {
+                    "caption": attachment.get("caption", ""),
+                    "url": _knowledge_attachment_url(identity, attachment),
+                }
+                for attachment in attachments[section]
+            ],
+        }
+    exists = knowledge["exists"]
+    return {
+        "kepware_path": identity.full_path,
+        "tag_name": identity.tag_name,
+        "has_knowledge": exists,
+        "version": knowledge["version"] if exists else None,
+        "updated_at": knowledge["updated_at"] if exists else None,
+        "sections": sections,
+    }
+
+
+def _current_alarm_selection_key(alarm: dict):
+    try:
+        priority = float(alarm.get("priority") or 0)
+    except (TypeError, ValueError):
+        priority = 0
+    try:
+        alarm_id = int(alarm.get("alarm_id") or 0)
+    except (TypeError, ValueError):
+        alarm_id = 0
+    return priority, str(alarm.get("active_order_time") or ""), alarm_id
+
+
 def _knowledge_error(exc: Exception, write: bool = False):
     status_code = 403 if write and not KM_TAG_WRITE_ENABLED else 400
     return JSONResponse({"success": False, "error": str(exc)}, status_code=status_code)
@@ -872,6 +937,76 @@ def load_tag_knowledge(payload: TagKnowledgeIdentityRequest):
         return {"success": True, "tag": node, "knowledge": tag_knowledge_store.load(identity)}
     except (KepwareConfigError, TagKnowledgeError) as exc:
         return _knowledge_error(exc)
+
+
+@app.get("/api/tag-knowledge/current")
+def get_current_tag_knowledge(
+    kepware_path: str = Query(min_length=1, max_length=2000),
+):
+    try:
+        identity, _node = _validated_knowledge_identity_from_path(kepware_path)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc), "kepware_path": kepware_path}, status_code=422)
+    except KepwareConfigError as exc:
+        status_code = 404 if "HTTP 404" in str(exc) else 400
+        return JSONResponse({"error": str(exc), "kepware_path": kepware_path}, status_code=status_code)
+    try:
+        knowledge = tag_knowledge_store.load(identity)
+        return _grafana_knowledge_response(identity, knowledge)
+    except (TagKnowledgeError, KeyError, TypeError) as exc:
+        logger.warning("Unable to read active Tag Knowledge for %s: %s", identity.full_path, exc)
+        return JSONResponse(
+            {"error": "The active Tag Knowledge record is invalid.", "kepware_path": identity.full_path},
+            status_code=500,
+        )
+
+
+@app.get("/api/alarm-help/current")
+def get_current_alarm_help():
+    runtime = runtime_supervisor.status()
+    if runtime.get("alarm_activity_state") != "ready":
+        return JSONResponse(
+            {"error": "Current alarm runtime state is unavailable."}, status_code=503,
+        )
+    active = [
+        alarm for alarm in runtime_supervisor.active_alarm_activity()
+        if alarm.get("state") == "ACTIVE"
+    ]
+    if not active:
+        return {"has_alarm": False, "alarm": None, "knowledge": None}
+    selected = max(active, key=_current_alarm_selection_key)
+    runtime_path = str(selected.get("path") or "")
+    kepware_path = ".".join(runtime_path.split("/"))
+    try:
+        identity, _node = _validated_knowledge_identity_from_path(kepware_path)
+    except (ValueError, KepwareConfigError) as exc:
+        logger.warning("Unable to resolve active alarm Kepware identity %s: %s", runtime_path, exc)
+        return JSONResponse(
+            {"error": "The active alarm Kepware identity could not be resolved."}, status_code=502,
+        )
+    try:
+        knowledge = _grafana_knowledge_response(identity, tag_knowledge_store.load(identity))
+    except (TagKnowledgeError, KeyError, TypeError) as exc:
+        logger.warning("Unable to read active Tag Knowledge for alarm %s: %s", identity.full_path, exc)
+        return JSONResponse(
+            {"error": "The active Tag Knowledge record is invalid.", "kepware_path": identity.full_path},
+            status_code=500,
+        )
+    knowledge.pop("kepware_path")
+    knowledge.pop("tag_name")
+    return {
+        "has_alarm": True,
+        "alarm": {
+            "alarm_id": selected.get("alarm_id"),
+            "kepware_path": identity.full_path,
+            "tag_name": identity.tag_name,
+            "priority": selected.get("priority"),
+            "state": "ACTIVE",
+            "value": selected.get("value"),
+            "activated_at": selected.get("activated_at"),
+        },
+        "knowledge": knowledge,
+    }
 
 
 @app.post("/api/tag-knowledge/preview")
@@ -949,7 +1084,11 @@ def read_tag_knowledge_attachment(
         return FileResponse(path, media_type={
             ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
         }[path.suffix.lower()])
-    except (KepwareConfigError, TagKnowledgeError, ValueError) as exc:
+    except TagKnowledgeError as exc:
+        if str(exc) == "The Tag Knowledge attachment does not exist.":
+            return JSONResponse({"success": False, "error": str(exc)}, status_code=404)
+        return _knowledge_error(exc)
+    except (KepwareConfigError, ValueError) as exc:
         return _knowledge_error(exc)
 
 

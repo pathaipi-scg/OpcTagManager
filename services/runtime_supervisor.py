@@ -38,6 +38,7 @@ class HistorianSupervisor:
         self._subscription_activity = deque(maxlen=200)
         self._influx_activity = deque(maxlen=200)
         self._alarm_activity = deque(maxlen=200)
+        self._active_alarm_activity = {}
         self._status = {
             "supervisor_enabled": enabled,
             "historian_ownership": production_historian_owner,
@@ -92,6 +93,10 @@ class HistorianSupervisor:
                 },
             }
 
+    def active_alarm_activity(self) -> list[dict]:
+        with self._lock:
+            return deepcopy(list(self._active_alarm_activity.values()))
+
     def _spawn(self) -> bool:
         project_root = Path(__file__).resolve().parent.parent
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -105,6 +110,7 @@ class HistorianSupervisor:
             bufsize=1,
             creationflags=creationflags,
         )
+        self._active_alarm_activity.clear()
         self._process = process
         self._status.update(
             worker_state="starting",
@@ -119,6 +125,8 @@ class HistorianSupervisor:
             subscribed_tag_count=None,
             failed_subscription_count=None,
             subscription_complete=False,
+            alarm_activity_state="unknown",
+            active_alarms=0,
         )
         monitor = threading.Thread(target=self._monitor, args=(process,), daemon=True)
         self._monitor_thread = monitor
@@ -188,6 +196,8 @@ class HistorianSupervisor:
             self._status["last_error"] = message.get("error")
         elif event == "alarm_activity_state":
             self._status["alarm_activity_state"] = message.get("state", "unknown")
+            self._active_alarm_activity.clear()
+            self._status["active_alarms"] = 0
             if message.get("configured_alarm_tags") is not None:
                 self._status["configured_alarm_tags"] = message["configured_alarm_tags"]
             if message.get("error"):
@@ -196,6 +206,22 @@ class HistorianSupervisor:
             self._alarm_activity.append(deepcopy(message))
             self._status["alarm_activity_state"] = "ready"
             self._status["active_alarms"] = int(message.get("active_alarm_count", 0))
+            alarm_id = message.get("alarm_id")
+            if alarm_id is not None:
+                alarm_id = int(alarm_id)
+                state = message.get("state")
+                if state == "ACTIVE":
+                    previous = self._active_alarm_activity.get(alarm_id)
+                    current = deepcopy(message)
+                    if previous is None or message.get("transition"):
+                        current["activated_at"] = message.get("time") if message.get("transition") else None
+                        current["active_order_time"] = message.get("time")
+                    else:
+                        current["activated_at"] = previous.get("activated_at")
+                        current["active_order_time"] = previous.get("active_order_time")
+                    self._active_alarm_activity[alarm_id] = current
+                elif state in {"CLEARED", "NORMAL"}:
+                    self._active_alarm_activity.pop(alarm_id, None)
             if message.get("transition"):
                 self._status["alarm_events_session"] += 1
             self._status["last_alarm_event"] = message.get("time")
@@ -225,7 +251,10 @@ class HistorianSupervisor:
                 subscribed_tag_count=None,
                 failed_subscription_count=None,
                 subscription_complete=False,
+                alarm_activity_state="unknown",
+                active_alarms=0,
             )
+            self._active_alarm_activity.clear()
             should_restart = self.enabled and not self._intentional_stop and not self._shutdown.is_set()
             if should_restart:
                 self._status["worker_state"] = "exited"
@@ -274,6 +303,9 @@ class HistorianSupervisor:
             if process is None or process.poll() is not None:
                 self._status["worker_state"] = "stopped" if self.enabled else "disabled"
                 self._status["worker_pid"] = None
+                self._status["alarm_activity_state"] = "unknown"
+                self._status["active_alarms"] = 0
+                self._active_alarm_activity.clear()
                 return
             self._status["worker_state"] = "stopping"
             self._send("stop")
