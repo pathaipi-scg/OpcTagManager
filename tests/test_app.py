@@ -9,8 +9,9 @@ from urllib.parse import urlsplit
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import OpcTagManager
-from starlette.datastructures import UploadFile
+from starlette.datastructures import Headers, UploadFile
 from services.kepware_config_api import KepwareConfigError
+from services.tag_knowledge import TagIdentity
 from services.shared_resources import SharedResourceStore
 from services.supplier_profiles import SupplierProfileStore
 from services.equipment_parts import EquipmentPartStore
@@ -120,6 +121,10 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertIn('id="new-tag-access"', html)
         self.assertIn('id="use-tag-template"', html)
         self.assertIn('id="tag-knowledge-panel"', html)
+        self.assertEqual(html.count('class="knowledge-attach-button"'), 6)
+        self.assertEqual(html.count('class="knowledge-image-input hidden"'), 6)
+        self.assertEqual(html.count('paste a screenshot with Ctrl+V'), 6)
+        self.assertIn('accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"', html)
         self.assertIn('id="tag-resources-panel"', html)
         self.assertEqual(html.count('id="tag-knowledge-panel"'), 1)
         self.assertEqual(html.count('id="tag-resources-panel"'), 1)
@@ -221,6 +226,20 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertIn('button.dataset.canonicalPath === selectedRuntimeTag?.path', javascript)
         self.assertIn('runtimeKnowledgeHost.append(', javascript)
         self.assertIn('document.getElementById("tag-knowledge-panel")', javascript)
+        self.assertIn('fetch("/api/tag-knowledge/attachments", { method: "POST", body: form })', javascript)
+        self.assertIn('knowledgeAttachmentReadUrl(attachment)', javascript)
+        self.assertIn('knowledge-preview-images', javascript)
+        self.assertIn('attachments: knowledgeAttachments', javascript)
+        self.assertIn('textarea.addEventListener("paste", async (event)', javascript)
+        self.assertIn('event.clipboardData?.items', javascript)
+        self.assertIn('item.kind === "file" && item.type.startsWith("image/")', javascript)
+        self.assertIn('if (!imageItem) return', javascript)
+        self.assertIn('event.preventDefault()', javascript)
+        self.assertIn('insertClipboardText(textarea, event.clipboardData.getData("text/plain"))', javascript)
+        self.assertIn('await uploadKnowledgeImages(section, [file])', javascript)
+        self.assertIn('`clipboard_${timestamp}${extension}`', javascript)
+        self.assertIn('"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"', javascript)
+        self.assertIn('}[blob.type] || ".bin"', javascript)
         self.assertIn('document.getElementById("tag-resources-panel")', javascript)
         configuration_selection = javascript[javascript.index("function selectKepwareObject"):javascript.index("function displayKepwareObject")]
         self.assertNotIn("loadTagKnowledge", configuration_selection)
@@ -717,6 +736,24 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertIn("no longer exists", json.loads(body)["error"])
         get_tag.assert_called_once()
         save.assert_not_called()
+
+    def test_knowledge_image_upload_passes_only_validated_identity_and_bounded_content_to_store(self):
+        identity = TagIdentity("LP2", "MIX", [], "Tag", "LP2.MIX.Tag", "1", 5, 100, 1)
+        upload = UploadFile(
+            file=io.BytesIO(b"\x89PNG\r\n\x1a\nimage"), filename="sensor.png",
+            headers=Headers({"content-type": "image/png"}),
+        )
+        expected = {"section": "how_to_check", "relative_path": "attachments/how_to_check/generated.png"}
+        with patch.object(OpcTagManager, "_validated_knowledge_identity", return_value=(identity, {})), \
+             patch.object(OpcTagManager.tag_knowledge_store, "store_attachment", return_value=expected) as store:
+            result = asyncio.run(OpcTagManager.upload_tag_knowledge_attachment(
+                channel="LP2", device="MIX", group_path="[]", tag_name="Tag",
+                section="how_to_check", file=upload,
+            ))
+        self.assertEqual(result, {"success": True, "attachment": expected})
+        args = store.call_args.args
+        self.assertEqual(args[:4], (identity, "how_to_check", "sensor.png", "image/png"))
+        self.assertEqual(args[4], b"\x89PNG\r\n\x1a\nimage")
 
     @patch.object(OpcTagManager.shared_resource_store, "link")
     @patch.object(OpcTagManager, "KM_RESOURCE_WRITE_ENABLED", False)

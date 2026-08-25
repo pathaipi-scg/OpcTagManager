@@ -330,12 +330,20 @@
                     <p class="write-disabled-message">Tag Knowledge Write Disabled</p>
                 {% endif %}
                 <form id="tag-knowledge-form">
-                    <div class="field-group"><label for="knowledge-description">Description / Meaning</label><textarea id="knowledge-description" rows="3" {{ 'disabled' if not km_tag_write_enabled else '' }}></textarea></div>
-                    <div class="field-group"><label for="knowledge-possible-cause">Possible Cause</label><textarea id="knowledge-possible-cause" rows="3" {{ 'disabled' if not km_tag_write_enabled else '' }}></textarea></div>
-                    <div class="field-group"><label for="knowledge-how-to-check">How to Check</label><textarea id="knowledge-how-to-check" rows="3" {{ 'disabled' if not km_tag_write_enabled else '' }}></textarea></div>
-                    <div class="field-group"><label for="knowledge-corrective-action">Corrective Action</label><textarea id="knowledge-corrective-action" rows="3" {{ 'disabled' if not km_tag_write_enabled else '' }}></textarea></div>
-                    <div class="field-group"><label for="knowledge-safety-warning">Safety / Warning</label><textarea id="knowledge-safety-warning" rows="3" {{ 'disabled' if not km_tag_write_enabled else '' }}></textarea></div>
-                    <div class="field-group"><label for="knowledge-additional-notes">Additional Notes</label><textarea id="knowledge-additional-notes" rows="3" {{ 'disabled' if not km_tag_write_enabled else '' }}></textarea></div>
+                    {% for key, label in [
+                        ('description', 'Description / Meaning'), ('possible_cause', 'Possible Cause'),
+                        ('how_to_check', 'How to Check'), ('corrective_action', 'Corrective Action'),
+                        ('safety_warning', 'Safety / Warning'), ('additional_notes', 'Additional Notes')
+                    ] %}
+                    <div class="field-group knowledge-section" data-knowledge-section="{{ key }}">
+                        <label for="knowledge-{{ key | replace('_', '-') }}">{{ label }}</label>
+                        <textarea id="knowledge-{{ key | replace('_', '-') }}" rows="3" {{ 'disabled' if not km_tag_write_enabled else '' }}></textarea>
+                        <input id="knowledge-image-{{ key | replace('_', '-') }}" class="knowledge-image-input hidden" type="file" accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" multiple {{ 'disabled' if not km_tag_write_enabled else '' }}>
+                        <button type="button" class="knowledge-attach-button" data-section="{{ key }}" {{ 'disabled' if not km_tag_write_enabled else '' }}>Attach Image</button>
+                        <span class="knowledge-paste-hint">or paste a screenshot with Ctrl+V</span>
+                        <div id="knowledge-attachments-{{ key | replace('_', '-') }}" class="knowledge-attachment-list"></div>
+                    </div>
+                    {% endfor %}
                     <button type="submit" class="refresh-button" {{ 'disabled' if not km_tag_write_enabled else '' }}>Preview Knowledge</button>
                 </form>
                 <div id="knowledge-preview" class="create-preview hidden">

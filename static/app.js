@@ -791,6 +791,12 @@ let selectedTemplateCandidate = null;
 let templateSourcePath = "";
 let selectedKnowledgeTag = null;
 let pendingKnowledgePayload = null;
+const knowledgeSectionLabels = {
+    description: "Description / Meaning", possible_cause: "Possible Cause",
+    how_to_check: "How to Check", corrective_action: "Corrective Action",
+    safety_warning: "Safety / Warning", additional_notes: "Additional Notes",
+};
+let knowledgeAttachments = Object.fromEntries(Object.keys(knowledgeSectionLabels).map((key) => [key, []]));
 let resourceForLinking = null;
 let resourceTargetTags = new Map();
 let resourceTagSelectionMode = false;
@@ -1524,13 +1530,138 @@ function knowledgeFieldsPayload() {
     };
 }
 
+function emptyKnowledgeAttachments() {
+    return Object.fromEntries(Object.keys(knowledgeSectionLabels).map((key) => [key, []]));
+}
+
+function knowledgeAttachmentReadUrl(attachment, node = selectedKnowledgeTag) {
+    const identity = knowledgeIdentityPayload(node);
+    const query = new URLSearchParams({
+        channel: identity.channel, device: identity.device,
+        group_path: JSON.stringify(identity.group_path), tag_name: identity.tag_name,
+        relative_path: attachment.relative_path,
+    });
+    return `/api/tag-knowledge/attachment?${query}`;
+}
+
+function renderKnowledgeAttachments(section) {
+    const container = document.getElementById(`knowledge-attachments-${section.replaceAll("_", "-")}`);
+    container.replaceChildren();
+    (knowledgeAttachments[section] || []).forEach((attachment) => {
+        const card = document.createElement("div");
+        card.className = "knowledge-attachment-card";
+        const image = document.createElement("img");
+        image.src = knowledgeAttachmentReadUrl(attachment);
+        image.alt = attachment.caption || attachment.original_filename || "Tag Knowledge image";
+        const caption = document.createElement("input");
+        caption.type = "text";
+        caption.maxLength = 500;
+        caption.placeholder = "Optional caption";
+        caption.value = attachment.caption || "";
+        caption.addEventListener("input", () => {
+            attachment.caption = caption.value;
+            image.alt = caption.value || attachment.original_filename || "Tag Knowledge image";
+        });
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "danger-button";
+        remove.textContent = "Remove";
+        remove.addEventListener("click", () => {
+            knowledgeAttachments[section] = knowledgeAttachments[section].filter((item) => item !== attachment);
+            renderKnowledgeAttachments(section);
+        });
+        card.append(image, caption, remove);
+        container.appendChild(card);
+    });
+}
+
+function renderAllKnowledgeAttachments() {
+    Object.keys(knowledgeSectionLabels).forEach(renderKnowledgeAttachments);
+}
+
+async function uploadKnowledgeImages(section, files) {
+    if (!kmTagWriteEnabled || !selectedKnowledgeTag) return;
+    const result = document.getElementById("knowledge-result");
+    const node = selectedKnowledgeTag;
+    const identity = knowledgeIdentityPayload(node);
+    for (const file of files) {
+        try {
+            const form = new FormData();
+            form.append("channel", identity.channel);
+            form.append("device", identity.device);
+            form.append("group_path", JSON.stringify(identity.group_path));
+            form.append("tag_name", identity.tag_name);
+            form.append("section", section);
+            form.append("file", file, file.name);
+            const response = await fetch("/api/tag-knowledge/attachments", { method: "POST", body: form });
+            const data = await response.json();
+            if (!response.ok || !data.success) throw new Error(data.error || `Unable to attach ${file.name}.`);
+            if (selectedKnowledgeTag !== node) return;
+            knowledgeAttachments[section].push(data.attachment);
+            renderKnowledgeAttachments(section);
+            result.textContent = `Attached ${file.name} to ${knowledgeSectionLabels[section]}.`;
+            result.className = "create-result success-message";
+        } catch (error) {
+            result.textContent = error.message || `Unable to attach ${file.name}.`;
+            result.className = "create-result error-message";
+        }
+    }
+}
+
+function clipboardImageFile(item, now = new Date()) {
+    const blob = item.getAsFile();
+    if (!blob) return null;
+    const extension = {
+        "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp",
+    }[blob.type] || ".bin";
+    const two = (value) => String(value).padStart(2, "0");
+    const timestamp = [
+        now.getFullYear(), two(now.getMonth() + 1), two(now.getDate()), "_",
+        two(now.getHours()), two(now.getMinutes()), two(now.getSeconds()),
+    ].join("");
+    return new File([blob], `clipboard_${timestamp}${extension}`, { type: blob.type });
+}
+
+function insertClipboardText(textarea, text) {
+    if (!text) return;
+    textarea.setRangeText(text, textarea.selectionStart, textarea.selectionEnd, "end");
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+document.querySelectorAll(".knowledge-section textarea").forEach((textarea) => {
+    textarea.addEventListener("paste", async (event) => {
+        const items = [...(event.clipboardData?.items || [])];
+        const imageItem = items.find((item) => item.kind === "file" && item.type.startsWith("image/"));
+        if (!imageItem) return;
+        const file = clipboardImageFile(imageItem);
+        if (!file) return;
+        event.preventDefault();
+        insertClipboardText(textarea, event.clipboardData.getData("text/plain"));
+        const section = textarea.closest(".knowledge-section").dataset.knowledgeSection;
+        await uploadKnowledgeImages(section, [file]);
+    });
+});
+
+document.querySelectorAll(".knowledge-attach-button").forEach((button) => {
+    const section = button.dataset.section;
+    const input = document.getElementById(`knowledge-image-${section.replaceAll("_", "-")}`);
+    button.addEventListener("click", () => input.click());
+    input.addEventListener("change", async () => {
+        const files = [...input.files];
+        input.value = "";
+        await uploadKnowledgeImages(section, files);
+    });
+});
+
 function resetTagKnowledgePanel() {
     selectedKnowledgeTag = null;
     pendingKnowledgePayload = null;
+    knowledgeAttachments = emptyKnowledgeAttachments();
     document.getElementById("tag-knowledge-panel").classList.add("hidden");
     document.getElementById("tag-knowledge-form").reset();
     document.getElementById("knowledge-preview").classList.add("hidden");
     document.getElementById("knowledge-result").classList.add("hidden");
+    renderAllKnowledgeAttachments();
     document.getElementById("tag-resources-panel").classList.add("hidden");
 }
 
@@ -2048,6 +2179,8 @@ async function loadTagKnowledge(node) {
     const status = document.getElementById("knowledge-status");
     panel.classList.remove("hidden");
     document.getElementById("knowledge-preview").classList.add("hidden");
+    knowledgeAttachments = emptyKnowledgeAttachments();
+    renderAllKnowledgeAttachments();
     status.textContent = "Loading Tag Knowledge…";
     status.className = "tree-counts";
     try {
@@ -2073,6 +2206,11 @@ async function loadTagKnowledge(node) {
             const id = `knowledge-${key.replaceAll("_", "-")}`;
             document.getElementById(id).value = value;
         });
+        knowledgeAttachments = emptyKnowledgeAttachments();
+        Object.keys(knowledgeSectionLabels).forEach((section) => {
+            knowledgeAttachments[section] = [...(knowledge.attachments?.[section] || [])];
+        });
+        renderAllKnowledgeAttachments();
         status.textContent = knowledge.exists ? `Active Knowledge version ${knowledge.version}` : "No Tag Knowledge";
     } catch (error) {
         if (selectedKnowledgeTag !== node) return;
@@ -2086,7 +2224,10 @@ document.getElementById("tag-knowledge-form").addEventListener("submit", async (
     if (!kmTagWriteEnabled || !selectedKnowledgeTag) return;
     const result = document.getElementById("knowledge-result");
     try {
-        const payload = {...knowledgeIdentityPayload(), ...knowledgeFieldsPayload()};
+        const payload = {
+            ...knowledgeIdentityPayload(), ...knowledgeFieldsPayload(),
+            attachments: knowledgeAttachments,
+        };
         const response = await fetch("/api/tag-knowledge/preview", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -2095,15 +2236,37 @@ document.getElementById("tag-knowledge-form").addEventListener("submit", async (
         const data = await response.json();
         if (!data.success) throw new Error(data.error || "Unable to preview Tag Knowledge.");
         payload.preview_created_at = data.preview.created_at;
-        pendingKnowledgePayload = payload;
+        payload.attachments = data.preview.attachments;
+        pendingKnowledgePayload = JSON.parse(JSON.stringify(payload));
         document.getElementById("knowledge-preview-tag").textContent = data.preview.kepware_path;
         document.getElementById("knowledge-preview-directory").textContent = data.preview.km_directory;
         document.getElementById("knowledge-preview-version").textContent = String(data.preview.new_version);
         document.getElementById("knowledge-preview-file").textContent = data.preview.new_file;
-        const fields = knowledgeFieldsPayload();
-        document.getElementById("knowledge-preview-fields").textContent = Object.entries(fields)
-            .map(([key, value]) => `${key.replaceAll("_", " ")}: ${value || "(empty)"}`)
-            .join("\n");
+        const previewFields = document.getElementById("knowledge-preview-fields");
+        previewFields.replaceChildren();
+        Object.entries(knowledgeSectionLabels).forEach(([section, label]) => {
+            const block = document.createElement("section");
+            block.className = "knowledge-preview-section";
+            const heading = document.createElement("h5");
+            heading.textContent = label;
+            const text = document.createElement("p");
+            text.textContent = data.preview.fields?.[section] || "(empty)";
+            const images = document.createElement("div");
+            images.className = "knowledge-preview-images";
+            (data.preview.attachments?.[section] || []).forEach((attachment) => {
+                const figure = document.createElement("figure");
+                figure.className = "knowledge-preview-image";
+                const image = document.createElement("img");
+                image.src = knowledgeAttachmentReadUrl(attachment);
+                image.alt = attachment.caption || attachment.original_filename || "Tag Knowledge image";
+                const caption = document.createElement("figcaption");
+                caption.textContent = attachment.caption || attachment.original_filename || attachment.relative_path;
+                figure.append(image, caption);
+                images.appendChild(figure);
+            });
+            block.append(heading, text, images);
+            previewFields.appendChild(block);
+        });
         document.getElementById("knowledge-preview").classList.remove("hidden");
         result.classList.add("hidden");
     } catch (error) {

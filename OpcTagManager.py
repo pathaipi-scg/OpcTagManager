@@ -1,6 +1,7 @@
 from pathlib import Path
 import asyncio
 from contextlib import asynccontextmanager
+import json
 import logging
 import re
 from datetime import datetime
@@ -80,7 +81,7 @@ from services.kepware_config_api import (
     KepwareConfigSettings,
 )
 from services.kepware_enums import TAG_ACCESS_LEVELS, TAG_DATA_TYPES
-from services.tag_knowledge import TagKnowledgeError, TagKnowledgeStore
+from services.tag_knowledge import MAX_IMAGE_BYTES, TagKnowledgeError, TagKnowledgeStore
 from services.shared_resources import SharedResourceError, SharedResourceStore
 from services.supplier_profiles import SupplierProfileError, SupplierProfileStore
 from services.equipment_parts import EquipmentPartError, EquipmentPartStore
@@ -214,6 +215,7 @@ class SaveTagKnowledgeRequest(TagKnowledgeIdentityRequest):
     corrective_action: str = ""
     safety_warning: str = ""
     additional_notes: str = ""
+    attachments: dict[str, list[dict]] | None = None
     preview_created_at: str | None = None
 
 
@@ -837,6 +839,17 @@ def _knowledge_error(exc: Exception, write: bool = False):
     return JSONResponse({"success": False, "error": str(exc)}, status_code=status_code)
 
 
+def _knowledge_fields(payload: SaveTagKnowledgeRequest) -> dict[str, str]:
+    return {
+        "description": payload.description,
+        "possible_cause": payload.possible_cause,
+        "how_to_check": payload.how_to_check,
+        "corrective_action": payload.corrective_action,
+        "safety_warning": payload.safety_warning,
+        "additional_notes": payload.additional_notes,
+    }
+
+
 def _resource_error(exc: Exception, write: bool = False):
     status_code = 403 if write and not KM_RESOURCE_WRITE_ENABLED else 400
     return JSONResponse({"success": False, "error": str(exc)}, status_code=status_code)
@@ -865,7 +878,9 @@ def load_tag_knowledge(payload: TagKnowledgeIdentityRequest):
 def preview_tag_knowledge(payload: SaveTagKnowledgeRequest):
     try:
         identity, _node = _validated_knowledge_identity(payload)
-        return {"success": True, "preview": tag_knowledge_store.preview(identity)}
+        return {"success": True, "preview": tag_knowledge_store.preview(
+            identity, fields=_knowledge_fields(payload), attachments=payload.attachments,
+        )}
     except (KepwareConfigError, TagKnowledgeError) as exc:
         return _knowledge_error(exc)
 
@@ -880,20 +895,62 @@ def save_tag_knowledge(payload: SaveTagKnowledgeRequest):
                 preview_time = datetime.fromisoformat(payload.preview_created_at)
             except ValueError as exc:
                 raise TagKnowledgeError("The Tag Knowledge preview timestamp is invalid.") from exc
-        fields = {
-            "description": payload.description,
-            "possible_cause": payload.possible_cause,
-            "how_to_check": payload.how_to_check,
-            "corrective_action": payload.corrective_action,
-            "safety_warning": payload.safety_warning,
-            "additional_notes": payload.additional_notes,
-        }
         return {
             "success": True,
-            "knowledge": tag_knowledge_store.save(identity, fields, now=preview_time),
+            "knowledge": tag_knowledge_store.save(
+                identity, _knowledge_fields(payload), now=preview_time,
+                attachments=payload.attachments,
+            ),
         }
     except (KepwareConfigError, TagKnowledgeError) as exc:
         return _knowledge_error(exc, write=True)
+
+
+@app.post("/api/tag-knowledge/attachments")
+async def upload_tag_knowledge_attachment(
+    channel: str = Form(), device: str = Form(), group_path: str = Form("[]"),
+    tag_name: str = Form(), section: str = Form(), file: UploadFile = File(),
+):
+    try:
+        try:
+            groups = json.loads(group_path)
+        except json.JSONDecodeError as exc:
+            raise TagKnowledgeError("The Tag Knowledge group path is invalid.") from exc
+        payload = TagKnowledgeIdentityRequest(
+            channel=channel, device=device, group_path=groups, tag_name=tag_name,
+        )
+        identity, _node = _validated_knowledge_identity(payload)
+        content = await file.read(MAX_IMAGE_BYTES + 1)
+        attachment = tag_knowledge_store.store_attachment(
+            identity, section, file.filename or "", file.content_type or "", content,
+        )
+        return {"success": True, "attachment": attachment}
+    except (KepwareConfigError, TagKnowledgeError, ValueError) as exc:
+        return _knowledge_error(exc, write=True)
+    finally:
+        await file.close()
+
+
+@app.get("/api/tag-knowledge/attachment")
+def read_tag_knowledge_attachment(
+    channel: str, device: str, tag_name: str, relative_path: str,
+    group_path: str = "[]",
+):
+    try:
+        try:
+            groups = json.loads(group_path)
+        except json.JSONDecodeError as exc:
+            raise TagKnowledgeError("The Tag Knowledge group path is invalid.") from exc
+        payload = TagKnowledgeIdentityRequest(
+            channel=channel, device=device, group_path=groups, tag_name=tag_name,
+        )
+        identity, _node = _validated_knowledge_identity(payload)
+        path = tag_knowledge_store.attachment_path(identity, relative_path)
+        return FileResponse(path, media_type={
+            ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
+        }[path.suffix.lower()])
+    except (KepwareConfigError, TagKnowledgeError, ValueError) as exc:
+        return _knowledge_error(exc)
 
 
 @app.get("/api/resources")
