@@ -504,6 +504,16 @@ def runtime_status():
     return status
 
 
+@app.get("/api/runtime/activity")
+def runtime_activity():
+    """Bounded, in-memory historian diagnostics; never controls production behavior."""
+    return {
+        "success": True,
+        "runtime": runtime_supervisor.status(),
+        **runtime_supervisor.activity(),
+    }
+
+
 def _alarm_values(payload: AlarmConfigurationRequest) -> AlarmValues:
     return AlarmValues(
         alarm_mode=payload.alarm_mode,
@@ -589,7 +599,9 @@ def resolve_registered_tag(path: str = Query(min_length=1, max_length=2000)):
 @app.post("/api/alarms")
 def create_alarm(payload: CreateAlarmRequest):
     try:
-        return {"success": True, **alarm_service.create(payload.tag_id, _alarm_values(payload))}
+        result = alarm_service.create(payload.tag_id, _alarm_values(payload))
+        runtime_supervisor.notify_alarm_mappings_changed()
+        return {"success": True, **result}
     except (AlarmServiceError, AlarmAudioError) as exc:
         return _alarm_failure(exc, write=True)
     except Exception:
@@ -603,7 +615,9 @@ def create_alarm(payload: CreateAlarmRequest):
 @app.put("/api/alarms/{alarm_id}")
 def update_alarm(alarm_id: int, payload: AlarmConfigurationRequest):
     try:
-        return {"success": True, **alarm_service.update(alarm_id, _alarm_values(payload))}
+        result = alarm_service.update(alarm_id, _alarm_values(payload))
+        runtime_supervisor.notify_alarm_mappings_changed()
+        return {"success": True, **result}
     except (AlarmServiceError, AlarmAudioError) as exc:
         return _alarm_failure(exc, write=True)
     except Exception:
@@ -617,7 +631,9 @@ def update_alarm(alarm_id: int, payload: AlarmConfigurationRequest):
 @app.delete("/api/alarms/{alarm_id}")
 def delete_alarm(alarm_id: int):
     try:
-        return {"success": True, **alarm_service.delete(alarm_id)}
+        result = alarm_service.delete(alarm_id)
+        runtime_supervisor.notify_alarm_mappings_changed()
+        return {"success": True, **result}
     except AlarmServiceError as exc:
         return _alarm_failure(exc, write=True)
     except Exception:

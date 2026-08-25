@@ -12,10 +12,13 @@
 <nav class="view-tabs" aria-label="Tag tree source">
     <button type="button" class="view-tab active" data-view="runtime">OPC Tag List</button>
     <button type="button" class="view-tab" data-view="kepware">Tag Configuration</button>
+    <button type="button" class="view-tab" data-view="opc-runtime">OPC Runtime</button>
 </nav>
 
 <div id="opc-tag-list-workspace" class="alarm-top-workspace">
 <main class="workspace runtime-mode">
+    <div id="alarm-left-center-workspace" class="alarm-left-center-workspace">
+    <div id="alarm-upper-workspace" class="alarm-upper-workspace">
     <section class="panel tree-panel" aria-label="Tag tree">
         <div id="runtime-tree-view" class="tree-view">
             <h2>OPC Tag List</h2>
@@ -114,7 +117,7 @@
         id="main-panel-splitter"
         class="main-panel-splitter"
         role="separator"
-        aria-label="Resize tree and details panels"
+        aria-label="Resize OPC Tag List and MP3 Browser"
         aria-orientation="vertical"
         tabindex="0"
     ></div>
@@ -134,11 +137,34 @@
         <audio id="alarm-preview-audio" controls class="hidden"></audio>
     </section>
 
+    </div>
+
+    <div
+        id="alarm-horizontal-splitter"
+        class="alarm-horizontal-splitter"
+        role="separator"
+        aria-label="Resize OPC Tag List and MP3 Browser above Current Alarm Mapping"
+        aria-orientation="horizontal"
+        tabindex="0"
+        title="Drag to resize Current Alarm Mapping"
+    ></div>
+
+    <section id="alarm-summary" class="alarm-summary alarm-mapping-workspace" aria-live="polite">
+        <div class="alarm-summary-heading"><strong>Current Alarm Mapping</strong><span id="alarm-summary-count"></span></div>
+        <div class="alarm-summary-scroll">
+            <table>
+                <thead><tr><th>Tag Name / Tag Path</th><th>MP3 File</th><th>Actions</th></tr></thead>
+                <tbody id="alarm-summary-body"></tbody>
+            </table>
+        </div>
+    </section>
+    </div>
+
     <div
         id="alarm-center-splitter"
         class="main-panel-splitter alarm-pane-splitter"
         role="separator"
-        aria-label="Resize MP3 browser and Alarm editor"
+        aria-label="Resize combined OPC Tag List and MP3 workspace and Tag Details"
         aria-orientation="vertical"
         tabindex="0"
     ></div>
@@ -429,24 +455,37 @@
 </div>
 <div id="tag-configuration-workspace" class="tag-configuration-workspace hidden"></div>
 
-<div
-    id="alarm-horizontal-splitter"
-    class="alarm-horizontal-splitter"
-    role="separator"
-    aria-label="Resize Alarm authoring and Current Alarm Mapping"
-    aria-orientation="horizontal"
-    tabindex="0"
-    title="Drag to resize Current Alarm Mapping"
-></div>
-
-<section id="alarm-summary" class="alarm-summary alarm-mapping-workspace" aria-live="polite">
-    <div class="alarm-summary-heading"><strong>Current Alarm Mapping</strong><span id="alarm-summary-count"></span></div>
-    <div class="alarm-summary-scroll">
-        <table>
-            <thead><tr><th>Tag Path</th><th>MP3 File</th><th>Mode</th><th>High</th><th>Low</th><th>Priority</th><th>Repeat</th><th>Enabled</th><th>Actions</th></tr></thead>
-            <tbody id="alarm-summary-body"></tbody>
-        </table>
-    </div>
+<section id="opc-runtime-workspace" class="opc-runtime-workspace hidden" aria-label="OPC Runtime monitoring">
+    <article class="runtime-activity-pane">
+        <h2>OPC Subscription</h2>
+        <dl class="runtime-activity-summary">
+            <dt>Worker</dt><dd id="activity-worker-state">Unknown</dd>
+            <dt>OPC</dt><dd id="activity-opc-state">Unknown</dd>
+            <dt>Loaded / Requested</dt><dd id="activity-requested-count">0 / 0</dd>
+            <dt>Subscribed</dt><dd id="activity-subscribed-count">0</dd>
+            <dt>Failed</dt><dd id="activity-failed-count">0</dd>
+            <dt>Progress</dt><dd id="activity-subscription-progress">0%</dd>
+        </dl>
+        <div id="subscription-activity-list" class="runtime-activity-list" aria-live="polite"></div>
+    </article>
+    <article class="runtime-activity-pane">
+        <h2>Influx Write Activity</h2>
+        <p class="tree-counts">Actual results returned by InfluxWriter.write().</p>
+        <div id="influx-activity-list" class="runtime-activity-list" aria-live="polite"></div>
+    </article>
+    <article class="runtime-activity-pane">
+        <h2>Alarm Tag Activity</h2>
+        <p class="tree-counts">Diagnostics only. alarm_sound remains playback authority.</p>
+        <dl class="runtime-activity-summary">
+            <dt>Configured</dt><dd id="activity-alarm-configured">0</dd>
+            <dt>Active</dt><dd id="activity-alarm-active">0</dd>
+            <dt>Events session</dt><dd id="activity-alarm-events">0</dd>
+            <dt>Last event</dt><dd id="activity-alarm-last-event">None</dd>
+            <dt>Last path</dt><dd id="activity-alarm-last-path">None</dd>
+            <dt>Diagnostics</dt><dd id="activity-alarm-state">Unknown</dd>
+        </dl>
+        <div id="alarm-activity-list" class="runtime-activity-list" aria-live="polite"></div>
+    </article>
 </section>
 <div id="runtime-secondary-host" class="runtime-secondary-host"></div>
 {% endblock %}

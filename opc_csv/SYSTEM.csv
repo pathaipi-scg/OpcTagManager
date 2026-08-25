@@ -1,0 +1,9 @@
+﻿Tag Name,Address,Data Type,Respect Data Type,Client Access,Scan Rate,Scaling,Raw Low,Raw High,Scaled Low,Scaled High,Scaled Data Type,Clamp Low,Clamp High,Eng Units,Description,Negate Value
+"LIVE_STATUS","412001",Word,1,R/W,1000,,,,,,,,,,"",
+"RELOAD_ALARM","412004",Word,1,R/W,1000,,,,,,,,,,"",
+"RELOAD_BROWSER","412002",Word,1,R/W,1000,,,,,,,,,,"",
+"RELOAD_POLLER","412003",Word,1,R/W,1000,,,,,,,,,,"",
+"RELOAD_TEST","412005",Word,1,R/W,1000,,,,,,,,,,"",
+"TEST_ALM","412006",Word,1,R/W,1000,,,,,,,,,,"",
+"TEST_SOUND","412007",Word,1,R/W,1000,,,,,,,,,,"",
+"TEST_SOUND1","412008",Word,1,R/W,1000,,,,,,,,,,"",

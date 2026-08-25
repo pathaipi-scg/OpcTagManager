@@ -7,6 +7,8 @@ from asyncua.ua import NodeClass
 
 from workers.historian_worker import (
     ACTIVE_TAG_QUERY,
+    ALARM_DIAGNOSTIC_QUERY,
+    AlarmActivityDiagnostics,
     HistorianSettings,
     HistorianWorker,
     InfluxWriter,
@@ -14,6 +16,7 @@ from workers.historian_worker import (
     get_database_name,
     get_line_name,
     load_active_tags,
+    load_alarm_diagnostic_mappings,
     normalize_value,
     subscription_failure_category,
 )
@@ -182,6 +185,39 @@ def test_active_tag_query_and_load_contract():
     assert connection.cursor_value.query == ACTIVE_TAG_QUERY
     assert tags == [{"TagId": 1, "Path": "LP2_MODBUS/Device/Tag", "NodeId": "node-1", "DataType": "Bool"}]
     assert connection.closed
+
+
+def test_alarm_diagnostic_query_and_load_contract():
+    row = (7, 3, "Line/Alarm", "node-alarm", "high", 10, None, 2, "alarm.mp3", 1)
+    connection = FakeSqlConnection([row])
+    alarms = load_alarm_diagnostic_mappings(lambda: connection)
+    assert "FROM Alarm_Lists a" in ALARM_DIAGNOSTIC_QUERY
+    assert "INNER JOIN TagMaster" in ALARM_DIAGNOSTIC_QUERY
+    assert connection.cursor_value.query == ALARM_DIAGNOSTIC_QUERY
+    assert alarms == [{
+        "alarm_id": 7, "tag_id": 3, "tag_path": "Line/Alarm", "node_id": "node-alarm",
+        "alarm_mode": "HIGH", "threshold_high": 10, "threshold_low": None,
+        "priority": 2, "mp3_file": "alarm.mp3", "enable_alarm": True,
+    }]
+    assert connection.closed
+
+
+def test_alarm_activity_is_baselined_then_reports_trigger_and_clear_deterministically():
+    reporter = Reporter()
+    diagnostics = AlarmActivityDiagnostics(reporter, steady_active_interval=3600)
+    diagnostics.replace_mappings([{
+        "alarm_id": 7, "tag_id": 3, "tag_path": "Line/Alarm", "node_id": "node-alarm",
+        "alarm_mode": "HIGH", "threshold_high": 10, "threshold_low": None,
+        "priority": 2, "mp3_file": "alarm.mp3", "enable_alarm": True,
+    }])
+    diagnostics.observe("node-alarm", 5)
+    diagnostics.observe("node-alarm", 11)
+    diagnostics.observe("node-alarm", 12)
+    diagnostics.observe("node-alarm", 4)
+    activity = [values for event, values in reporter.events if event == "alarm_activity"]
+    assert [item["state"] for item in activity] == ["NORMAL", "ACTIVE", "CLEARED"]
+    assert [item["transition"] for item in activity] == [False, True, True]
+    assert [item["active_alarm_count"] for item in activity] == [0, 1, 0]
 
 
 def test_exact_line_and_database_derivation_parity():

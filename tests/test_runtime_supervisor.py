@@ -223,3 +223,25 @@ def test_pending_generation_survives_crash_and_is_resent_after_restart():
         assert supervisor.status()["rebuild_pending"] is True
     finally:
         supervisor.shutdown()
+
+
+def test_activity_buffers_are_bounded_and_alarm_summary_tracks_transitions():
+    supervisor = HistorianSupervisor(False)
+    for index in range(205):
+        supervisor._apply_event({"event": "influx_write", "success": True, "path": f"Line/{index}"})
+    supervisor._apply_event({"event": "alarm_activity_state", "state": "ready", "configured_alarm_tags": 2})
+    supervisor._apply_event({
+        "event": "alarm_activity", "state": "ACTIVE", "transition": True,
+        "active_alarm_count": 1, "path": "Line/Alarm", "time": "2026-08-25T00:00:00+00:00",
+    })
+    activity = supervisor.activity()
+    assert len(activity["influx"]) == 200
+    assert activity["influx"][0]["path"] == "Line/5"
+    assert activity["summary"] == {
+        "configured_alarm_tags": 2,
+        "active_alarms": 1,
+        "alarm_events_session": 1,
+        "last_alarm_event": "2026-08-25T00:00:00+00:00",
+        "last_alarm_path": "Line/Alarm",
+        "alarm_activity_state": "ready",
+    }

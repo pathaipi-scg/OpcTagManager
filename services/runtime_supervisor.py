@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from collections import deque
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -34,6 +35,9 @@ class HistorianSupervisor:
         self._lock = threading.RLock()
         self._shutdown = threading.Event()
         self._intentional_stop = False
+        self._subscription_activity = deque(maxlen=200)
+        self._influx_activity = deque(maxlen=200)
+        self._alarm_activity = deque(maxlen=200)
         self._status = {
             "supervisor_enabled": enabled,
             "historian_ownership": production_historian_owner,
@@ -60,11 +64,33 @@ class HistorianSupervisor:
             "opc_state": "unknown",
             "influx_state": "unknown",
             "last_write_time": None,
+            "alarm_activity_state": "unknown",
+            "configured_alarm_tags": 0,
+            "active_alarms": 0,
+            "alarm_events_session": 0,
+            "last_alarm_event": None,
+            "last_alarm_path": None,
         }
 
     def status(self) -> dict:
         with self._lock:
             return deepcopy(self._status)
+
+    def activity(self) -> dict:
+        with self._lock:
+            return {
+                "subscription": list(self._subscription_activity),
+                "influx": list(self._influx_activity),
+                "alarm": list(self._alarm_activity),
+                "summary": {
+                    "configured_alarm_tags": self._status["configured_alarm_tags"],
+                    "active_alarms": self._status["active_alarms"],
+                    "alarm_events_session": self._status["alarm_events_session"],
+                    "last_alarm_event": self._status["last_alarm_event"],
+                    "last_alarm_path": self._status["last_alarm_path"],
+                    "alarm_activity_state": self._status["alarm_activity_state"],
+                },
+            }
 
     def _spawn(self) -> bool:
         project_root = Path(__file__).resolve().parent.parent
@@ -113,6 +139,12 @@ class HistorianSupervisor:
 
     def _apply_event(self, message: dict) -> None:
         event = message.get("event")
+        if event in {
+            "worker_started", "tag_snapshot", "opc_state", "subscriptions_build_started",
+            "subscriptions_progress", "subscriptions_ready", "subscription_error",
+            "subscriptions_connection_lost", "rebuild_started", "rebuild_ack",
+        }:
+            self._subscription_activity.append(deepcopy(message))
         if event == "worker_started":
             self._status["worker_state"] = "running"
         elif event == "tag_snapshot":
@@ -145,6 +177,7 @@ class HistorianSupervisor:
         elif event == "rebuild_started":
             self._status["worker_state"] = "rebuilding"
         elif event == "influx_write":
+            self._influx_activity.append(deepcopy(message))
             if message.get("success"):
                 self._status["influx_state"] = "last_write_ok"
                 self._status["last_write_time"] = message.get("time")
@@ -153,6 +186,20 @@ class HistorianSupervisor:
                 self._status["last_error"] = message.get("error")
         elif event == "subscription_error":
             self._status["last_error"] = message.get("error")
+        elif event == "alarm_activity_state":
+            self._status["alarm_activity_state"] = message.get("state", "unknown")
+            if message.get("configured_alarm_tags") is not None:
+                self._status["configured_alarm_tags"] = message["configured_alarm_tags"]
+            if message.get("error"):
+                self._status["last_error"] = message["error"]
+        elif event == "alarm_activity":
+            self._alarm_activity.append(deepcopy(message))
+            self._status["alarm_activity_state"] = "ready"
+            self._status["active_alarms"] = int(message.get("active_alarm_count", 0))
+            if message.get("transition"):
+                self._status["alarm_events_session"] += 1
+            self._status["last_alarm_event"] = message.get("time")
+            self._status["last_alarm_path"] = message.get("path")
 
     def _monitor(self, process) -> None:
         if process.stdout is not None:
@@ -213,6 +260,12 @@ class HistorianSupervisor:
             if requested:
                 self._status["worker_state"] = "rebuilding"
             return requested
+
+    def notify_alarm_mappings_changed(self) -> bool:
+        with self._lock:
+            if not self.enabled:
+                return False
+            return self._send("reload_alarm_mappings")
 
     def stop(self, timeout: float = 5.0) -> None:
         with self._lock:

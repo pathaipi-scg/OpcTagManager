@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+from pathlib import Path
 import queue
 import sys
 import threading
@@ -16,10 +17,27 @@ from influxdb import InfluxDBClient
 from services.sql_connection import connect_sql
 
 
+try:
+    repository_root = Path(__file__).resolve().parents[2]
+    if str(repository_root) not in sys.path:
+        sys.path.insert(0, str(repository_root))
+    from alarm_sound.alarm_runtime import AlarmTransitionEngine, group_alarms_by_node
+except Exception:  # Alarm diagnostics must never prevent historian startup.
+    AlarmTransitionEngine = None
+    group_alarms_by_node = None
+
+
 ACTIVE_TAG_QUERY = """SELECT TagId, Path, NodeId, DataType
 FROM TagMaster
 WHERE IsActive = 1
 AND Path NOT LIKE 'Server%'"""
+ALARM_DIAGNOSTIC_QUERY = """SELECT a.AlarmId, a.TagId, t.Path, t.NodeId,
+       a.AlarmMode, a.ThresholdHigh, a.ThresholdLow, a.Priority,
+       a.Mp3File, a.EnableAlarm
+FROM Alarm_Lists a
+INNER JOIN TagMaster t ON a.TagId = t.TagId
+WHERE t.IsActive = 1
+  AND UPPER(a.AlarmMode) IN ('HIGH', 'LOW')"""
 STATUS_PREFIX = "OPCTM_STATUS "
 
 
@@ -125,15 +143,41 @@ def make_sql_connection(settings: HistorianSettings):
     )
 
 
+def _load_active_tags_from_connection(connection) -> list[dict]:
+    cursor = connection.cursor()
+    cursor.execute(ACTIVE_TAG_QUERY)
+    return [
+        {"TagId": row[0], "Path": row[1], "NodeId": row[2], "DataType": row[3]}
+        for row in cursor.fetchall()
+    ]
+
+
 def load_active_tags(connection_factory: Callable[[], object]) -> list[dict]:
     connection = connection_factory()
     try:
-        cursor = connection.cursor()
-        cursor.execute(ACTIVE_TAG_QUERY)
-        return [
-            {"TagId": row[0], "Path": row[1], "NodeId": row[2], "DataType": row[3]}
-            for row in cursor.fetchall()
-        ]
+        return _load_active_tags_from_connection(connection)
+    finally:
+        connection.close()
+
+
+def _load_alarm_diagnostic_mappings_from_connection(connection) -> list[dict]:
+    cursor = connection.cursor()
+    cursor.execute(ALARM_DIAGNOSTIC_QUERY)
+    return [
+        {
+            "alarm_id": int(row[0]), "tag_id": int(row[1]), "tag_path": str(row[2]),
+            "node_id": str(row[3]), "alarm_mode": str(row[4]).upper(),
+            "threshold_high": row[5], "threshold_low": row[6], "priority": row[7],
+            "mp3_file": row[8], "enable_alarm": bool(row[9]),
+        }
+        for row in cursor.fetchall()
+    ]
+
+
+def load_alarm_diagnostic_mappings(connection_factory: Callable[[], object]) -> list[dict]:
+    connection = connection_factory()
+    try:
+        return _load_alarm_diagnostic_mappings_from_connection(connection)
     finally:
         connection.close()
 
@@ -166,26 +210,118 @@ class InfluxWriter:
         if normalized is None:
             return False
         try:
+            database = get_database_name(self.settings.influx_db, path)
             self.get_client(path).write_points([
                 {"measurement": path, "fields": {"value": normalized}}
             ])
-            self.reporter.send("influx_write", success=True)
+            self.reporter.send(
+                "influx_write", success=True, database=database, path=path,
+                value=normalized, result="WRITE OK",
+            )
             return True
         except Exception as exc:
-            self.reporter.send("influx_write", success=False, error=safe_error("Influx write failed", exc))
+            self.reporter.send(
+                "influx_write", success=False,
+                database=get_database_name(self.settings.influx_db, path), path=path,
+                value=normalized, result="WRITE FAILED",
+                error=safe_error("Influx write failed", exc),
+            )
             return False
 
 
+class AlarmActivityDiagnostics:
+    def __init__(self, reporter: StatusReporter, steady_active_interval: float = 10.0) -> None:
+        self.reporter = reporter
+        self.steady_active_interval = steady_active_interval
+        self.mappings_by_node: dict[str, list[dict]] = {}
+        self.mapping_by_alarm_id: dict[int, dict] = {}
+        self.disabled_baselines: set[int] = set()
+        self.last_active_report: dict[int, float] = {}
+        self.engine = None
+
+    def replace_mappings(self, alarms: list[dict]) -> None:
+        self.mappings_by_node = {}
+        self.mapping_by_alarm_id = {int(item["alarm_id"]): item for item in alarms}
+        for alarm in alarms:
+            self.mappings_by_node.setdefault(alarm["node_id"], []).append(alarm)
+        enabled = [item for item in alarms if item["enable_alarm"]]
+        if AlarmTransitionEngine is None or group_alarms_by_node is None:
+            self.engine = None
+            self.reporter.send(
+                "alarm_activity_state", state="unavailable",
+                error="Alarm evaluator is unavailable.", configured_alarm_tags=len({a['tag_id'] for a in alarms}),
+            )
+            return
+        self.engine = AlarmTransitionEngine(group_alarms_by_node(enabled), lambda _alarm, _value: None)
+        self.engine.baseline_alarm_ids = {int(item["alarm_id"]) for item in enabled}
+        self.disabled_baselines = {int(item["alarm_id"]) for item in alarms if not item["enable_alarm"]}
+        self.last_active_report.clear()
+        self.reporter.send(
+            "alarm_activity_state", state="ready",
+            configured_alarm_tags=len({item["tag_id"] for item in alarms}),
+        )
+
+    def _send(self, alarm: dict, value, state: str, transition: bool) -> None:
+        self.reporter.send(
+            "alarm_activity", alarm_id=alarm["alarm_id"], tag_id=alarm["tag_id"],
+            node_id=alarm["node_id"], path=alarm["tag_path"], value=normalize_value(value),
+            alarm_mode=alarm["alarm_mode"], threshold_high=alarm["threshold_high"],
+            threshold_low=alarm["threshold_low"], priority=alarm["priority"],
+            mp3_file=alarm["mp3_file"], enable_alarm=alarm["enable_alarm"],
+            state=state, transition=transition,
+            active_alarm_count=sum(1 for active in self.engine.active.values() if active)
+            if self.engine is not None else 0,
+        )
+
+    def observe(self, node_id: str, value) -> None:
+        if node_id not in self.mappings_by_node:
+            return
+        try:
+            for alarm in self.mappings_by_node[node_id]:
+                alarm_id = int(alarm["alarm_id"])
+                if not alarm["enable_alarm"] and alarm_id in self.disabled_baselines:
+                    self.disabled_baselines.discard(alarm_id)
+                    self._send(alarm, value, "NORMAL", False)
+            if self.engine is None:
+                return
+            now = time.monotonic()
+            for event in self.engine.process_value(node_id, value):
+                alarm = self.mapping_by_alarm_id[int(event["alarm_id"])]
+                kind = event["event"]
+                if kind == "baseline":
+                    state, transition = ("ACTIVE" if event["active"] else "NORMAL"), False
+                elif kind == "trigger":
+                    state, transition = "ACTIVE", True
+                elif kind == "clear":
+                    state, transition = "CLEARED", True
+                elif event["active"] and now - self.last_active_report.get(alarm["alarm_id"], 0) >= self.steady_active_interval:
+                    state, transition = "ACTIVE", False
+                else:
+                    continue
+                if state == "ACTIVE":
+                    self.last_active_report[alarm["alarm_id"]] = now
+                self._send(alarm, value, state, transition)
+        except Exception as exc:
+            self.reporter.send(
+                "alarm_activity_state", state="error",
+                error=safe_error("Alarm diagnostics failed", exc),
+            )
+
+
 class HistorianHandler:
-    def __init__(self, node_path_map: dict[str, str], writer: InfluxWriter, reporter=None) -> None:
+    def __init__(self, node_path_map: dict[str, str], writer: InfluxWriter, reporter=None,
+                 alarm_diagnostics: AlarmActivityDiagnostics | None = None) -> None:
         self.node_path_map = node_path_map
         self.writer = writer
         self.reporter = reporter or StatusReporter()
+        self.alarm_diagnostics = alarm_diagnostics
 
     def datachange_notification(self, node, value, _data) -> None:
         path = self.node_path_map.get(node.nodeid.to_string())
         if path:
             self.writer.write(path, value)
+        if self.alarm_diagnostics is not None:
+            self.alarm_diagnostics.observe(node.nodeid.to_string(), value)
 
     def status_change_notification(self, status) -> None:
         code = getattr(status, "Status", status)
@@ -212,7 +348,24 @@ class HistorianWorker:
         self.connection_factory = connection_factory or (lambda: make_sql_connection(settings))
         self.opc_client_factory = opc_client_factory
         self.writer = InfluxWriter(settings, influx_client_factory, reporter)
+        self.alarm_diagnostics = AlarmActivityDiagnostics(reporter)
         self.pending_generation: int | None = None
+
+    def _reload_alarm_diagnostics(self, connection=None) -> None:
+        owns_connection = connection is None
+        try:
+            if owns_connection:
+                connection = self.connection_factory()
+            alarms = _load_alarm_diagnostic_mappings_from_connection(connection)
+            self.alarm_diagnostics.replace_mappings(alarms)
+        except Exception as exc:
+            self.reporter.send(
+                "alarm_activity_state", state="error",
+                error=safe_error("Alarm mapping load failed", exc),
+            )
+        finally:
+            if owns_connection and connection is not None:
+                connection.close()
 
     def _report_subscription_failure(self, tag: dict, failure) -> None:
         self.reporter.send(
@@ -290,6 +443,9 @@ class HistorianWorker:
             )
             command = self._command()
             command_name = command.get("command") if isinstance(command, dict) else command
+            if command_name == "reload_alarm_mappings":
+                self._reload_alarm_diagnostics()
+                continue
             if command_name in {"stop", "rebuild"}:
                 if command_name == "rebuild" and isinstance(command, dict):
                     self.pending_generation = command.get("generation")
@@ -312,12 +468,20 @@ class HistorianWorker:
             return None
 
     async def run_session(self) -> str:
-        tags = load_active_tags(self.connection_factory)
+        connection = self.connection_factory()
+        try:
+            tags = _load_active_tags_from_connection(connection)
+            self._reload_alarm_diagnostics(connection)
+        finally:
+            connection.close()
         node_path_map = {tag["NodeId"]: tag["Path"] for tag in tags}
         self.reporter.send("tag_snapshot", active_tag_count=len(tags))
         async with self.opc_client_factory(url=self.settings.opc_url) as opc:
             self.reporter.send("opc_state", state="connected")
-            handler = HistorianHandler(node_path_map, self.writer, self.reporter)
+            handler = HistorianHandler(
+                node_path_map, self.writer, self.reporter,
+                alarm_diagnostics=self.alarm_diagnostics,
+            )
             subscription = await opc.create_subscription(1000, handler)
             subscribed, failed, interrupted = await self._build_subscriptions(subscription, opc, tags)
             if interrupted:
@@ -337,6 +501,9 @@ class HistorianWorker:
             while True:
                 command = self._command()
                 command_name = command.get("command") if isinstance(command, dict) else command
+                if command_name == "reload_alarm_mappings":
+                    self._reload_alarm_diagnostics()
+                    continue
                 if command_name in {"stop", "rebuild"}:
                     if command_name == "rebuild":
                         self.pending_generation = command.get("generation") if isinstance(command, dict) else None
@@ -382,7 +549,7 @@ def read_commands(command_queue: queue.Queue, stream=None) -> None:
             command = payload.get("command")
         except (json.JSONDecodeError, AttributeError):
             continue
-        if command in {"stop", "rebuild"}:
+        if command in {"stop", "rebuild", "reload_alarm_mappings"}:
             command_queue.put({"command": command, "generation": payload.get("generation")})
     command_queue.put({"command": "stop"})
 

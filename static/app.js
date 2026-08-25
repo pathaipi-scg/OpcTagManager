@@ -43,6 +43,8 @@ const alarmTopWorkspace = document.getElementById("opc-tag-list-workspace");
 const tagConfigurationWorkspace = document.getElementById("tag-configuration-workspace");
 const treePanel = document.querySelector(".tree-panel");
 const detailsPanel = document.querySelector(".details-panel");
+const alarmLeftCenterWorkspace = document.getElementById("alarm-left-center-workspace");
+const alarmUpperWorkspace = document.getElementById("alarm-upper-workspace");
 const mainPanelSplitter = document.getElementById("main-panel-splitter");
 const alarmCenterSplitter = document.getElementById("alarm-center-splitter");
 const alarmLeftWidthKey = "opcTagManager.alarmPane.leftWidth";
@@ -52,9 +54,7 @@ const alarmMinimumWidths = { left: 260, center: 240, right: 320 };
 const alarmMinimumHeights = { top: 280, mapping: 160 };
 const alarmHorizontalSplitter = document.getElementById("alarm-horizontal-splitter");
 const alarmMappingWorkspace = document.getElementById("alarm-summary");
-const initialViewportHeight = window.innerHeight;
-const initialAlarmTopHeight = alarmTopWorkspace.getBoundingClientRect().height;
-const initialAlarmVerticalTotal = initialAlarmTopHeight + alarmMappingWorkspace.getBoundingClientRect().height;
+const initialAlarmTopHeight = alarmUpperWorkspace.getBoundingClientRect().height;
 let mainPanelRatio = readSavedPanelRatio();
 let resizeFrame = null;
 
@@ -76,9 +76,9 @@ function savePanelRatio() {
 }
 
 function splitterSpace() {
-    const style = getComputedStyle(mainPanelSplitter);
+    const style = getComputedStyle(alarmCenterSplitter);
     return (
-        mainPanelSplitter.getBoundingClientRect().width +
+        alarmCenterSplitter.getBoundingClientRect().width +
         Number.parseFloat(style.marginLeft || "0") +
         Number.parseFloat(style.marginRight || "0")
     );
@@ -94,15 +94,15 @@ function applyMainPanelRatio() {
     );
     const rightWidth = Math.max(0, available - leftWidth);
 
-    treePanel.style.flex = `0 0 ${leftWidth}px`;
+    alarmLeftCenterWorkspace.style.flex = `0 0 ${leftWidth}px`;
     detailsPanel.style.flex = `0 0 ${rightWidth}px`;
-    mainPanelSplitter.setAttribute("aria-valuenow", String(Math.round(mainPanelRatio * 100)));
+    alarmCenterSplitter.setAttribute("aria-valuenow", String(Math.round(mainPanelRatio * 100)));
 }
 
 function ratioFromPointer(clientX) {
     const workspaceRect = workspace.getBoundingClientRect();
-    const splitterRect = mainPanelSplitter.getBoundingClientRect();
-    const style = getComputedStyle(mainPanelSplitter);
+    const splitterRect = alarmCenterSplitter.getBoundingClientRect();
+    const style = getComputedStyle(alarmCenterSplitter);
     const available = Math.max(1, workspace.clientWidth - splitterSpace());
     const pointerOffset =
         Number.parseFloat(style.marginLeft || "0") + splitterRect.width / 2;
@@ -115,10 +115,10 @@ function ratioFromPointer(clientX) {
     return clampedLeft / available;
 }
 
-mainPanelSplitter.addEventListener("pointerdown", (event) => {
+alarmCenterSplitter.addEventListener("pointerdown", (event) => {
     if (workspace.classList.contains("runtime-mode")) return;
     if (event.button !== 0) return;
-    mainPanelSplitter.classList.add("dragging");
+    alarmCenterSplitter.classList.add("dragging");
     document.body.style.userSelect = "none";
 
     const onPointerMove = (moveEvent) => {
@@ -126,7 +126,7 @@ mainPanelSplitter.addEventListener("pointerdown", (event) => {
         applyMainPanelRatio();
     };
     const onPointerUp = () => {
-        mainPanelSplitter.classList.remove("dragging");
+        alarmCenterSplitter.classList.remove("dragging");
         document.body.style.userSelect = "";
         document.removeEventListener("pointermove", onPointerMove);
         document.removeEventListener("pointerup", onPointerUp);
@@ -138,7 +138,7 @@ mainPanelSplitter.addEventListener("pointerdown", (event) => {
     event.preventDefault();
 });
 
-mainPanelSplitter.addEventListener("keydown", (event) => {
+alarmCenterSplitter.addEventListener("keydown", (event) => {
     if (workspace.classList.contains("runtime-mode")) return;
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     mainPanelRatio += event.key === "ArrowLeft" ? -0.02 : 0.02;
@@ -162,14 +162,15 @@ window.addEventListener("resize", () => {
 
 applyMainPanelRatio();
 
+function splitterSpaceFor(splitter) {
+    const style = getComputedStyle(splitter);
+    return splitter.getBoundingClientRect().width
+        + Number.parseFloat(style.marginLeft || "0")
+        + Number.parseFloat(style.marginRight || "0");
+}
+
 function alarmAvailableWidth() {
-    const splitterWidth = (splitter) => {
-        const style = getComputedStyle(splitter);
-        return splitter.getBoundingClientRect().width
-            + Number.parseFloat(style.marginLeft || "0")
-            + Number.parseFloat(style.marginRight || "0");
-    };
-    return Math.max(0, workspace.clientWidth - splitterWidth(mainPanelSplitter) - splitterWidth(alarmCenterSplitter));
+    return Math.max(0, workspace.clientWidth - splitterSpaceFor(mainPanelSplitter) - splitterSpaceFor(alarmCenterSplitter));
 }
 
 function savedAlarmWidth(key) {
@@ -199,6 +200,7 @@ function applyAlarmPaneWidths(useDefaults = false) {
     if (workspace.clientWidth <= 980) {
         workspace.style.removeProperty("--alarm-left-width");
         workspace.style.removeProperty("--alarm-center-width");
+        alarmLeftCenterWorkspace.style.removeProperty("flex");
         return;
     }
     const defaults = defaultAlarmWidths();
@@ -208,6 +210,7 @@ function applyAlarmPaneWidths(useDefaults = false) {
     );
     workspace.style.setProperty("--alarm-left-width", `${widths.left}px`);
     workspace.style.setProperty("--alarm-center-width", `${widths.center}px`);
+    alarmLeftCenterWorkspace.style.flex = `0 0 ${widths.left + widths.center + splitterSpaceFor(mainPanelSplitter)}px`;
     mainPanelSplitter.setAttribute("aria-valuenow", String(Math.round(widths.left)));
     alarmCenterSplitter.setAttribute("aria-valuenow", String(Math.round(widths.center)));
 }
@@ -222,9 +225,13 @@ function persistAlarmPaneWidths() {
 }
 
 function alarmVerticalTotalHeight() {
+    const style = getComputedStyle(alarmHorizontalSplitter);
+    const splitterHeight = alarmHorizontalSplitter.getBoundingClientRect().height
+        + Number.parseFloat(style.marginTop || "0")
+        + Number.parseFloat(style.marginBottom || "0");
     return Math.max(
         alarmMinimumHeights.top + alarmMinimumHeights.mapping,
-        initialAlarmVerticalTotal + (window.innerHeight - initialViewportHeight),
+        alarmLeftCenterWorkspace.clientHeight - splitterHeight,
     );
 }
 
@@ -244,20 +251,20 @@ function savedAlarmTopHeight() {
 
 function applyAlarmTopHeight(useDefault = false) {
     if (!workspace.classList.contains("runtime-mode") || workspace.clientWidth <= 980) {
-        alarmTopWorkspace.style.removeProperty("height");
+        alarmUpperWorkspace.style.removeProperty("height");
         alarmMappingWorkspace.style.removeProperty("height");
         return;
     }
     const requested = useDefault ? initialAlarmTopHeight : (savedAlarmTopHeight() ?? initialAlarmTopHeight);
     const topHeight = clampAlarmTopHeight(requested);
-    alarmTopWorkspace.style.height = `${topHeight}px`;
+    alarmUpperWorkspace.style.height = `${topHeight}px`;
     alarmMappingWorkspace.style.height = `${alarmVerticalTotalHeight() - topHeight}px`;
     alarmHorizontalSplitter.setAttribute("aria-valuenow", String(Math.round(topHeight)));
 }
 
 function persistAlarmTopHeight() {
     try {
-        localStorage.setItem(alarmTopHeightKey, String(alarmTopWorkspace.getBoundingClientRect().height));
+        localStorage.setItem(alarmTopHeightKey, String(alarmUpperWorkspace.getBoundingClientRect().height));
     } catch (_error) {
         // Horizontal resizing remains available when browser storage is unavailable.
     }
@@ -266,14 +273,14 @@ function persistAlarmTopHeight() {
 function beginAlarmHorizontalResize(event) {
     if (!workspace.classList.contains("runtime-mode") || workspace.clientWidth <= 980 || event.button !== 0) return;
     const startY = event.clientY;
-    const startTopHeight = alarmTopWorkspace.getBoundingClientRect().height;
+    const startTopHeight = alarmUpperWorkspace.getBoundingClientRect().height;
     alarmHorizontalSplitter.classList.add("dragging");
     document.body.style.userSelect = "none";
     alarmHorizontalSplitter.setPointerCapture?.(event.pointerId);
 
     const onPointerMove = (moveEvent) => {
         const topHeight = clampAlarmTopHeight(startTopHeight + moveEvent.clientY - startY);
-        alarmTopWorkspace.style.height = `${topHeight}px`;
+        alarmUpperWorkspace.style.height = `${topHeight}px`;
         alarmMappingWorkspace.style.height = `${alarmVerticalTotalHeight() - topHeight}px`;
         alarmHorizontalSplitter.setAttribute("aria-valuenow", String(Math.round(topHeight)));
     };
@@ -326,6 +333,7 @@ function beginAlarmPaneResize(splitter, event, side) {
         }
         workspace.style.setProperty("--alarm-left-width", `${left}px`);
         workspace.style.setProperty("--alarm-center-width", `${center}px`);
+        alarmLeftCenterWorkspace.style.flex = `0 0 ${left + center + splitterSpaceFor(mainPanelSplitter)}px`;
     };
     const finishResize = (finishEvent) => {
         splitter.classList.remove("dragging");
@@ -386,9 +394,17 @@ async function loadAlarmSummary() {
     data.alarms.forEach((alarm) => {
         const row = document.createElement("tr");
         row.dataset.tagid = alarm.tag_id;
-        [alarm.tag_path, alarm.mp3_file, alarm.alarm_mode, alarm.threshold_high ?? "",
-            alarm.threshold_low ?? "", alarm.priority, alarm.repeat, alarm.enable_alarm ? "Yes" : "No"]
-            .forEach((value) => { const cell = document.createElement("td"); cell.textContent = value; row.appendChild(cell); });
+        row.className = alarm.enable_alarm ? "alarm-enabled" : "alarm-disabled";
+        const tag = document.createElement("td");
+        const tagName = document.createElement("strong");
+        tagName.textContent = String(alarm.tag_path || "").split("/").filter(Boolean).pop() || alarm.tag_path;
+        const tagPath = document.createElement("span");
+        tagPath.className = "mapping-tag-path";
+        tagPath.textContent = alarm.tag_path;
+        tag.append(tagName, tagPath);
+        const mp3 = document.createElement("td");
+        mp3.textContent = alarm.mp3_file || "—";
+        row.append(tag, mp3);
         const actions = document.createElement("td");
         actions.className = "mapping-actions";
         const edit = document.createElement("button");
@@ -754,6 +770,9 @@ const runtimeSecondaryHost = document.getElementById("runtime-secondary-host");
 const operatorHealth = document.querySelector(".operator-health");
 const diagnosticsPanel = document.querySelector(".diagnostics-panel");
 const runtimeKnowledgeHost = document.getElementById("runtime-knowledge-host");
+const opcRuntimeWorkspace = document.getElementById("opc-runtime-workspace");
+let opcRuntimePollTimer = null;
+let opcRuntimeRequestPending = false;
 runtimeKnowledgeHost.append(
     document.getElementById("tag-knowledge-panel"),
     document.getElementById("tag-resources-panel"),
@@ -780,6 +799,7 @@ let pendingSimilarUpload = null;
 viewTabs.forEach((tab) => {
     tab.addEventListener("click", () => {
         const isKepware = tab.dataset.view === "kepware";
+        const isOpcRuntime = tab.dataset.view === "opc-runtime";
         viewTabs.forEach((item) => item.classList.toggle("active", item === tab));
         document.getElementById("runtime-tree-view").classList.toggle("hidden", isKepware);
         document.getElementById("kepware-tree-view").classList.toggle("hidden", !isKepware);
@@ -787,17 +807,21 @@ viewTabs.forEach((tab) => {
         document.getElementById("kepware-details-view").classList.toggle("hidden", !isKepware);
         document.getElementById("full-reconcile").classList.toggle("hidden", isKepware);
         workspace.classList.toggle("runtime-mode", !isKepware);
-        alarmTopWorkspace.classList.toggle("hidden", isKepware);
+        alarmTopWorkspace.classList.toggle("hidden", isKepware || isOpcRuntime);
         tagConfigurationWorkspace.classList.toggle("hidden", !isKepware);
-        (isKepware ? tagConfigurationWorkspace : alarmTopWorkspace).appendChild(workspace);
+        opcRuntimeWorkspace.classList.toggle("hidden", !isOpcRuntime);
+        if (!isOpcRuntime) {
+            (isKepware ? tagConfigurationWorkspace : alarmTopWorkspace).appendChild(workspace);
+        }
         runtimeMp3Panel.classList.toggle("hidden", isKepware);
-        alarmCenterSplitter.classList.toggle("hidden", isKepware);
-        document.getElementById("alarm-summary").classList.toggle("hidden", isKepware);
-        alarmHorizontalSplitter.classList.toggle("hidden", isKepware);
-        runtimeSecondaryHost.classList.toggle("hidden", isKepware);
+        mainPanelSplitter.classList.toggle("hidden", isKepware);
+        alarmCenterSplitter.classList.toggle("hidden", isOpcRuntime);
+        document.getElementById("alarm-summary").classList.toggle("hidden", isKepware || isOpcRuntime);
+        alarmHorizontalSplitter.classList.toggle("hidden", isKepware || isOpcRuntime);
+        runtimeSecondaryHost.classList.toggle("hidden", isKepware || isOpcRuntime);
         (isKepware ? configurationKepwareTreeHost : runtimeKepwareTreeHost).appendChild(kepwareTree);
 
-        if (isKepware && !kepwareLoaded) {
+        if (!kepwareLoaded) {
             kepwareLoaded = true;
             loadKepwareChannels();
         }
@@ -805,13 +829,18 @@ viewTabs.forEach((tab) => {
             applyAlarmTopHeight();
             applyMainPanelRatio();
         }
-        if (!isKepware) {
+        if (!isKepware && !isOpcRuntime) {
             applyAlarmPaneWidths();
             applyAlarmTopHeight();
             runtimeSecondaryHost.append(operatorHealth, diagnosticsPanel);
             loadRuntimeStatus();
             loadAlarmMp3();
             loadAlarmSummary();
+        }
+        if (isOpcRuntime) {
+            startOpcRuntimePolling();
+        } else {
+            stopOpcRuntimePolling();
         }
     });
 });
@@ -893,6 +922,120 @@ async function loadRuntimeStatus() {
         document.getElementById("operator-historian-state").textContent = "Stopped";
         document.getElementById("operator-tag-count").textContent = "Unknown";
         document.getElementById("operator-last-error").textContent = "Status unavailable";
+    }
+}
+
+function activityTime(value) {
+    if (!value) return "--:--:--";
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleTimeString();
+}
+
+function activityValue(value) {
+    if (value === null || value === undefined) return "null";
+    if (typeof value === "string") return value;
+    try { return JSON.stringify(value); } catch (_error) { return String(value); }
+}
+
+function replaceActivityList(id, entries, formatter) {
+    const container = document.getElementById(id);
+    const fragment = document.createDocumentFragment();
+    [...(entries || [])].reverse().forEach((entry) => {
+        const row = document.createElement("div");
+        row.className = "runtime-activity-entry";
+        const rendered = formatter(entry);
+        rendered.forEach((line, index) => {
+            const element = document.createElement(index === 0 ? "strong" : "span");
+            element.textContent = line;
+            row.appendChild(element);
+        });
+        fragment.appendChild(row);
+    });
+    if (!fragment.childNodes.length) {
+        const empty = document.createElement("p");
+        empty.className = "tree-counts";
+        empty.textContent = "No activity received in this session.";
+        fragment.appendChild(empty);
+    }
+    container.replaceChildren(fragment);
+}
+
+function renderOpcRuntimeActivity(data) {
+    const runtime = data.runtime || {};
+    const requested = Number(runtime.requested_subscription_count || 0);
+    const loaded = Number(runtime.active_tag_count || 0);
+    const subscribed = Number(runtime.subscribed_tag_count || 0);
+    const failed = Number(runtime.failed_subscription_count || 0);
+    const attempted = subscribed + failed;
+    const progress = requested ? Math.min(100, Math.round((attempted / requested) * 100)) : 0;
+    document.getElementById("activity-worker-state").textContent = runtime.worker_state || "Unknown";
+    document.getElementById("activity-opc-state").textContent = runtime.opc_state || "Unknown";
+    document.getElementById("activity-requested-count").textContent = `${loaded} / ${requested}`;
+    document.getElementById("activity-subscribed-count").textContent = subscribed;
+    document.getElementById("activity-failed-count").textContent = failed;
+    document.getElementById("activity-subscription-progress").textContent = `${progress}%`;
+
+    replaceActivityList("subscription-activity-list", data.subscription, (entry) => [
+        `${activityTime(entry.time)}  ${String(entry.event || "runtime").replaceAll("_", " ").toUpperCase()}`,
+        entry.error || [
+            entry.requested_subscription_count != null ? `requested=${entry.requested_subscription_count}` : "",
+            entry.subscribed_tag_count != null ? `subscribed=${entry.subscribed_tag_count}` : "",
+            entry.failed_subscription_count != null ? `failed=${entry.failed_subscription_count}` : "",
+            entry.state ? `state=${entry.state}` : "",
+        ].filter(Boolean).join("  ") || "Historian runtime event",
+    ]);
+
+    replaceActivityList("influx-activity-list", data.influx, (entry) => [
+        `${activityTime(entry.time)}  ${entry.result || (entry.success ? "WRITE OK" : "WRITE FAILED")}`,
+        `Database: ${entry.database || "Unknown"}`,
+        `Path: ${entry.path || "Unknown"}`,
+        `Value: ${activityValue(entry.value)}`,
+        ...(entry.error ? [`Error: ${entry.error}`] : []),
+    ]);
+
+    const summary = data.summary || {};
+    document.getElementById("activity-alarm-configured").textContent = summary.configured_alarm_tags ?? 0;
+    document.getElementById("activity-alarm-active").textContent = summary.active_alarms ?? 0;
+    document.getElementById("activity-alarm-events").textContent = summary.alarm_events_session ?? 0;
+    document.getElementById("activity-alarm-last-event").textContent = activityTime(summary.last_alarm_event);
+    document.getElementById("activity-alarm-last-path").textContent = summary.last_alarm_path || "None";
+    document.getElementById("activity-alarm-state").textContent = summary.alarm_activity_state || "Unknown";
+    replaceActivityList("alarm-activity-list", data.alarm, (entry) => [
+        `${activityTime(entry.time)}  ${entry.state || "NORMAL"}`,
+        `Path: ${entry.path || "Unknown"}`,
+        `Value: ${activityValue(entry.value)}  Mode: ${entry.alarm_mode || "Unknown"}`,
+        `High: ${activityValue(entry.threshold_high)}  Low: ${activityValue(entry.threshold_low)}`,
+        `Priority: ${entry.priority ?? ""}  MP3: ${entry.mp3_file || ""}`,
+        `EnableAlarm: ${entry.enable_alarm ? "Yes" : "No"}`,
+    ]);
+}
+
+async function loadOpcRuntimeActivity() {
+    if (opcRuntimeRequestPending) return;
+    opcRuntimeRequestPending = true;
+    try {
+        const response = await fetchWithTimeout("/api/runtime/activity");
+        const data = await response.json();
+        if (!response.ok || !data.success) throw new Error("Runtime activity unavailable");
+        renderOpcRuntimeActivity(data);
+    } catch (_error) {
+        document.getElementById("activity-alarm-state").textContent = "Unavailable";
+    } finally {
+        opcRuntimeRequestPending = false;
+    }
+}
+
+function startOpcRuntimePolling() {
+    loadOpcRuntimeActivity();
+    if (opcRuntimePollTimer === null) {
+        opcRuntimePollTimer = window.setInterval(loadOpcRuntimeActivity, 1000);
+    }
+}
+
+function stopOpcRuntimePolling() {
+    if (opcRuntimePollTimer !== null) {
+        window.clearInterval(opcRuntimePollTimer);
+        opcRuntimePollTimer = null;
     }
 }
 

@@ -150,13 +150,16 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertIn('id="opc-tag-list-workspace" class="alarm-top-workspace"', html)
         self.assertIn('id="tag-configuration-workspace" class="tag-configuration-workspace hidden"', html)
         self.assertIn('aria-orientation="horizontal"', html)
-        self.assertIn('aria-label="Resize MP3 browser and Alarm editor"', html)
+        self.assertIn('aria-label="Resize OPC Tag List and MP3 Browser"', html)
+        self.assertIn('aria-label="Resize combined OPC Tag List and MP3 workspace and Tag Details"', html)
         self.assertIn('class="alarm-mp3-list" role="listbox"', html)
         self.assertIn('id="alarm-selected-mp3"', html)
-        self.assertIn('<th>Tag Path</th><th>MP3 File</th><th>Mode</th><th>High</th><th>Low</th>', html)
+        self.assertIn('<th>Tag Name / Tag Path</th><th>MP3 File</th><th>Actions</th>', html)
+        self.assertNotIn('<th>Enabled</th>', html)
         self.assertLess(html.index('id="runtime-tree-view"'), html.index('id="runtime-mp3-panel"'))
         self.assertLess(html.index('id="runtime-mp3-panel"'), html.index('id="runtime-details-view"'))
-        self.assertLess(html.index('</main>'), html.index('id="alarm-summary"'))
+        self.assertLess(html.index('id="runtime-mp3-panel"'), html.index('id="alarm-summary"'))
+        self.assertLess(html.index('id="alarm-summary"'), html.index('id="runtime-details-view"'))
         self.assertIn('id="runtime-kepware-tree-host"', html)
         self.assertIn("All Tags browses the live Kepware hierarchy", html)
         self.assertNotIn('class="tag-name tag-click"', html)
@@ -181,7 +184,11 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertIn('<option value="25">Word Array</option>', html)
         self.assertIn('<select id="new-tag-access"', html)
         self.assertIn('<option value="1">Read/Write</option>', html)
-        self.assertNotIn(">OPC Runtime</button>", html)
+        self.assertIn('class="view-tab" data-view="opc-runtime">OPC Runtime</button>', html)
+        self.assertIn('id="opc-runtime-workspace" class="opc-runtime-workspace hidden"', html)
+        self.assertIn('id="subscription-activity-list"', html)
+        self.assertIn('id="influx-activity-list"', html)
+        self.assertIn('id="alarm-activity-list"', html)
         javascript = Path("static/app.js").read_text(encoding="utf-8")
         self.assertIn('document.querySelector(\'.view-tab[data-view="runtime"]\').click();', javascript)
         self.assertIn('Number(document.getElementById("new-tag-data-type").value)', javascript)
@@ -258,11 +265,16 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertIn('localStorage.setItem(alarmTopHeightKey', javascript)
         self.assertIn('localStorage.removeItem(alarmTopHeightKey)', javascript)
         self.assertIn('applyAlarmTopHeight(true)', javascript)
-        self.assertIn('alarmTopWorkspace.style.height = `${topHeight}px`', javascript)
-        self.assertIn('alarmTopWorkspace.style.removeProperty("height")', javascript)
+        self.assertIn('alarmUpperWorkspace.style.height = `${topHeight}px`', javascript)
+        self.assertIn('alarmUpperWorkspace.style.removeProperty("height")', javascript)
+        self.assertNotIn('alarmTopWorkspace.style.height = `${topHeight}px`', javascript)
         self.assertNotIn('workspace.style.height = `${topHeight}px`', javascript)
         self.assertIn('(isKepware ? tagConfigurationWorkspace : alarmTopWorkspace).appendChild(workspace)', javascript)
-        self.assertIn('alarmTopWorkspace.classList.toggle("hidden", isKepware)', javascript)
+        self.assertIn('alarmTopWorkspace.classList.toggle("hidden", isKepware || isOpcRuntime)', javascript)
+        self.assertIn('opcRuntimeWorkspace.classList.toggle("hidden", !isOpcRuntime)', javascript)
+        self.assertIn('startOpcRuntimePolling()', javascript)
+        self.assertIn('stopOpcRuntimePolling()', javascript)
+        self.assertIn('fetchWithTimeout("/api/runtime/activity")', javascript)
         self.assertIn('tagConfigurationWorkspace.classList.toggle("hidden", !isKepware)', javascript)
         self.assertIn('Math.max(alarmMinimumHeights.top', javascript)
         self.assertIn('total - alarmMinimumHeights.mapping', javascript)
@@ -322,7 +334,11 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertIn('.alarm-horizontal-splitter', stylesheet)
         self.assertIn('height: 10px', stylesheet)
         self.assertIn('cursor: row-resize', stylesheet)
-        self.assertIn('.alarm-top-workspace { height: calc(58vh - 70px); min-height: 280px; }', stylesheet)
+        self.assertIn('.alarm-top-workspace { height: calc(100vh - 140px); min-height: 440px; }', stylesheet)
+        self.assertIn('.alarm-left-center-workspace { display: flex;', stylesheet)
+        self.assertIn('.workspace.runtime-mode .details-panel { flex: 1 1 auto !important; min-width: 320px; overflow-y: auto; }', stylesheet)
+        self.assertIn('tr.alarm-enabled', stylesheet)
+        self.assertIn('tr.alarm-disabled', stylesheet)
         self.assertIn('.tag-configuration-workspace { height: calc(100vh - 140px); min-height: 120px; }', stylesheet)
         self.assertNotIn('.workspace.runtime-mode { height:', stylesheet)
         self.assertIn('@media (max-width: 980px)', stylesheet)
@@ -524,6 +540,23 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertEqual(payload["development_historian_runtime"], "disabled")
         self.assertEqual(payload["production_historian_owner"], "legacy_opc_service")
         self.assertEqual(payload["legacy_historian_process_state"], "unknown")
+
+    def test_runtime_activity_returns_bounded_supervisor_diagnostics(self):
+        runtime = {"worker_state": "running", "opc_state": "connected"}
+        activity = {
+            "subscription": [{"event": "subscriptions_ready"}],
+            "influx": [{"event": "influx_write", "success": True}],
+            "alarm": [{"event": "alarm_activity", "state": "ACTIVE"}],
+            "summary": {"active_alarms": 1},
+        }
+        with patch.object(OpcTagManager.runtime_supervisor, "status", return_value=runtime), \
+             patch.object(OpcTagManager.runtime_supervisor, "activity", return_value=activity):
+            status, body = self.request("GET", "/api/runtime/activity")
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["runtime"], runtime)
+        self.assertEqual(payload["summary"]["active_alarms"], 1)
 
     def test_cutover_preflight_endpoint_is_read_only_and_never_claims_live_ready(self):
         expected = {
