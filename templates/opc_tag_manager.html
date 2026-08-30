@@ -138,7 +138,7 @@
         <div class="alarm-summary-heading"><strong>Current Alarm Mapping</strong><span id="alarm-summary-count"></span></div>
         <div class="alarm-summary-scroll">
             <table>
-                <thead><tr><th>Tag Name / Tag Path</th><th>MP3 File</th><th>Actions</th></tr></thead>
+                <thead><tr><th>Tag Name / Tag Path</th></tr></thead>
                 <tbody id="alarm-summary-body"></tbody>
             </table>
         </div>
@@ -197,6 +197,7 @@
                     <div class="preview-actions">
                         <button type="submit" id="save-alarm" class="refresh-button" disabled>Save Alarm</button>
                         <button type="button" id="delete-alarm" class="danger-button" {{ 'disabled' if not alarm_write_enabled else '' }}>Delete / Remove Alarm</button>
+                        <button type="button" id="test-alarm">Test</button>
                     </div>
                 </form>
                 <p id="alarm-result" class="create-result hidden"></p>

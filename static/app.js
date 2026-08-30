@@ -385,7 +385,12 @@ async function loadAlarmSummary() {
     data.alarms.forEach((alarm) => {
         const row = document.createElement("tr");
         row.dataset.tagid = alarm.tag_id;
+        row.dataset.alarmId = String(alarm.alarm_id);
         row.className = alarm.enable_alarm ? "alarm-enabled" : "alarm-disabled";
+        row.classList.toggle("selected-mapping", Number(selectedAlarm?.alarm_id) === Number(alarm.alarm_id));
+        row.tabIndex = 0;
+        row.setAttribute("role", "button");
+        row.setAttribute("aria-label", `Open alarm mapping for ${alarm.tag_path}`);
         const tag = document.createElement("td");
         const tagName = document.createElement("strong");
         tagName.textContent = String(alarm.tag_path || "").split("/").filter(Boolean).pop() || alarm.tag_path;
@@ -393,29 +398,14 @@ async function loadAlarmSummary() {
         tagPath.className = "mapping-tag-path";
         tagPath.textContent = alarm.tag_path;
         tag.append(tagName, tagPath);
-        const mp3 = document.createElement("td");
-        mp3.textContent = alarm.mp3_file || "—";
-        row.append(tag, mp3);
-        const actions = document.createElement("td");
-        actions.className = "mapping-actions";
-        const edit = document.createElement("button");
-        edit.type = "button";
-        edit.textContent = "Edit";
-        edit.addEventListener("click", () => selectMappedAlarm(alarm));
-        const remove = document.createElement("button");
-        remove.type = "button";
-        remove.className = "danger-button";
-        remove.textContent = "Delete";
-        remove.dataset.alarmId = String(alarm.alarm_id);
-        remove.dataset.tagId = String(alarm.tag_id);
-        remove.dataset.tagPath = alarm.tag_path;
-        remove.addEventListener("click", () => deleteAlarmMapping(alarm));
-        const test = document.createElement("button");
-        test.type = "button";
-        test.textContent = "Test";
-        test.addEventListener("click", () => previewAlarmMp3(alarm.mp3_file));
-        actions.append(edit, remove, test);
-        row.appendChild(actions);
+        row.appendChild(tag);
+        row.addEventListener("click", () => selectMappedAlarm(alarm));
+        row.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                selectMappedAlarm(alarm);
+            }
+        });
         body.appendChild(row);
     });
 }
@@ -438,10 +428,14 @@ function selectMappedAlarm(alarm) {
     };
     document.getElementById("selected-tag-path").value = selectedRuntimeTag.path;
     document.getElementById("selected-tag-node-id").value = selectedRuntimeTag.nodeId;
+    document.querySelectorAll("#alarm-summary-body tr").forEach((row) => {
+        row.classList.toggle("selected-mapping", Number(row.dataset.alarmId) === Number(alarm.alarm_id));
+    });
     const loadedTag = document.querySelector(`.kepware-object[data-canonical-path="${CSS.escape(alarm.tag_path)}"]`);
     if (loadedTag) {
         document.querySelectorAll(".kepware-object").forEach((item) => item.classList.remove("selected-object"));
         loadedTag.classList.add("selected-object");
+        loadedTag.scrollIntoView({ block: "nearest" });
     }
     showAlarmForm(alarm);
     loadOperationalTagContext(knowledgeNodeFromAlarm(alarm));
@@ -701,6 +695,9 @@ async function deleteAlarmMapping(alarm) {
 }
 
 document.getElementById("delete-alarm").addEventListener("click", () => deleteAlarmMapping(selectedAlarm));
+document.getElementById("test-alarm").addEventListener("click", () => {
+    previewAlarmMp3(selectedMp3);
+});
 
 function previewAlarmMp3(filename) {
     if (!filename) return;

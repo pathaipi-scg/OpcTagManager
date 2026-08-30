@@ -249,10 +249,10 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 .alarm-summary th, .alarm-summary td { padding: 6px; border-top: 1px solid var(--border-color); text-align: left; vertical-align: top; }
 .alarm-summary tbody tr { cursor: pointer; }
 .alarm-summary tbody tr:hover { background: var(--hover-bg); }
+.alarm-summary tbody tr.selected-mapping { outline: 2px solid var(--selection-border); outline-offset: -2px; background: var(--selection); color: var(--accent-text); }
+.alarm-summary tbody tr:focus-visible { outline: 2px solid var(--selection-border); outline-offset: -2px; }
 .alarm-summary tbody tr.alarm-enabled { box-shadow: inset 3px 0 rgba(66, 153, 91, 0.72); background: rgba(66, 153, 91, 0.055); }
 .alarm-summary tbody tr.alarm-disabled { box-shadow: inset 3px 0 rgba(150, 104, 104, 0.62); background: rgba(130, 110, 110, 0.055); color: var(--text-secondary); }
-.alarm-summary .mapping-actions { width: 1%; white-space: nowrap; }
-.alarm-summary .mapping-actions button { margin: 0 3px 3px 0; padding: 4px 8px; }
 .alarm-summary .mapping-tag-path { display: block; margin-top: 2px; color: var(--text-secondary); font-size: 0.74rem; overflow-wrap: anywhere; }
 .alarm-mapping-workspace { box-sizing: border-box; height: 28vh; margin-top: 8px; overflow: hidden; }
 .alarm-mapping-workspace { min-height: 160px; margin-top: 0; }
