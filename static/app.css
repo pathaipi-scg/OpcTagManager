@@ -118,6 +118,8 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
 .alarm-help-detail, .alarm-help-history { min-height: 0; overflow: auto; }
 .alarm-help-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .alarm-help-heading h2 { margin: 0 0 10px; }
+.alarm-help-editor-action { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.alarm-help-editor-action .error-message { padding: 6px 9px; }
 .alarm-help-metadata { display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr); gap: 7px 14px; }
 .alarm-help-metadata dt { color: var(--text-secondary); font-weight: bold; }
 .alarm-help-metadata dd { margin: 0; overflow-wrap: anywhere; }

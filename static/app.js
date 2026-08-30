@@ -1009,6 +1009,7 @@ let alarmHelpViewingHistory = false;
 let alarmHelpSelectedHistoryId = null;
 let alarmHelpLatestKey = null;
 let alarmHelpRequestPending = false;
+let alarmHelpDisplayedPath = null;
 
 function alarmHelpEventKey(alarm) {
     if (!alarm) return null;
@@ -1038,9 +1039,14 @@ function renderAlarmHelpDetail(data) {
         status.textContent = "No alarm event available";
         status.className = "tree-counts";
         content.classList.add("hidden");
+        alarmHelpDisplayedPath = null;
+        document.getElementById("alarm-help-open-tag").classList.add("hidden");
         return;
     }
     const alarm = data.alarm;
+    alarmHelpDisplayedPath = alarm.kepware_path || null;
+    document.getElementById("alarm-help-open-tag").classList.toggle("hidden", !alarmHelpDisplayedPath);
+    document.getElementById("alarm-help-navigation-error").classList.add("hidden");
     status.textContent = "";
     content.classList.remove("hidden");
     document.getElementById("alarm-help-name").textContent = alarmHelpText(alarm.tag_name);
@@ -1226,6 +1232,59 @@ document.getElementById("alarm-help-refresh-all").addEventListener("click", refr
 document.getElementById("alarm-help-auto-refresh").addEventListener("change", () => {
     if (!alarmHelpWorkspace.classList.contains("hidden")) startAlarmHelpPolling();
 });
+async function openAlarmHelpTagInEditor() {
+    const error = document.getElementById("alarm-help-navigation-error");
+    const openButton = document.getElementById("alarm-help-open-tag");
+    if (!alarmHelpDisplayedPath) return;
+    error.classList.add("hidden");
+    openButton.disabled = true;
+    try {
+        const parts = alarmHelpDisplayedPath.includes("/")
+            ? alarmHelpDisplayedPath.split("/").filter(Boolean)
+            : alarmHelpDisplayedPath.split(".").filter(Boolean);
+        if (parts.length < 3) throw new Error("missing");
+        if (!kepwareLoaded) {
+            kepwareLoaded = true;
+            await loadKepwareChannels();
+        }
+        const findButton = (container, predicate) =>
+            [...container.querySelectorAll(".kepware-object")].find((button) => predicate(button.kepwareNode));
+        const tree = document.getElementById("kepware-tree");
+        const channel = findButton(tree, (node) => node?.object_type === "Channel" && node.name === parts[0]);
+        if (!channel) throw new Error("missing");
+        await ensureKepwareChildren(channel);
+        const device = findButton(channel.kepwareChildren, (node) =>
+            node?.object_type === "Device" && node.context?.channel === parts[0] && node.name === parts[1]);
+        if (!device) throw new Error("missing");
+        await ensureKepwareChildren(device);
+        let parent = device;
+        const groups = parts.slice(2, -1);
+        for (let index = 0; index < groups.length; index += 1) {
+            const expectedGroups = groups.slice(0, index + 1).join("/");
+            const group = findButton(parent.kepwareChildren, (node) =>
+                node?.object_type === "Tag Group"
+                && node.context?.channel === parts[0]
+                && node.context?.device === parts[1]
+                && (node.context?.group_path || []).join("/") === expectedGroups);
+            if (!group) throw new Error("missing");
+            await ensureKepwareChildren(group);
+            parent = group;
+        }
+        const targetPath = [parts[0], parts[1], ...groups, parts[parts.length - 1]].join("/");
+        const target = [...parent.kepwareChildren.querySelectorAll(".kepware-object")]
+            .find((button) => button.dataset.canonicalPath === targetPath);
+        if (!target) throw new Error("missing");
+        document.querySelector('.view-tab[data-view="runtime"]').click();
+        selectKepwareObject(target, target.kepwareNode);
+        target.scrollIntoView({ block: "nearest" });
+    } catch (_error) {
+        error.textContent = "Tag is no longer available in the current Kepware configuration.";
+        error.classList.remove("hidden");
+    } finally {
+        openButton.disabled = false;
+    }
+}
+document.getElementById("alarm-help-open-tag").addEventListener("click", openAlarmHelpTagInEditor);
 document.querySelectorAll(".alarm-help-copy-endpoint").forEach((button) => {
     button.addEventListener("click", async () => {
         const input = document.getElementById(`alarm-help-endpoint-${button.dataset.endpoint}`);
@@ -1302,6 +1361,7 @@ function createKepwareNode(node, parentDetails, parentChildren) {
     button.type = "button";
     button.className = "kepware-object";
     button.textContent = node.name;
+    button.kepwareNode = node;
     if (node.object_type === "Tag") {
         button.dataset.canonicalPath = [
             node.context.channel,
@@ -1335,12 +1395,22 @@ function createKepwareNode(node, parentDetails, parentChildren) {
     button.kepwareDetails = details;
     button.kepwareChildren = children;
     details.addEventListener("toggle", () => {
-        if (details.open && details.dataset.loaded !== "true" && details.dataset.loading !== "true") {
-            loadKepwareChildren(details, children, node);
-        }
+        if (details.open) ensureKepwareChildren(button);
     });
     item.appendChild(details);
     return item;
+}
+
+async function ensureKepwareChildren(button) {
+    const details = button?.kepwareDetails;
+    if (!details) return;
+    details.open = true;
+    if (details.dataset.loaded === "true") return;
+    if (!details.loadPromise) {
+        details.loadPromise = loadKepwareChildren(details, button.kepwareChildren, button.kepwareNode)
+            .finally(() => { details.loadPromise = null; });
+    }
+    await details.loadPromise;
 }
 
 async function loadKepwareChildren(details, container, node) {
