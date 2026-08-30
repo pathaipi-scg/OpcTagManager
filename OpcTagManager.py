@@ -1087,6 +1087,28 @@ def get_recent_alarm_help(limit: int = Query(default=5, ge=1, le=100)):
         return JSONResponse({"error": "Recent alarm history is unavailable."}, status_code=503)
 
 
+@app.get("/api/alarm-help/activity")
+def get_alarm_help_activity():
+    status = runtime_supervisor.status()
+    if status.get("alarm_activity_state") != "ready":
+        return JSONResponse({"error": "Alarm activity is unavailable."}, status_code=503)
+    activity = runtime_supervisor.activity().get("alarm") or []
+    if not activity:
+        return {
+            "has_activity": False, "event_time": None, "tag_name": None,
+            "kepware_path": None, "state": None,
+        }
+    latest = activity[-1]
+    path = str(latest.get("path") or "")
+    return {
+        "has_activity": True,
+        "event_time": latest.get("time"),
+        "tag_name": path.replace(".", "/").rstrip("/").split("/")[-1] or None,
+        "kepware_path": path or None,
+        "state": latest.get("state"),
+    }
+
+
 @app.get("/api/alarm-help/history/{history_id}")
 def get_alarm_help_history(history_id: int):
     try:

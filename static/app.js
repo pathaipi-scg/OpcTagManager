@@ -1122,6 +1122,33 @@ async function loadAlarmHelpLatest() {
     }
 }
 
+async function loadAlarmHelpActivity() {
+    const time = document.getElementById("alarm-help-activity-time");
+    const name = document.getElementById("alarm-help-activity-name");
+    const state = document.getElementById("alarm-help-activity-state");
+    try {
+        const response = await fetch("/api/alarm-help/activity");
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Alarm activity unavailable");
+        if (!data.has_activity) {
+            time.textContent = "";
+            name.textContent = "Waiting for alarm activity...";
+            state.textContent = "";
+            return;
+        }
+        const parsed = new Date(data.event_time);
+        time.textContent = data.event_time && !Number.isNaN(parsed.getTime())
+            ? parsed.toLocaleTimeString()
+            : alarmHelpText(data.event_time);
+        name.textContent = alarmHelpText(data.tag_name);
+        state.textContent = alarmHelpText(data.state);
+    } catch (_error) {
+        time.textContent = "";
+        name.textContent = "Alarm activity unavailable";
+        state.textContent = "";
+    }
+}
+
 function renderAlarmHelpHistory(alarms) {
     const body = document.getElementById("alarm-help-history-body");
     const unique = new Map((alarms || []).map((alarm) => [String(alarm.history_id), alarm]));
@@ -1177,7 +1204,7 @@ async function loadAlarmHelpHistoryDetail(historyId) {
 async function refreshAlarmHelpAll() {
     if (alarmHelpRequestPending) return;
     alarmHelpRequestPending = true;
-    try { await Promise.all([loadAlarmHelpLatest(), loadAlarmHelpHistory()]); }
+    try { await Promise.all([loadAlarmHelpActivity(), loadAlarmHelpLatest(), loadAlarmHelpHistory()]); }
     finally { alarmHelpRequestPending = false; }
 }
 

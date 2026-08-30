@@ -206,12 +206,15 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertIn('id="alarm-help-workspace"', html)
         self.assertIn('<h2>Alarm Detail</h2>', html)
         self.assertIn('<h2>Recent Alarm History</h2>', html)
+        self.assertIn('<strong>Alarm Activity</strong>', html)
+        self.assertIn('id="alarm-help-activity-row"', html)
         self.assertIn('<summary>API Endpoints</summary>', html)
         self.assertIn('data-endpoint-path="/api/alarm-help/current"', html)
+        self.assertIn('data-endpoint-path="/api/alarm-help/activity"', html)
         self.assertIn('data-endpoint-path="/api/alarm-help/latest"', html)
         self.assertIn('data-endpoint-path="/api/alarm-help/recent?limit=5"', html)
         self.assertIn('data-endpoint-path="/api/alarm-help/history/{history_id}"', html)
-        self.assertEqual(html.count('class="alarm-help-copy-endpoint"'), 4)
+        self.assertEqual(html.count('class="alarm-help-copy-endpoint"'), 5)
         self.assertIn('id="opc-runtime-workspace" class="opc-runtime-workspace hidden"', html)
         self.assertIn('id="subscription-activity-list"', html)
         self.assertIn('id="influx-activity-list"', html)
@@ -322,6 +325,8 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertIn('startAlarmHelpPolling()', javascript)
         self.assertIn('stopAlarmHelpPolling()', javascript)
         self.assertIn('fetch("/api/alarm-help/latest")', javascript)
+        self.assertIn('fetch("/api/alarm-help/activity")', javascript)
+        self.assertIn('Promise.all([loadAlarmHelpActivity(), loadAlarmHelpLatest(), loadAlarmHelpHistory()])', javascript)
         self.assertIn('fetch("/api/alarm-help/recent?limit=5")', javascript)
         self.assertIn('selected-history', javascript)
         self.assertIn('Newer alarm available', html)
@@ -1007,6 +1012,40 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertIn("ORDER BY h.HistoryId DESC", connection.cursor_instance.sql)
         self.assertNotIn("INSERT", connection.cursor_instance.sql.upper())
         self.assertTrue(connection.closed)
+
+    def test_alarm_help_activity_returns_latest_normal_event_and_empty_state(self):
+        events = [
+            {"event": "alarm_activity", "time": "2026-08-30T14:35:00+07:00",
+             "path": "LP2/PACKER/Older", "state": "ACTIVE"},
+            {"event": "alarm_activity", "time": "2026-08-30T14:36:29+07:00",
+             "path": "LP2/PACKER/LOADING_STATION", "state": "NORMAL"},
+        ]
+        with patch.object(OpcTagManager.runtime_supervisor, "status", return_value={"alarm_activity_state": "ready"}), \
+             patch.object(OpcTagManager.runtime_supervisor, "activity", return_value={"alarm": events}):
+            status, body = self.request("GET", "/api/alarm-help/activity")
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload, {
+            "has_activity": True, "event_time": "2026-08-30T14:36:29+07:00",
+            "tag_name": "LOADING_STATION", "kepware_path": "LP2/PACKER/LOADING_STATION",
+            "state": "NORMAL",
+        })
+        self.assertNotIn("password", json.dumps(payload).lower())
+        with patch.object(OpcTagManager.runtime_supervisor, "status", return_value={"alarm_activity_state": "ready"}), \
+             patch.object(OpcTagManager.runtime_supervisor, "activity", return_value={"alarm": []}):
+            status, body = self.request("GET", "/api/alarm-help/activity")
+        self.assertEqual(json.loads(body), {
+            "has_activity": False, "event_time": None, "tag_name": None,
+            "kepware_path": None, "state": None,
+        })
+
+    def test_alarm_help_activity_runtime_unavailable_is_non_mutating(self):
+        with patch.object(OpcTagManager.runtime_supervisor, "status", return_value={"alarm_activity_state": "unknown"}), \
+             patch.object(OpcTagManager.runtime_supervisor, "activity") as activity:
+            status, body = self.request("GET", "/api/alarm-help/activity")
+        self.assertEqual(status, 503)
+        self.assertEqual(json.loads(body), {"error": "Alarm activity is unavailable."})
+        activity.assert_not_called()
 
     def test_alarm_help_history_resolves_current_knowledge_by_exact_event_path(self):
         alarm = {"history_id": 44, "alarm_id": 7, "kepware_path": "LP2.MIX.Fault", "tag_name": "Fault",

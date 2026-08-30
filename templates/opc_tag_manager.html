@@ -481,6 +481,14 @@
     </article>
 </section>
 <section id="alarm-help-workspace" class="alarm-help-workspace hidden" aria-label="Alarm Help">
+    <article class="alarm-help-activity panel" aria-live="polite">
+        <strong>Alarm Activity</strong>
+        <div id="alarm-help-activity-row" class="alarm-help-activity-row">
+            <span id="alarm-help-activity-time"></span>
+            <span id="alarm-help-activity-name">Waiting for alarm activity...</span>
+            <span id="alarm-help-activity-state" class="alarm-help-activity-state"></span>
+        </div>
+    </article>
     <article class="alarm-help-detail panel">
         <div class="alarm-help-heading">
             <h2>Alarm Detail</h2>
@@ -518,6 +526,7 @@
         <div class="alarm-help-endpoints">
             {% for key, path in [
                 ('current', '/api/alarm-help/current'),
+                ('activity', '/api/alarm-help/activity'),
                 ('latest', '/api/alarm-help/latest'),
                 ('recent', '/api/alarm-help/recent?limit=5'),
                 ('history', '/api/alarm-help/history/{history_id}')

@@ -110,7 +110,11 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
 .workspace { display: flex; gap: 0; height: 100%; min-height: 120px; min-width: 0; overflow: hidden; }
 .alarm-top-workspace { height: calc(100vh - 140px); min-height: 440px; }
 .tag-configuration-workspace { height: calc(100vh - 140px); min-height: 120px; }
-.alarm-help-workspace { display: grid; grid-template-rows: minmax(280px, 3fr) minmax(180px, 2fr) auto auto auto; gap: 10px; height: calc(100vh - 140px); min-height: 480px; overflow: auto; }
+.alarm-help-workspace { display: grid; grid-template-rows: auto minmax(280px, 3fr) minmax(180px, 2fr) auto auto auto; gap: 10px; height: calc(100vh - 140px); min-height: 480px; overflow: auto; }
+.alarm-help-activity { display: flex; align-items: center; gap: 18px; padding: 9px 14px; overflow: visible; }
+.alarm-help-activity-row { display: grid; grid-template-columns: minmax(80px, max-content) minmax(180px, 1fr) minmax(80px, max-content); gap: 16px; width: 100%; min-width: 0; }
+.alarm-help-activity-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.alarm-help-activity-state { font-weight: bold; }
 .alarm-help-detail, .alarm-help-history { min-height: 0; overflow: auto; }
 .alarm-help-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .alarm-help-heading h2 { margin: 0 0 10px; }
