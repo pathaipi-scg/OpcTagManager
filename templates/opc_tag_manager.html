@@ -168,6 +168,11 @@
                 <label for="selected-tag-node-id">Node ID</label>
                 <input id="selected-tag-node-id" type="text" readonly value="">
             </div>
+            <div class="field-group alarm-description-field">
+                <label for="knowledge-description">Description / Meaning</label>
+                <textarea id="knowledge-description" rows="3" {{ 'disabled' if not km_tag_write_enabled else '' }}></textarea>
+                <div id="knowledge-attachments-description" class="knowledge-attachment-list hidden"></div>
+            </div>
             <div class="field-group">
                 <label for="alarm-selected-mp3">Selected MP3</label>
                 <div class="inline-control"><select id="alarm-selected-mp3"><option value="">- Sound not selected -</option></select><button type="button" id="preview-alarm-mp3">Preview</button></div>
@@ -309,19 +314,20 @@
                 {% endif %}
                 <form id="tag-knowledge-form">
                     {% for key, label in [
-                        ('description', 'Description / Meaning'), ('possible_cause', 'Possible Cause'),
-                        ('how_to_check', 'How to Check'), ('corrective_action', 'Corrective Action'),
+                        ('how_to_check', 'How to Check / Troubleshooting'), ('corrective_action', 'Corrective Action'),
                         ('safety_warning', 'Safety / Warning'), ('additional_notes', 'Additional Notes')
                     ] %}
-                    <div class="field-group knowledge-section" data-knowledge-section="{{ key }}">
+                    <div class="field-group knowledge-section knowledge-section-{{ key | replace('_', '-') }}" data-knowledge-section="{{ key }}">
                         <label for="knowledge-{{ key | replace('_', '-') }}">{{ label }}</label>
-                        <textarea id="knowledge-{{ key | replace('_', '-') }}" rows="3" {{ 'disabled' if not km_tag_write_enabled else '' }}></textarea>
+                        <textarea id="knowledge-{{ key | replace('_', '-') }}" rows="{{ 6 if key in ['how_to_check', 'corrective_action'] else 4 }}" {{ 'disabled' if not km_tag_write_enabled else '' }}></textarea>
                         <input id="knowledge-image-{{ key | replace('_', '-') }}" class="knowledge-image-input hidden" type="file" accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" multiple {{ 'disabled' if not km_tag_write_enabled else '' }}>
                         <button type="button" class="knowledge-attach-button" data-section="{{ key }}" {{ 'disabled' if not km_tag_write_enabled else '' }}>Attach Image</button>
                         <span class="knowledge-paste-hint">or paste a screenshot with Ctrl+V</span>
                         <div id="knowledge-attachments-{{ key | replace('_', '-') }}" class="knowledge-attachment-list"></div>
                     </div>
                     {% endfor %}
+                    <textarea id="knowledge-possible-cause" class="hidden" aria-hidden="true" tabindex="-1"></textarea>
+                    <div id="knowledge-attachments-possible-cause" class="knowledge-attachment-list hidden"></div>
                     <button type="submit" class="refresh-button" {{ 'disabled' if not km_tag_write_enabled else '' }}>Preview Knowledge</button>
                 </form>
                 <div id="knowledge-preview" class="create-preview hidden">

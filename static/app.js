@@ -747,9 +747,10 @@ let selectedKnowledgeTag = null;
 let pendingKnowledgePayload = null;
 const knowledgeSectionLabels = {
     description: "Description / Meaning", possible_cause: "Possible Cause",
-    how_to_check: "How to Check", corrective_action: "Corrective Action",
+    how_to_check: "How to Check / Troubleshooting", corrective_action: "Corrective Action",
     safety_warning: "Safety / Warning", additional_notes: "Additional Notes",
 };
+const visibleKnowledgeSections = ["how_to_check", "corrective_action", "safety_warning", "additional_notes"];
 let knowledgeAttachments = Object.fromEntries(Object.keys(knowledgeSectionLabels).map((key) => [key, []]));
 let resourceForLinking = null;
 let resourceTargetTags = new Map();
@@ -1612,6 +1613,7 @@ function resetTagKnowledgePanel() {
     knowledgeAttachments = emptyKnowledgeAttachments();
     document.getElementById("tag-knowledge-panel").classList.add("hidden");
     document.getElementById("tag-knowledge-form").reset();
+    document.getElementById("knowledge-description").value = "";
     document.getElementById("knowledge-preview").classList.add("hidden");
     document.getElementById("knowledge-result").classList.add("hidden");
     renderAllKnowledgeAttachments();
@@ -2191,7 +2193,8 @@ document.getElementById("tag-knowledge-form").addEventListener("submit", async (
         document.getElementById("knowledge-preview-file").textContent = data.preview.new_file;
         const previewFields = document.getElementById("knowledge-preview-fields");
         previewFields.replaceChildren();
-        Object.entries(knowledgeSectionLabels).forEach(([section, label]) => {
+        visibleKnowledgeSections.forEach((section) => {
+            const label = knowledgeSectionLabels[section];
             const block = document.createElement("section");
             block.className = "knowledge-preview-section";
             const heading = document.createElement("h5");

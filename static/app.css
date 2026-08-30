@@ -162,6 +162,8 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
 .inline-control select { flex: 1 1 auto; }
 .alarm-condition-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .alarm-audio-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.knowledge-section-how-to-check textarea, .knowledge-section-corrective-action textarea { min-height: 150px; }
+.knowledge-section-safety-warning textarea, .knowledge-section-additional-notes textarea { min-height: 96px; }
 input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible { outline: 2px solid var(--selection-border); outline-offset: 1px; }
 
 .placeholder-message { margin-top: 28px; padding: 12px; border-left: 3px solid var(--accent); background: var(--bg-card); color: var(--text-secondary); }
