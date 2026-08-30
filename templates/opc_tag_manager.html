@@ -13,6 +13,7 @@
     <button type="button" class="view-tab active" data-view="runtime">OPC Tag List</button>
     <button type="button" class="view-tab" data-view="kepware">Tag Configuration</button>
     <button type="button" class="view-tab" data-view="opc-runtime">OPC Runtime</button>
+    <button type="button" class="view-tab" data-view="alarm-help">Alarm Help</button>
 </nav>
 
 <div id="opc-tag-list-workspace" class="alarm-top-workspace">
@@ -478,6 +479,58 @@
         </dl>
         <div id="alarm-activity-list" class="runtime-activity-list" aria-live="polite"></div>
     </article>
+</section>
+<section id="alarm-help-workspace" class="alarm-help-workspace hidden" aria-label="Alarm Help">
+    <article class="alarm-help-detail panel">
+        <div class="alarm-help-heading">
+            <h2>Alarm Detail</h2>
+            <div class="preview-actions">
+                <button type="button" id="alarm-help-refresh-latest">Refresh Latest</button>
+                <button type="button" id="alarm-help-refresh-all">Refresh All</button>
+                <label for="alarm-help-auto-refresh">Auto-refresh</label>
+                <select id="alarm-help-auto-refresh"><option value="0">Off</option><option value="5">5 sec</option><option value="10" selected>10 sec</option><option value="30">30 sec</option></select>
+            </div>
+        </div>
+        <p id="alarm-help-status" class="tree-counts">No alarm event available</p>
+        <div id="alarm-help-content" class="hidden">
+            <dl class="alarm-help-metadata">
+                <dt>Alarm Name</dt><dd id="alarm-help-name"></dd>
+                <dt>Kepware Path</dt><dd id="alarm-help-path"></dd>
+                <dt>Activated At</dt><dd id="alarm-help-activated"></dd>
+                <dt>Priority</dt><dd id="alarm-help-priority"></dd>
+                <dt>State</dt><dd id="alarm-help-state"></dd>
+                <dt>Value</dt><dd id="alarm-help-value"></dd>
+            </dl>
+            <div id="alarm-help-knowledge"></div>
+        </div>
+    </article>
+    <article class="alarm-help-history panel">
+        <div class="alarm-help-heading"><h2>Recent Alarm History</h2><button type="button" id="alarm-help-refresh-history">Refresh History</button></div>
+        <p id="alarm-help-history-status" class="tree-counts">No alarm history</p>
+        <div class="alarm-help-history-scroll"><table><thead><tr><th>Activated At</th><th>Tag Name</th><th>Kepware Path</th><th>Priority</th><th>State</th></tr></thead><tbody id="alarm-help-history-body"></tbody></table></div>
+    </article>
+    <div class="alarm-help-navigation">
+        <p id="alarm-help-newer" class="warning-message hidden">Newer alarm available</p>
+        <button type="button" id="alarm-help-back-latest" class="hidden">Back to Latest Alarm</button>
+    </div>
+    <details class="alarm-help-commissioning panel">
+        <summary>API Endpoints</summary>
+        <div class="alarm-help-endpoints">
+            {% for key, path in [
+                ('current', '/api/alarm-help/current'),
+                ('latest', '/api/alarm-help/latest'),
+                ('recent', '/api/alarm-help/recent?limit=5'),
+                ('history', '/api/alarm-help/history/{history_id}')
+            ] %}
+            <div class="alarm-help-endpoint-row">
+                <input id="alarm-help-endpoint-{{ key }}" type="text" readonly data-endpoint-path="{{ path }}" aria-label="{{ key | title }} Alarm Help API URL">
+                <button type="button" class="alarm-help-copy-endpoint" data-endpoint="{{ key }}">Copy</button>
+            </div>
+            {% endfor %}
+        </div>
+        <p id="alarm-help-copy-status" class="tree-counts" aria-live="polite"></p>
+    </details>
+    <details class="alarm-help-diagnostics panel"><summary>Raw JSON</summary><pre id="alarm-help-json"></pre></details>
 </section>
 <div id="runtime-secondary-host" class="runtime-secondary-host"></div>
 {% endblock %}

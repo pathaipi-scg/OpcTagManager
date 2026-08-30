@@ -725,6 +725,7 @@ const operatorHealth = document.querySelector(".operator-health");
 const diagnosticsPanel = document.querySelector(".diagnostics-panel");
 const runtimeKnowledgeHost = document.getElementById("runtime-knowledge-host");
 const opcRuntimeWorkspace = document.getElementById("opc-runtime-workspace");
+const alarmHelpWorkspace = document.getElementById("alarm-help-workspace");
 let opcRuntimePollTimer = null;
 let opcRuntimeRequestPending = false;
 runtimeKnowledgeHost.append(
@@ -761,6 +762,7 @@ viewTabs.forEach((tab) => {
     tab.addEventListener("click", () => {
         const isKepware = tab.dataset.view === "kepware";
         const isOpcRuntime = tab.dataset.view === "opc-runtime";
+        const isAlarmHelp = tab.dataset.view === "alarm-help";
         viewTabs.forEach((item) => item.classList.toggle("active", item === tab));
         document.getElementById("runtime-tree-view").classList.toggle("hidden", isKepware);
         document.getElementById("kepware-tree-view").classList.toggle("hidden", !isKepware);
@@ -768,20 +770,21 @@ viewTabs.forEach((tab) => {
         document.getElementById("kepware-details-view").classList.toggle("hidden", !isKepware);
         document.getElementById("full-reconcile").classList.toggle("hidden", isKepware);
         workspace.classList.toggle("runtime-mode", !isKepware);
-        alarmTopWorkspace.classList.toggle("hidden", isKepware || isOpcRuntime);
+        alarmTopWorkspace.classList.toggle("hidden", isKepware || isOpcRuntime || isAlarmHelp);
         tagConfigurationWorkspace.classList.toggle("hidden", !isKepware);
         opcRuntimeWorkspace.classList.toggle("hidden", !isOpcRuntime);
-        if (!isOpcRuntime) {
+        alarmHelpWorkspace.classList.toggle("hidden", !isAlarmHelp);
+        if (!isOpcRuntime && !isAlarmHelp) {
             (isKepware ? tagConfigurationWorkspace : alarmTopWorkspace).appendChild(workspace);
         }
         mainPanelSplitter.classList.toggle("hidden", isKepware);
-        alarmCenterSplitter.classList.toggle("hidden", isOpcRuntime);
-        document.getElementById("alarm-summary").classList.toggle("hidden", isKepware || isOpcRuntime);
-        alarmHorizontalSplitter.classList.toggle("hidden", isKepware || isOpcRuntime);
-        runtimeSecondaryHost.classList.toggle("hidden", isKepware || isOpcRuntime);
+        alarmCenterSplitter.classList.toggle("hidden", isOpcRuntime || isAlarmHelp);
+        document.getElementById("alarm-summary").classList.toggle("hidden", isKepware || isOpcRuntime || isAlarmHelp);
+        alarmHorizontalSplitter.classList.toggle("hidden", isKepware || isOpcRuntime || isAlarmHelp);
+        runtimeSecondaryHost.classList.toggle("hidden", isKepware || isOpcRuntime || isAlarmHelp);
         (isKepware ? configurationKepwareTreeHost : runtimeKepwareTreeHost).appendChild(kepwareTree);
 
-        if (!kepwareLoaded) {
+        if (!kepwareLoaded && !isAlarmHelp) {
             kepwareLoaded = true;
             loadKepwareChannels();
         }
@@ -789,7 +792,7 @@ viewTabs.forEach((tab) => {
             applyAlarmTopHeight();
             applyMainPanelRatio();
         }
-        if (!isKepware && !isOpcRuntime) {
+        if (!isKepware && !isOpcRuntime && !isAlarmHelp) {
             applyAlarmPaneWidths();
             applyAlarmTopHeight();
             runtimeSecondaryHost.append(operatorHealth, diagnosticsPanel);
@@ -802,6 +805,8 @@ viewTabs.forEach((tab) => {
         } else {
             stopOpcRuntimePolling();
         }
+        if (isAlarmHelp) startAlarmHelpPolling();
+        else stopAlarmHelpPolling();
     });
 });
 
@@ -998,6 +1003,224 @@ function stopOpcRuntimePolling() {
         opcRuntimePollTimer = null;
     }
 }
+
+let alarmHelpTimer = null;
+let alarmHelpViewingHistory = false;
+let alarmHelpSelectedHistoryId = null;
+let alarmHelpLatestKey = null;
+let alarmHelpRequestPending = false;
+
+function alarmHelpEventKey(alarm) {
+    if (!alarm) return null;
+    return alarm.history_id != null
+        ? `history:${alarm.history_id}`
+        : `live:${alarm.alarm_id}:${alarm.activated_at || ""}`;
+}
+
+function alarmHelpText(value) {
+    return value === null || value === undefined || value === "" ? "—" : String(value);
+}
+
+function renderAlarmHelpEndpointUrls(historyId = alarmHelpSelectedHistoryId) {
+    document.querySelectorAll("[data-endpoint-path]").forEach((input) => {
+        let path = input.dataset.endpointPath;
+        if (input.id === "alarm-help-endpoint-history" && historyId != null) {
+            path = path.replace("{history_id}", String(historyId));
+        }
+        input.value = `${window.location.origin}${path}`;
+    });
+}
+
+function renderAlarmHelpDetail(data) {
+    const status = document.getElementById("alarm-help-status");
+    const content = document.getElementById("alarm-help-content");
+    if (!data?.has_alarm || !data.alarm) {
+        status.textContent = "No alarm event available";
+        status.className = "tree-counts";
+        content.classList.add("hidden");
+        return;
+    }
+    const alarm = data.alarm;
+    status.textContent = "";
+    content.classList.remove("hidden");
+    document.getElementById("alarm-help-name").textContent = alarmHelpText(alarm.tag_name);
+    document.getElementById("alarm-help-path").textContent = alarmHelpText(alarm.kepware_path);
+    document.getElementById("alarm-help-activated").textContent = alarmHelpText(alarm.activated_at);
+    document.getElementById("alarm-help-priority").textContent = alarmHelpText(alarm.priority);
+    document.getElementById("alarm-help-state").textContent = alarmHelpText(alarm.state);
+    document.getElementById("alarm-help-value").textContent = alarmHelpText(alarm.value);
+    const host = document.getElementById("alarm-help-knowledge");
+    host.replaceChildren();
+    if (!data.knowledge?.has_knowledge) {
+        const empty = document.createElement("p");
+        empty.className = "tree-counts";
+        empty.textContent = "No Tag Knowledge";
+        host.appendChild(empty);
+    } else {
+        const labels = {
+            description: "Description / Meaning",
+            how_to_check: "How to Check / Troubleshooting",
+            corrective_action: "Corrective Action",
+            safety_warning: "Safety / Warning",
+            additional_notes: "Additional Notes",
+        };
+        Object.entries(labels).forEach(([key, label]) => {
+            const section = data.knowledge.sections?.[key];
+            if (!section?.text && !(section?.images || []).length) return;
+            const block = document.createElement("section");
+            block.className = "alarm-help-section";
+            const heading = document.createElement("h3");
+            heading.textContent = label;
+            block.appendChild(heading);
+            if (section.text) {
+                const text = document.createElement("p");
+                text.textContent = section.text;
+                block.appendChild(text);
+            }
+            const images = document.createElement("div");
+            images.className = "alarm-help-images";
+            (section.images || []).forEach((attachment) => {
+                const figure = document.createElement("figure");
+                const image = document.createElement("img");
+                image.src = attachment.url;
+                image.alt = attachment.caption || label;
+                figure.appendChild(image);
+                if (attachment.caption) {
+                    const caption = document.createElement("figcaption");
+                    caption.textContent = attachment.caption;
+                    figure.appendChild(caption);
+                }
+                images.appendChild(figure);
+            });
+            block.appendChild(images);
+            host.appendChild(block);
+        });
+    }
+    document.getElementById("alarm-help-json").textContent = JSON.stringify(data, null, 2);
+}
+
+async function loadAlarmHelpLatest() {
+    try {
+        const response = await fetch("/api/alarm-help/latest");
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Latest alarm unavailable");
+        const nextKey = alarmHelpEventKey(data.alarm);
+        if (alarmHelpViewingHistory) {
+            if (nextKey && nextKey !== alarmHelpLatestKey) {
+                document.getElementById("alarm-help-newer").classList.remove("hidden");
+            }
+        } else {
+            renderAlarmHelpDetail(data);
+        }
+        alarmHelpLatestKey = nextKey;
+    } catch (error) {
+        if (!alarmHelpViewingHistory) {
+            const status = document.getElementById("alarm-help-status");
+            status.textContent = error.message || "Latest alarm unavailable";
+            status.className = "error-message";
+        }
+    }
+}
+
+function renderAlarmHelpHistory(alarms) {
+    const body = document.getElementById("alarm-help-history-body");
+    const unique = new Map((alarms || []).map((alarm) => [String(alarm.history_id), alarm]));
+    const rows = [...unique.values()].map((alarm) => {
+        const row = document.createElement("tr");
+        row.dataset.historyId = String(alarm.history_id);
+        row.classList.toggle("selected-history", Number(alarmHelpSelectedHistoryId) === Number(alarm.history_id));
+        [alarm.activated_at, alarm.tag_name, alarm.kepware_path, alarm.priority, alarm.state].forEach((value) => {
+            const cell = document.createElement("td");
+            cell.textContent = alarmHelpText(value);
+            row.appendChild(cell);
+        });
+        row.addEventListener("click", () => loadAlarmHelpHistoryDetail(alarm.history_id));
+        return row;
+    });
+    body.replaceChildren(...rows);
+    document.getElementById("alarm-help-history-status").textContent = rows.length ? "" : "No alarm history";
+}
+
+async function loadAlarmHelpHistory() {
+    try {
+        const response = await fetch("/api/alarm-help/recent?limit=5");
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Alarm history unavailable");
+        renderAlarmHelpHistory(data.alarms);
+    } catch (error) {
+        const status = document.getElementById("alarm-help-history-status");
+        status.textContent = error.message || "Alarm history unavailable";
+        status.className = "error-message";
+    }
+}
+
+async function loadAlarmHelpHistoryDetail(historyId) {
+    try {
+        const response = await fetch(`/api/alarm-help/history/${encodeURIComponent(historyId)}`);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Alarm history unavailable");
+        alarmHelpViewingHistory = true;
+        alarmHelpSelectedHistoryId = Number(historyId);
+        renderAlarmHelpEndpointUrls(alarmHelpSelectedHistoryId);
+        document.getElementById("alarm-help-back-latest").classList.remove("hidden");
+        document.querySelectorAll("#alarm-help-history-body tr").forEach((row) => {
+            row.classList.toggle("selected-history", Number(row.dataset.historyId) === Number(historyId));
+        });
+        renderAlarmHelpDetail(data);
+    } catch (error) {
+        const status = document.getElementById("alarm-help-status");
+        status.textContent = error.message || "Alarm history unavailable";
+        status.className = "error-message";
+    }
+}
+
+async function refreshAlarmHelpAll() {
+    if (alarmHelpRequestPending) return;
+    alarmHelpRequestPending = true;
+    try { await Promise.all([loadAlarmHelpLatest(), loadAlarmHelpHistory()]); }
+    finally { alarmHelpRequestPending = false; }
+}
+
+function stopAlarmHelpPolling() {
+    if (alarmHelpTimer !== null) window.clearInterval(alarmHelpTimer);
+    alarmHelpTimer = null;
+}
+
+function startAlarmHelpPolling() {
+    stopAlarmHelpPolling();
+    refreshAlarmHelpAll();
+    const seconds = Number(document.getElementById("alarm-help-auto-refresh").value);
+    if (seconds > 0) alarmHelpTimer = window.setInterval(refreshAlarmHelpAll, seconds * 1000);
+}
+
+document.getElementById("alarm-help-refresh-latest").addEventListener("click", loadAlarmHelpLatest);
+document.getElementById("alarm-help-refresh-history").addEventListener("click", loadAlarmHelpHistory);
+document.getElementById("alarm-help-refresh-all").addEventListener("click", refreshAlarmHelpAll);
+document.getElementById("alarm-help-auto-refresh").addEventListener("change", () => {
+    if (!alarmHelpWorkspace.classList.contains("hidden")) startAlarmHelpPolling();
+});
+document.querySelectorAll(".alarm-help-copy-endpoint").forEach((button) => {
+    button.addEventListener("click", async () => {
+        const input = document.getElementById(`alarm-help-endpoint-${button.dataset.endpoint}`);
+        const status = document.getElementById("alarm-help-copy-status");
+        try {
+            await navigator.clipboard.writeText(input.value);
+            status.textContent = "API URL copied";
+        } catch (_error) {
+            status.textContent = "Unable to copy API URL";
+        }
+    });
+});
+document.getElementById("alarm-help-back-latest").addEventListener("click", async () => {
+    alarmHelpViewingHistory = false;
+    alarmHelpSelectedHistoryId = null;
+    renderAlarmHelpEndpointUrls();
+    document.getElementById("alarm-help-back-latest").classList.add("hidden");
+    document.getElementById("alarm-help-newer").classList.add("hidden");
+    document.querySelectorAll("#alarm-help-history-body tr").forEach((row) => row.classList.remove("selected-history"));
+    await loadAlarmHelpLatest();
+});
+renderAlarmHelpEndpointUrls();
 
 // Alarm authoring is the normal operator workflow on every full page load/refresh.
 document.querySelector('.view-tab[data-view="runtime"]').click();

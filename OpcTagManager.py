@@ -899,6 +899,75 @@ def _current_alarm_selection_key(alarm: dict):
     return priority, str(alarm.get("active_order_time") or ""), alarm_id
 
 
+def _alarm_help_value(row, index: int, name: str):
+    return getattr(row, name) if hasattr(row, name) else row[index]
+
+
+def _alarm_help_time(value):
+    return value.isoformat() if hasattr(value, "isoformat") else (str(value) if value is not None else None)
+
+
+_retained_alarm_help_alarm: dict | None = None
+
+
+def _active_alarm_by_id() -> dict[int, dict]:
+    return {
+        int(alarm["alarm_id"]): alarm
+        for alarm in runtime_supervisor.active_alarm_activity()
+        if alarm.get("state") == "ACTIVE" and alarm.get("alarm_id") is not None
+    }
+
+
+def _alarm_history_rows(limit: int = 5, history_id: int | None = None) -> list[dict]:
+    conn = get_conn()
+    try:
+        cursor = conn.cursor()
+        where = "WHERE h.HistoryId = ?" if history_id is not None else ""
+        top = "" if history_id is not None else "TOP (?) "
+        parameters = (history_id,) if history_id is not None else (limit,)
+        cursor.execute(
+            f"""SELECT {top}h.HistoryId, h.AlarmId, h.TagId, h.TagPath,
+                       h.CurrentValue, h.CreatedTime, a.Priority
+                FROM Alarm_History h
+                LEFT JOIN Alarm_Lists a ON a.AlarmId = h.AlarmId
+                {where}
+                ORDER BY h.HistoryId DESC""",
+            *parameters,
+        )
+        active = _active_alarm_by_id()
+        result = []
+        for row in cursor.fetchall():
+            alarm_id = int(_alarm_help_value(row, 1, "AlarmId"))
+            path = str(_alarm_help_value(row, 3, "TagPath"))
+            result.append({
+                "history_id": int(_alarm_help_value(row, 0, "HistoryId")),
+                "alarm_id": alarm_id,
+                "kepware_path": ".".join(path.replace(".", "/").split("/")),
+                "tag_name": path.replace(".", "/").rstrip("/").split("/")[-1],
+                "priority": _alarm_help_value(row, 6, "Priority") or 0,
+                "state": "ACTIVE" if alarm_id in active else "CLEARED",
+                "value": _alarm_help_value(row, 4, "CurrentValue"),
+                "activated_at": _alarm_help_time(_alarm_help_value(row, 5, "CreatedTime")),
+            })
+        return result
+    finally:
+        conn.close()
+
+
+def _alarm_help_with_knowledge(alarm: dict) -> dict:
+    try:
+        identity, _node = _validated_knowledge_identity_from_path(alarm["kepware_path"])
+        knowledge = _grafana_knowledge_response(identity, tag_knowledge_store.load(identity))
+        knowledge.pop("kepware_path", None)
+        knowledge.pop("tag_name", None)
+    except (ValueError, KepwareConfigError):
+        knowledge = None
+    except (TagKnowledgeError, KeyError, TypeError) as exc:
+        logger.warning("Unable to read Tag Knowledge for alarm history %s: %s", alarm.get("history_id"), exc)
+        raise
+    return {"has_alarm": True, "alarm": alarm, "knowledge": knowledge}
+
+
 def _knowledge_error(exc: Exception, write: bool = False):
     status_code = 403 if write and not KM_TAG_WRITE_ENABLED else 400
     return JSONResponse({"success": False, "error": str(exc)}, status_code=status_code)
@@ -1007,6 +1076,68 @@ def get_current_alarm_help():
         },
         "knowledge": knowledge,
     }
+
+
+@app.get("/api/alarm-help/recent")
+def get_recent_alarm_help(limit: int = Query(default=5, ge=1, le=100)):
+    try:
+        return {"alarms": _alarm_history_rows(limit=limit)}
+    except Exception:
+        logger.exception("Recent Alarm_History read failed")
+        return JSONResponse({"error": "Recent alarm history is unavailable."}, status_code=503)
+
+
+@app.get("/api/alarm-help/history/{history_id}")
+def get_alarm_help_history(history_id: int):
+    try:
+        rows = _alarm_history_rows(history_id=history_id)
+        if not rows:
+            return JSONResponse({"error": "Alarm history event was not found."}, status_code=404)
+        return _alarm_help_with_knowledge(rows[0])
+    except (TagKnowledgeError, KeyError, TypeError):
+        return JSONResponse({"error": "The active Tag Knowledge record is invalid."}, status_code=500)
+    except Exception:
+        logger.exception("Alarm_History detail read failed for HistoryId=%s", history_id)
+        return JSONResponse({"error": "Alarm history is unavailable."}, status_code=503)
+
+
+@app.get("/api/alarm-help/latest")
+def get_latest_alarm_help():
+    global _retained_alarm_help_alarm
+    try:
+        active = [
+            alarm for alarm in runtime_supervisor.active_alarm_activity()
+            if alarm.get("state") == "ACTIVE"
+        ]
+        if active:
+            selected = max(active, key=_current_alarm_selection_key)
+            path = str(selected.get("path") or "")
+            alarm = {
+                "history_id": None,
+                "alarm_id": selected.get("alarm_id"),
+                "kepware_path": ".".join(path.split("/")),
+                "tag_name": path.replace(".", "/").rstrip("/").split("/")[-1],
+                "priority": selected.get("priority") or 0,
+                "state": "ACTIVE",
+                "value": selected.get("value"),
+                "activated_at": selected.get("activated_at"),
+            }
+            _retained_alarm_help_alarm = dict(alarm)
+            return _alarm_help_with_knowledge(alarm)
+        if _retained_alarm_help_alarm is not None:
+            retained = {**_retained_alarm_help_alarm, "state": "CLEARED"}
+            _retained_alarm_help_alarm = retained
+            return _alarm_help_with_knowledge(retained)
+        rows = _alarm_history_rows(limit=1)
+        if not rows:
+            return {"has_alarm": False, "alarm": None, "knowledge": None}
+        _retained_alarm_help_alarm = dict(rows[0])
+        return _alarm_help_with_knowledge(rows[0])
+    except (TagKnowledgeError, KeyError, TypeError):
+        return JSONResponse({"error": "The active Tag Knowledge record is invalid."}, status_code=500)
+    except Exception:
+        logger.exception("Latest alarm help read failed")
+        return JSONResponse({"error": "Latest alarm event is unavailable."}, status_code=503)
 
 
 @app.post("/api/tag-knowledge/preview")

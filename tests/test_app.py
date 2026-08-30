@@ -202,6 +202,16 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertIn('<select id="new-tag-access"', html)
         self.assertIn('<option value="1">Read/Write</option>', html)
         self.assertIn('class="view-tab" data-view="opc-runtime">OPC Runtime</button>', html)
+        self.assertIn('class="view-tab" data-view="alarm-help">Alarm Help</button>', html)
+        self.assertIn('id="alarm-help-workspace"', html)
+        self.assertIn('<h2>Alarm Detail</h2>', html)
+        self.assertIn('<h2>Recent Alarm History</h2>', html)
+        self.assertIn('<summary>API Endpoints</summary>', html)
+        self.assertIn('data-endpoint-path="/api/alarm-help/current"', html)
+        self.assertIn('data-endpoint-path="/api/alarm-help/latest"', html)
+        self.assertIn('data-endpoint-path="/api/alarm-help/recent?limit=5"', html)
+        self.assertIn('data-endpoint-path="/api/alarm-help/history/{history_id}"', html)
+        self.assertEqual(html.count('class="alarm-help-copy-endpoint"'), 4)
         self.assertIn('id="opc-runtime-workspace" class="opc-runtime-workspace hidden"', html)
         self.assertIn('id="subscription-activity-list"', html)
         self.assertIn('id="influx-activity-list"', html)
@@ -305,10 +315,21 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertNotIn('alarmTopWorkspace.style.height = `${topHeight}px`', javascript)
         self.assertNotIn('workspace.style.height = `${topHeight}px`', javascript)
         self.assertIn('(isKepware ? tagConfigurationWorkspace : alarmTopWorkspace).appendChild(workspace)', javascript)
-        self.assertIn('alarmTopWorkspace.classList.toggle("hidden", isKepware || isOpcRuntime)', javascript)
+        self.assertIn('alarmTopWorkspace.classList.toggle("hidden", isKepware || isOpcRuntime || isAlarmHelp)', javascript)
         self.assertIn('opcRuntimeWorkspace.classList.toggle("hidden", !isOpcRuntime)', javascript)
         self.assertIn('startOpcRuntimePolling()', javascript)
         self.assertIn('stopOpcRuntimePolling()', javascript)
+        self.assertIn('startAlarmHelpPolling()', javascript)
+        self.assertIn('stopAlarmHelpPolling()', javascript)
+        self.assertIn('fetch("/api/alarm-help/latest")', javascript)
+        self.assertIn('fetch("/api/alarm-help/recent?limit=5")', javascript)
+        self.assertIn('selected-history', javascript)
+        self.assertIn('Newer alarm available', html)
+        self.assertIn('`${window.location.origin}${path}`', javascript)
+        self.assertIn('path.replace("{history_id}", String(historyId))', javascript)
+        self.assertIn('navigator.clipboard.writeText(input.value)', javascript)
+        self.assertIn('renderAlarmHelpEndpointUrls(alarmHelpSelectedHistoryId)', javascript)
+        self.assertIn('renderAlarmHelpEndpointUrls();', javascript)
         self.assertIn('fetchWithTimeout("/api/runtime/activity")', javascript)
         self.assertIn('tagConfigurationWorkspace.classList.toggle("hidden", !isKepware)', javascript)
         self.assertIn('Math.max(alarmMinimumHeights.top', javascript)
@@ -961,6 +982,66 @@ class OpcTagManagerAppTests(unittest.TestCase):
             status, body = self.request("GET", "/api/alarm-help/current")
         self.assertEqual(status, 500)
         self.assertEqual(json.loads(body)["error"], "The active Tag Knowledge record is invalid.")
+
+    def test_alarm_help_recent_is_read_only_newest_first_and_keeps_separate_tags(self):
+        rows = [
+            (12, 2, 102, "LP2/MIX/Alarm_B", 2.0, "2026-08-30T10:02:00", 3),
+            (11, 1, 101, "LP2/MIX/Alarm_A", 1.0, "2026-08-30T10:02:00", 2),
+        ]
+        class Cursor:
+            def execute(self, sql, *parameters):
+                self.sql, self.parameters = sql, parameters
+            def fetchall(self): return rows
+        class Connection:
+            def __init__(self): self.cursor_instance = Cursor(); self.closed = False
+            def cursor(self): return self.cursor_instance
+            def close(self): self.closed = True
+        connection = Connection()
+        with patch.object(OpcTagManager, "get_conn", return_value=connection), \
+             patch.object(OpcTagManager.runtime_supervisor, "active_alarm_activity", return_value=[]):
+            status, body = self.request("GET", "/api/alarm-help/recent?limit=5")
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual([item["history_id"] for item in payload["alarms"]], [12, 11])
+        self.assertEqual([item["tag_name"] for item in payload["alarms"]], ["Alarm_B", "Alarm_A"])
+        self.assertIn("ORDER BY h.HistoryId DESC", connection.cursor_instance.sql)
+        self.assertNotIn("INSERT", connection.cursor_instance.sql.upper())
+        self.assertTrue(connection.closed)
+
+    def test_alarm_help_history_resolves_current_knowledge_by_exact_event_path(self):
+        alarm = {"history_id": 44, "alarm_id": 7, "kepware_path": "LP2.MIX.Fault", "tag_name": "Fault",
+                 "priority": 2, "state": "CLEARED", "value": 1, "activated_at": "2026-08-30T10:00:00"}
+        identity = TagIdentity("LP2", "MIX", [], "Fault", "LP2.MIX.Fault", "1", 5, 100, 1)
+        sections = ("description", "possible_cause", "how_to_check", "corrective_action", "safety_warning", "additional_notes")
+        knowledge = {"exists": True, "version": 2, "updated_at": "now",
+                     "fields": {key: ("Check sensor" if key == "how_to_check" else "") for key in sections},
+                     "attachments": {key: [] for key in sections}}
+        with patch.object(OpcTagManager, "_alarm_history_rows", return_value=[alarm]), \
+             patch.object(OpcTagManager, "_validated_knowledge_identity_from_path", return_value=(identity, {})) as resolve, \
+             patch.object(OpcTagManager.tag_knowledge_store, "load", return_value=knowledge):
+            status, body = self.request("GET", "/api/alarm-help/history/44")
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["alarm"]["history_id"], 44)
+        self.assertEqual(payload["knowledge"]["sections"]["how_to_check"]["text"], "Check sensor")
+        resolve.assert_called_once_with("LP2.MIX.Fault")
+        self.assertNotIn("km_directory", json.dumps(payload))
+
+    def test_alarm_help_latest_retains_cleared_history_and_empty_contract(self):
+        retained = {"history_id": 8, "alarm_id": 3, "kepware_path": "LP2.MIX.Done", "tag_name": "Done",
+                    "priority": 1, "state": "CLEARED", "value": 0, "activated_at": "2026-08-30T09:00:00"}
+        with patch.object(OpcTagManager.runtime_supervisor, "active_alarm_activity", return_value=[]), \
+             patch.object(OpcTagManager, "_alarm_history_rows", return_value=[retained]), \
+             patch.object(OpcTagManager, "_retained_alarm_help_alarm", None), \
+             patch.object(OpcTagManager, "_alarm_help_with_knowledge", side_effect=lambda alarm: {"has_alarm": True, "alarm": alarm, "knowledge": None}):
+            status, body = self.request("GET", "/api/alarm-help/latest")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["alarm"]["state"], "CLEARED")
+        with patch.object(OpcTagManager.runtime_supervisor, "active_alarm_activity", return_value=[]), \
+             patch.object(OpcTagManager, "_alarm_history_rows", return_value=[]), \
+             patch.object(OpcTagManager, "_retained_alarm_help_alarm", None):
+            status, body = self.request("GET", "/api/alarm-help/latest")
+        self.assertEqual(json.loads(body), {"has_alarm": False, "alarm": None, "knowledge": None})
 
     @patch.object(OpcTagManager.shared_resource_store, "link")
     @patch.object(OpcTagManager, "KM_RESOURCE_WRITE_ENABLED", False)
