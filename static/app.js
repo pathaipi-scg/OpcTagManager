@@ -909,11 +909,23 @@ function replaceActivityList(id, entries, formatter) {
         const row = document.createElement("div");
         row.className = "runtime-activity-entry";
         const rendered = formatter(entry);
-        rendered.forEach((line, index) => {
+        const lines = Array.isArray(rendered) ? rendered : rendered.lines;
+        lines.forEach((line, index) => {
             const element = document.createElement(index === 0 ? "strong" : "span");
             element.textContent = line;
             row.appendChild(element);
         });
+        if (!Array.isArray(rendered) && rendered.kepwarePath) {
+            const open = document.createElement("button");
+            open.type = "button";
+            open.className = "runtime-open-tag";
+            open.textContent = "Open Tag";
+            open.addEventListener("click", () => openTagByKepwarePath(
+                rendered.kepwarePath,
+                document.getElementById("opc-runtime-navigation-error"),
+            ));
+            row.appendChild(open);
+        }
         fragment.appendChild(row);
     });
     if (!fragment.childNodes.length) {
@@ -950,13 +962,16 @@ function renderOpcRuntimeActivity(data) {
         ].filter(Boolean).join("  ") || "Historian runtime event",
     ]);
 
-    replaceActivityList("influx-activity-list", data.influx, (entry) => [
-        `${activityTime(entry.time)}  ${entry.result || (entry.success ? "WRITE OK" : "WRITE FAILED")}`,
-        `Database: ${entry.database || "Unknown"}`,
-        `Path: ${entry.path || "Unknown"}`,
-        `Value: ${activityValue(entry.value)}`,
-        ...(entry.error ? [`Error: ${entry.error}`] : []),
-    ]);
+    replaceActivityList("influx-activity-list", data.influx, (entry) => ({
+        lines: [
+            `${activityTime(entry.time)}  ${entry.result || (entry.success ? "WRITE OK" : "WRITE FAILED")}`,
+            `Database: ${entry.database || "Unknown"}`,
+            `Path: ${entry.path || "Unknown"}`,
+            `Value: ${activityValue(entry.value)}`,
+            ...(entry.error ? [`Error: ${entry.error}`] : []),
+        ],
+        kepwarePath: entry.path || null,
+    }));
 
     const summary = data.summary || {};
     document.getElementById("activity-alarm-configured").textContent = summary.configured_alarm_tags ?? 0;
@@ -965,14 +980,17 @@ function renderOpcRuntimeActivity(data) {
     document.getElementById("activity-alarm-last-event").textContent = activityTime(summary.last_alarm_event);
     document.getElementById("activity-alarm-last-path").textContent = summary.last_alarm_path || "None";
     document.getElementById("activity-alarm-state").textContent = summary.alarm_activity_state || "Unknown";
-    replaceActivityList("alarm-activity-list", data.alarm, (entry) => [
-        `${activityTime(entry.time)}  ${entry.state || "NORMAL"}`,
-        `Path: ${entry.path || "Unknown"}`,
-        `Value: ${activityValue(entry.value)}  Mode: ${entry.alarm_mode || "Unknown"}`,
-        `High: ${activityValue(entry.threshold_high)}  Low: ${activityValue(entry.threshold_low)}`,
-        `Priority: ${entry.priority ?? ""}  MP3: ${entry.mp3_file || ""}`,
-        `EnableAlarm: ${entry.enable_alarm ? "Yes" : "No"}`,
-    ]);
+    replaceActivityList("alarm-activity-list", data.alarm, (entry) => ({
+        lines: [
+            `${activityTime(entry.time)}  ${entry.state || "NORMAL"}`,
+            `Path: ${entry.path || "Unknown"}`,
+            `Value: ${activityValue(entry.value)}  Mode: ${entry.alarm_mode || "Unknown"}`,
+            `High: ${activityValue(entry.threshold_high)}  Low: ${activityValue(entry.threshold_low)}`,
+            `Priority: ${entry.priority ?? ""}  MP3: ${entry.mp3_file || ""}`,
+            `EnableAlarm: ${entry.enable_alarm ? "Yes" : "No"}`,
+        ],
+        kepwarePath: entry.path || null,
+    }));
 }
 
 async function loadOpcRuntimeActivity() {
@@ -1010,6 +1028,7 @@ let alarmHelpSelectedHistoryId = null;
 let alarmHelpLatestKey = null;
 let alarmHelpRequestPending = false;
 let alarmHelpDisplayedPath = null;
+let alarmHelpActivityPath = null;
 
 function alarmHelpEventKey(alarm) {
     if (!alarm) return null;
@@ -1132,6 +1151,7 @@ async function loadAlarmHelpActivity() {
     const time = document.getElementById("alarm-help-activity-time");
     const name = document.getElementById("alarm-help-activity-name");
     const state = document.getElementById("alarm-help-activity-state");
+    const openTag = document.getElementById("alarm-help-activity-open-tag");
     try {
         const response = await fetch("/api/alarm-help/activity");
         const data = await response.json();
@@ -1140,6 +1160,8 @@ async function loadAlarmHelpActivity() {
             time.textContent = "";
             name.textContent = "Waiting for alarm activity...";
             state.textContent = "";
+            alarmHelpActivityPath = null;
+            openTag.classList.add("hidden");
             return;
         }
         const parsed = new Date(data.event_time);
@@ -1148,10 +1170,14 @@ async function loadAlarmHelpActivity() {
             : alarmHelpText(data.event_time);
         name.textContent = alarmHelpText(data.tag_name);
         state.textContent = alarmHelpText(data.state);
+        alarmHelpActivityPath = data.kepware_path || null;
+        openTag.classList.toggle("hidden", !alarmHelpActivityPath);
     } catch (_error) {
         time.textContent = "";
         name.textContent = "Alarm activity unavailable";
         state.textContent = "";
+        alarmHelpActivityPath = null;
+        openTag.classList.add("hidden");
     }
 }
 
@@ -1232,16 +1258,13 @@ document.getElementById("alarm-help-refresh-all").addEventListener("click", refr
 document.getElementById("alarm-help-auto-refresh").addEventListener("change", () => {
     if (!alarmHelpWorkspace.classList.contains("hidden")) startAlarmHelpPolling();
 });
-async function openAlarmHelpTagInEditor() {
-    const error = document.getElementById("alarm-help-navigation-error");
-    const openButton = document.getElementById("alarm-help-open-tag");
-    if (!alarmHelpDisplayedPath) return;
+async function openTagByKepwarePath(kepwarePath, error) {
+    if (!kepwarePath) return false;
     error.classList.add("hidden");
-    openButton.disabled = true;
     try {
-        const parts = alarmHelpDisplayedPath.includes("/")
-            ? alarmHelpDisplayedPath.split("/").filter(Boolean)
-            : alarmHelpDisplayedPath.split(".").filter(Boolean);
+        const parts = kepwarePath.includes("/")
+            ? kepwarePath.split("/").filter(Boolean)
+            : kepwarePath.split(".").filter(Boolean);
         if (parts.length < 3) throw new Error("missing");
         if (!kepwareLoaded) {
             kepwareLoaded = true;
@@ -1277,14 +1300,23 @@ async function openAlarmHelpTagInEditor() {
         document.querySelector('.view-tab[data-view="runtime"]').click();
         selectKepwareObject(target, target.kepwareNode);
         target.scrollIntoView({ block: "nearest" });
+        return true;
     } catch (_error) {
         error.textContent = "Tag is no longer available in the current Kepware configuration.";
         error.classList.remove("hidden");
-    } finally {
-        openButton.disabled = false;
+        return false;
     }
 }
-document.getElementById("alarm-help-open-tag").addEventListener("click", openAlarmHelpTagInEditor);
+document.getElementById("alarm-help-open-tag").addEventListener("click", async (event) => {
+    event.currentTarget.disabled = true;
+    await openTagByKepwarePath(alarmHelpDisplayedPath, document.getElementById("alarm-help-navigation-error"));
+    event.currentTarget.disabled = false;
+});
+document.getElementById("alarm-help-activity-open-tag").addEventListener("click", async (event) => {
+    event.currentTarget.disabled = true;
+    await openTagByKepwarePath(alarmHelpActivityPath, document.getElementById("alarm-help-navigation-error"));
+    event.currentTarget.disabled = false;
+});
 document.querySelectorAll(".alarm-help-copy-endpoint").forEach((button) => {
     button.addEventListener("click", async () => {
         const input = document.getElementById(`alarm-help-endpoint-${button.dataset.endpoint}`);
