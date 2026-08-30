@@ -373,7 +373,7 @@ async function loadAlarmSummary() {
         document.getElementById("alarm-summary-count").textContent = "Unavailable";
         return;
     }
-    document.getElementById("alarm-summary-count").textContent = `${data.alarms.length} mappings`;
+    document.getElementById("alarm-summary-count").textContent = `${data.alarms.length} alarms`;
     usedAlarmMp3 = new Map();
     data.alarms.filter((alarm) => alarm.mp3_file).forEach((alarm) => {
         const key = alarm.mp3_file.toLocaleLowerCase();

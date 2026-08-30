@@ -128,14 +128,14 @@
         id="alarm-horizontal-splitter"
         class="alarm-horizontal-splitter"
         role="separator"
-        aria-label="Resize OPC Tag List above Current Alarm Mapping"
+        aria-label="Resize OPC Tag List above Alarm List"
         aria-orientation="horizontal"
         tabindex="0"
-        title="Drag to resize Current Alarm Mapping"
+        title="Drag to resize Alarm List"
     ></div>
 
     <section id="alarm-summary" class="alarm-summary alarm-mapping-workspace" aria-live="polite">
-        <div class="alarm-summary-heading"><strong>Current Alarm Mapping</strong><span id="alarm-summary-count"></span></div>
+        <div class="alarm-summary-heading"><strong>Alarm List</strong><span id="alarm-summary-count"></span></div>
         <div class="alarm-summary-scroll">
             <table>
                 <thead><tr><th>Tag Name / Tag Path</th></tr></thead>
@@ -156,7 +156,8 @@
 
     <section class="panel details-panel" aria-label="Selected object details">
         <div id="runtime-details-view" class="details-view">
-            <h2>Tag Details</h2>
+            <div class="alarm-configuration-pane">
+            <h2>Alarm Configuration</h2>
 
             <div class="field-group">
                 <label for="selected-tag-path">Selected Tag Path</label>
@@ -202,7 +203,11 @@
                 </form>
                 <p id="alarm-result" class="create-result hidden"></p>
             </section>
+            </div>
+            <div class="tag-knowledge-pane">
+            <h2>Tag Knowledge</h2>
             <div id="runtime-knowledge-host" aria-label="Tag Knowledge and Reference Resources"></div>
+            </div>
         </div>
 
         <div id="kepware-details-view" class="details-view hidden">
@@ -294,7 +299,6 @@
             </section>
 
             <section id="tag-knowledge-panel" class="add-tag-panel hidden">
-                <h3>Tag Knowledge</h3>
                 <p id="knowledge-status" class="tree-counts hidden"></p>
                 <dl class="object-properties knowledge-identity">
                     <dt>KM Directory</dt><dd id="knowledge-directory"></dd>
