@@ -121,6 +121,8 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
 .workspace.runtime-mode .details-panel { flex: 1 1 auto !important; min-width: 320px; overflow-y: auto; }
 .workspace.runtime-mode .main-panel-splitter { flex: 0 0 10px; margin: 0; }
 .workspace.runtime-mode .details-panel { min-width: 320px; }
+#main-panel-splitter { display: none; }
+.workspace.runtime-mode .tree-panel { flex: 1 1 auto !important; width: 100%; }
 .alarm-pane-splitter { touch-action: none; }
 .main-panel-splitter { position: relative; z-index: 3; flex: 0 0 10px; margin: 0; border-radius: 3px; background: var(--splitter); cursor: col-resize; pointer-events: auto; touch-action: none; transition: background-color 0.12s; }
 .main-panel-splitter:hover, .main-panel-splitter.dragging, .main-panel-splitter:focus-visible { outline: none; background: var(--accent); }
@@ -152,6 +154,10 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
     color: var(--text-primary);
 }
 .field-group textarea { resize: vertical; }
+.inline-control { display: flex; align-items: center; gap: 8px; }
+.inline-control select { flex: 1 1 auto; }
+.alarm-condition-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.alarm-audio-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible { outline: 2px solid var(--selection-border); outline-offset: 1px; }
 
 .placeholder-message { margin-top: 28px; padding: 12px; border-left: 3px solid var(--accent); background: var(--bg-card); color: var(--text-secondary); }

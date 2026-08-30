@@ -117,25 +117,10 @@
         id="main-panel-splitter"
         class="main-panel-splitter"
         role="separator"
-        aria-label="Resize OPC Tag List and MP3 Browser"
+        aria-label="Resize OPC Tag List and Tag Details"
         aria-orientation="vertical"
         tabindex="0"
     ></div>
-
-    <section id="runtime-mp3-panel" class="panel runtime-mp3-panel" aria-label="MP3 browser">
-        <h2>MP3 Browser</h2>
-        <div class="field-group">
-            <label for="alarm-mp3-search">Search MP3 files</label>
-            <input id="alarm-mp3-search" type="search" placeholder="Filter filenames..." autocomplete="off">
-        </div>
-        <div class="field-group">
-            <span id="alarm-mp3-label">MP3 Files</span>
-            <div id="alarm-mp3" class="alarm-mp3-list" role="listbox" aria-labelledby="alarm-mp3-label" tabindex="0"></div>
-        </div>
-        <p id="alarm-mp3-warning" class="warning-message hidden"></p>
-        <button type="button" id="preview-alarm-mp3">Preview Selected MP3</button>
-        <audio id="alarm-preview-audio" controls class="hidden"></audio>
-    </section>
 
     </div>
 
@@ -143,7 +128,7 @@
         id="alarm-horizontal-splitter"
         class="alarm-horizontal-splitter"
         role="separator"
-        aria-label="Resize OPC Tag List and MP3 Browser above Current Alarm Mapping"
+        aria-label="Resize OPC Tag List above Current Alarm Mapping"
         aria-orientation="horizontal"
         tabindex="0"
         title="Drag to resize Current Alarm Mapping"
@@ -164,7 +149,7 @@
         id="alarm-center-splitter"
         class="main-panel-splitter alarm-pane-splitter"
         role="separator"
-        aria-label="Resize combined OPC Tag List and MP3 workspace and Tag Details"
+        aria-label="Resize OPC Tag List and Tag Details"
         aria-orientation="vertical"
         tabindex="0"
     ></div>
@@ -179,25 +164,18 @@
             </div>
 
             <div class="field-group">
-                <label for="selected-tag-id">Tag ID</label>
-                <input id="selected-tag-id" type="text" readonly value="">
-            </div>
-            <div class="field-group">
                 <label for="selected-tag-node-id">Node ID</label>
                 <input id="selected-tag-node-id" type="text" readonly value="">
             </div>
             <div class="field-group">
-                <label for="selected-tag-data-type">Data Type</label>
-                <input id="selected-tag-data-type" type="text" readonly value="">
-            </div>
-            <div class="field-group">
                 <label for="alarm-selected-mp3">Selected MP3</label>
-                <input id="alarm-selected-mp3" type="text" readonly value="No MP3 selected">
+                <div class="inline-control"><select id="alarm-selected-mp3"><option value="">- Sound not selected -</option></select><button type="button" id="preview-alarm-mp3">Preview</button></div>
+                <p id="alarm-mp3-warning" class="warning-message hidden"></p>
+                <audio id="alarm-preview-audio" controls class="hidden"></audio>
             </div>
 
             <section id="alarm-panel" class="add-tag-panel" data-write-enabled="{{ 'true' if alarm_write_enabled else 'false' }}">
-                <h3>Alarm</h3>
-                <p id="alarm-status" class="placeholder-message">Select a Tag to load Alarm configuration.</p>
+                <p id="alarm-status" class="hidden"></p>
                 <button type="button" id="use-tag-as-alarm" class="refresh-button hidden" {{ 'disabled' if not alarm_write_enabled else '' }}>Use This Tag As Alarm</button>
                 <form id="alarm-form" class="hidden">
                     <input id="alarm-id" type="hidden">
@@ -205,15 +183,16 @@
                         <label for="alarm-enable">Enable Alarm</label>
                         <input id="alarm-enable" type="checkbox" checked>
                     </div>
-                    <div class="field-group">
+                    <div class="alarm-condition-row"><div class="field-group">
                         <label for="alarm-mode">Mode</label>
                         <select id="alarm-mode"><option value="HIGH">HIGH</option><option value="LOW">LOW</option></select>
                     </div>
+                    <div class="field-group"><label for="alarm-threshold-high">Threshold High</label><input id="alarm-threshold-high" type="number" step="any"></div>
+                    <div class="field-group"><label for="alarm-threshold-low">Threshold Low</label><input id="alarm-threshold-low" type="number" step="any"></div></div>
                     <p class="tree-counts">Legacy CHANGE mappings remain readable but are not executable by current alarm_sound. Select HIGH or LOW before saving such a mapping.</p>
-                    <div class="field-group"><label for="alarm-threshold-high">Threshold High (blank with LOW/HIGH for digital behavior)</label><input id="alarm-threshold-high" type="number" step="any"></div>
-                    <div class="field-group"><label for="alarm-threshold-low">Threshold Low (blank with HIGH/LOW for digital behavior)</label><input id="alarm-threshold-low" type="number" step="any"></div>
-                    <div class="field-group"><label for="alarm-priority">Priority (stored; currently does not order playback)</label><input id="alarm-priority" type="number" min="1" value="1"></div>
-                    <div class="field-group"><label for="alarm-repeat">Repeat count</label><input id="alarm-repeat" type="number" min="1" value="3"></div>
+                    <p class="tree-counts">(blank with LOW/HIGH for digital behavior)</p>
+                    <div id="alarm-audio-options" class="alarm-audio-options hidden"><div class="field-group"><label for="alarm-priority">Priority</label><input id="alarm-priority" type="number" min="1" value="1"></div>
+                    <div class="field-group"><label for="alarm-repeat">Repeat count</label><input id="alarm-repeat" type="number" min="1" value="3"></div></div>
                     <p class="tree-counts">RepeatEnable is retained for legacy compatibility; alarm_sound currently uses Repeat directly.</p>
                     <div class="preview-actions">
                         <button type="submit" id="save-alarm" class="refresh-button" disabled>Save Alarm</button>
@@ -315,15 +294,9 @@
 
             <section id="tag-knowledge-panel" class="add-tag-panel hidden">
                 <h3>Tag Knowledge</h3>
-                <p id="knowledge-status" class="tree-counts">Loading Tag Knowledge…</p>
+                <p id="knowledge-status" class="tree-counts hidden"></p>
                 <dl class="object-properties knowledge-identity">
-                    <dt>Kepware Path</dt><dd id="knowledge-kepware-path"></dd>
-                    <dt>Address</dt><dd id="knowledge-address"></dd>
-                    <dt>Data Type</dt><dd id="knowledge-data-type"></dd>
-                    <dt>Scan Rate</dt><dd id="knowledge-scan-rate"></dd>
-                    <dt>Access</dt><dd id="knowledge-access"></dd>
                     <dt>KM Directory</dt><dd id="knowledge-directory"></dd>
-                    <dt>Active Version</dt><dd id="knowledge-version"></dd>
                     <dt>Updated</dt><dd id="knowledge-updated"></dd>
                 </dl>
                 {% if not km_tag_write_enabled %}

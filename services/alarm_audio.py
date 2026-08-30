@@ -13,6 +13,8 @@ class AlarmAudioRepository:
 
     @staticmethod
     def validate_filename(filename: str) -> str:
+        if filename is None or filename == "":
+            return ""
         if not isinstance(filename, str) or not filename or Path(filename).name != filename:
             raise AlarmAudioError("MP3 filename must be a plain basename.")
         if not filename.lower().endswith(".mp3"):
@@ -40,6 +42,8 @@ class AlarmAudioRepository:
 
     def resolve(self, filename: str) -> Path:
         name = self.validate_filename(filename)
+        if not name:
+            raise AlarmAudioError("No alarm audio file is selected.")
         if self.root is None:
             raise AlarmAudioError("Alarm MP3 browse repository is not configured.")
         root = self.root.resolve()

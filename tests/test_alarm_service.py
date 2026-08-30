@@ -164,6 +164,18 @@ def test_explicit_create_prevents_duplicate_and_preserves_exact_filename(audio):
         alarm_service.create(10, values())
 
 
+def test_knowledge_only_alarm_accepts_blank_mp3_without_missing_audio_health(audio):
+    database = Database()
+    alarm_service = service(database, audio)
+    mapping = alarm_service.create(10, values(mp3_file=""))["mapping"]
+    assert mapping["mp3_file"] == ""
+    assert mapping["health"] == ["valid"]
+    assert alarm_service.integrity()["missing_mp3_files"] == []
+
+    updated = alarm_service.update(mapping["alarm_id"], values(mp3_file=""))["mapping"]
+    assert updated["mp3_file"] == ""
+
+
 def test_update_preserves_alarm_id_and_tag_id_and_supports_enable_disable(audio):
     database = Database()
     alarm_service = service(database, audio)

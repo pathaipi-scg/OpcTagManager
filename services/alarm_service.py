@@ -101,7 +101,7 @@ class AlarmService:
             issues.append("missing_node_id")
         if not mapping["runtime_supported"]:
             issues.append("unsupported_mode")
-        if not mapping["mp3_exists"]:
+        if mapping["mp3_file"] and not mapping["mp3_exists"]:
             issues.append("missing_mp3")
         return issues or ["valid"]
 
@@ -112,6 +112,8 @@ class AlarmService:
         for mapping in mappings:
             tag_id = int(mapping["tag_id"])
             tag_counts[tag_id] = tag_counts.get(tag_id, 0) + 1
+            if not mapping["mp3_file"]:
+                continue
             try:
                 self.audio_repository.resolve(mapping["mp3_file"])
             except Exception:
@@ -156,7 +158,7 @@ class AlarmService:
         if values.repeat < 1:
             raise AlarmServiceError("Repeat must be at least 1.")
         filename = self.audio_repository.validate_filename(values.mp3_file)
-        if require_mp3_exists:
+        if require_mp3_exists and filename:
             self.audio_repository.resolve(filename)
         return AlarmValues(
             mode, values.threshold_high, values.threshold_low, filename,
@@ -230,9 +232,10 @@ class AlarmService:
             if row is None:
                 raise AlarmServiceError("Alarm mapping was not found.")
             tag_id, path = self._tag(cursor, int(row[0]))
-            existing_mp3 = str(row[1])
+            existing_mp3 = str(row[1] or "")
             if values.mp3_file != existing_mp3:
-                self.audio_repository.resolve(values.mp3_file)
+                if values.mp3_file:
+                    self.audio_repository.resolve(values.mp3_file)
             cursor.execute(
                 """UPDATE Alarm_Lists SET TagPath = ?, AlarmMode = ?, ThresholdHigh = ?,
                    ThresholdLow = ?, Mp3File = ?, Priority = ?, [Repeat] = ?,

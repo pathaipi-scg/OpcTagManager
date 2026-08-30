@@ -170,7 +170,7 @@ function splitterSpaceFor(splitter) {
 }
 
 function alarmAvailableWidth() {
-    return Math.max(0, workspace.clientWidth - splitterSpaceFor(mainPanelSplitter) - splitterSpaceFor(alarmCenterSplitter));
+    return Math.max(0, workspace.clientWidth - splitterSpaceFor(alarmCenterSplitter));
 }
 
 function savedAlarmWidth(key) {
@@ -184,16 +184,14 @@ function savedAlarmWidth(key) {
 
 function normalizedAlarmWidths(left, center) {
     const total = alarmAvailableWidth();
-    const maximumLeft = Math.max(alarmMinimumWidths.left, total - alarmMinimumWidths.center - alarmMinimumWidths.right);
+    const maximumLeft = Math.max(alarmMinimumWidths.left, total - alarmMinimumWidths.right);
     const safeLeft = Math.max(alarmMinimumWidths.left, Math.min(left, maximumLeft));
-    const maximumCenter = Math.max(alarmMinimumWidths.center, total - safeLeft - alarmMinimumWidths.right);
-    const safeCenter = Math.max(alarmMinimumWidths.center, Math.min(center, maximumCenter));
-    return { left: safeLeft, center: safeCenter };
+    return { left: safeLeft, center: 0 };
 }
 
 function defaultAlarmWidths() {
     const total = alarmAvailableWidth();
-    return normalizedAlarmWidths(total * 0.42, total * 0.28);
+    return normalizedAlarmWidths(total * 0.55, 0);
 }
 
 function applyAlarmPaneWidths(useDefaults = false) {
@@ -210,15 +208,14 @@ function applyAlarmPaneWidths(useDefaults = false) {
     );
     workspace.style.setProperty("--alarm-left-width", `${widths.left}px`);
     workspace.style.setProperty("--alarm-center-width", `${widths.center}px`);
-    alarmLeftCenterWorkspace.style.flex = `0 0 ${widths.left + widths.center + splitterSpaceFor(mainPanelSplitter)}px`;
+    alarmLeftCenterWorkspace.style.flex = `0 0 ${widths.left}px`;
     mainPanelSplitter.setAttribute("aria-valuenow", String(Math.round(widths.left)));
-    alarmCenterSplitter.setAttribute("aria-valuenow", String(Math.round(widths.center)));
+    alarmCenterSplitter.setAttribute("aria-valuenow", String(Math.round(widths.left)));
 }
 
 function persistAlarmPaneWidths() {
     try {
-        localStorage.setItem(alarmLeftWidthKey, String(treePanel.getBoundingClientRect().width));
-        localStorage.setItem(alarmCenterWidthKey, String(runtimeMp3Panel.getBoundingClientRect().width));
+        localStorage.setItem(alarmLeftWidthKey, String(alarmLeftCenterWorkspace.getBoundingClientRect().width));
     } catch (_error) {
         // Pane resizing remains available when browser storage is unavailable.
     }
@@ -314,8 +311,8 @@ alarmHorizontalSplitter.addEventListener("dblclick", () => {
 function beginAlarmPaneResize(splitter, event, side) {
     if (!workspace.classList.contains("runtime-mode") || workspace.clientWidth <= 980 || event.button !== 0) return;
     const startX = event.clientX;
-    const startLeft = treePanel.getBoundingClientRect().width;
-    const startCenter = runtimeMp3Panel.getBoundingClientRect().width;
+    const startLeft = alarmLeftCenterWorkspace.getBoundingClientRect().width;
+    const startCenter = 0;
     const startRight = detailsPanel.getBoundingClientRect().width;
     splitter.classList.add("dragging");
     document.body.style.userSelect = "none";
@@ -324,16 +321,11 @@ function beginAlarmPaneResize(splitter, event, side) {
     const onPointerMove = (moveEvent) => {
         const delta = moveEvent.clientX - startX;
         let left = startLeft;
-        let center = startCenter;
-        if (side === "left") {
-            left = Math.max(alarmMinimumWidths.left, Math.min(startLeft + delta, startLeft + startCenter - alarmMinimumWidths.center));
-            center = startLeft + startCenter - left;
-        } else {
-            center = Math.max(alarmMinimumWidths.center, Math.min(startCenter + delta, startCenter + startRight - alarmMinimumWidths.right));
-        }
+        let center = 0;
+        left = Math.max(alarmMinimumWidths.left, Math.min(startLeft + delta, startLeft + startRight - alarmMinimumWidths.right));
         workspace.style.setProperty("--alarm-left-width", `${left}px`);
         workspace.style.setProperty("--alarm-center-width", `${center}px`);
-        alarmLeftCenterWorkspace.style.flex = `0 0 ${left + center + splitterSpaceFor(mainPanelSplitter)}px`;
+        alarmLeftCenterWorkspace.style.flex = `0 0 ${left}px`;
     };
     const finishResize = (finishEvent) => {
         splitter.classList.remove("dragging");
@@ -356,7 +348,6 @@ function bindAlarmPaneSplitter(splitter, side) {
     splitter.addEventListener("pointerdown", (event) => beginAlarmPaneResize(splitter, event, side));
 }
 
-bindAlarmPaneSplitter(mainPanelSplitter, "left");
 bindAlarmPaneSplitter(alarmCenterSplitter, "center");
 [mainPanelSplitter, alarmCenterSplitter].forEach((splitter) => {
     splitter.addEventListener("dblclick", () => {
@@ -446,10 +437,7 @@ function selectMappedAlarm(alarm) {
         dataType: alarm.data_type || "",
     };
     document.getElementById("selected-tag-path").value = selectedRuntimeTag.path;
-    document.getElementById("selected-tag-id").value = selectedRuntimeTag.tagId;
     document.getElementById("selected-tag-node-id").value = selectedRuntimeTag.nodeId;
-    document.getElementById("selected-tag-data-type").value = selectedRuntimeTag.dataType;
-    document.getElementById("alarm-status").textContent = "Alarm configured";
     const loadedTag = document.querySelector(`.kepware-object[data-canonical-path="${CSS.escape(alarm.tag_path)}"]`);
     if (loadedTag) {
         document.querySelectorAll(".kepware-object").forEach((item) => item.classList.remove("selected-object"));
@@ -469,76 +457,49 @@ function selectedAlarmMp3() {
 }
 
 function updateAlarmSaveReadiness() {
-    const ready = Boolean(selectedRuntimeTag?.path && selectedMp3);
+    const ready = Boolean(selectedRuntimeTag?.path);
     document.getElementById("save-alarm").disabled = !ready;
-    document.getElementById("alarm-selected-mp3").value = selectedMp3 || "No MP3 selected";
+    document.getElementById("alarm-selected-mp3").value = selectedMp3;
+    document.getElementById("alarm-audio-options").classList.toggle("hidden", !selectedMp3);
 }
 
 async function loadAlarmMp3(selected = "") {
-    if (!alarmMp3Loaded) {
-        const response = await fetch("/api/alarm-mp3");
-        const data = await response.json();
-        alarmMp3Files = data.files || [];
-        alarmMp3Loaded = true;
-    }
+    const response = await fetch("/api/alarm-mp3");
+    const data = await response.json();
+    alarmMp3Files = data.files || [];
+    alarmMp3Loaded = true;
     renderAlarmMp3Options(selected);
 }
 
 function renderAlarmMp3Options(selected = selectedMp3) {
-    const list = document.getElementById("alarm-mp3");
-    const search = document.getElementById("alarm-mp3-search").value.trim().toLocaleLowerCase();
-    const visible = alarmMp3Files.filter((file) => file.filename.toLocaleLowerCase().includes(search));
+    const list = document.getElementById("alarm-selected-mp3");
     const currentAlarmId = Number(selectedAlarm?.alarm_id || 0);
-    const rows = visible.map((file) => {
-        const row = document.createElement("button");
-        row.type = "button";
-        row.className = "alarm-mp3-row mp3-available";
-        row.dataset.filename = file.filename;
-        row.setAttribute("role", "option");
+    const rows = alarmMp3Files.map((file) => {
+        const row = document.createElement("option");
+        row.value = file.filename;
         const usedByAlarmIds = usedAlarmMp3.get(file.filename.toLocaleLowerCase()) || new Set();
         const usedByAnotherAlarm = [...usedByAlarmIds].some((alarmId) => alarmId !== currentAlarmId);
         row.disabled = usedByAnotherAlarm;
-        row.classList.toggle("mp3-used", usedByAnotherAlarm);
-        row.classList.toggle("mp3-available", !usedByAnotherAlarm);
-        row.classList.toggle("mp3-selected-pending", file.filename === selected && !usedByAnotherAlarm);
-        row.setAttribute("aria-selected", String(file.filename === selected && !usedByAnotherAlarm));
-        row.title = usedByAnotherAlarm ? "already used by an alarm" : "";
         row.textContent = usedByAnotherAlarm ? `${file.filename} - already used by an alarm` : file.filename;
-        row.addEventListener("click", () => {
-            selectedMp3 = file.filename;
-            renderAlarmMp3Options();
-            updateAlarmSaveReadiness();
-        });
         return row;
     });
     const exists = alarmMp3Files.some((file) => file.filename === selected);
-    const selectedVisible = visible.some((file) => file.filename === selected);
     const selectedUsedByIds = usedAlarmMp3.get(selected.toLocaleLowerCase()) || new Set();
     const selectedUsedByAnotherAlarm = [...selectedUsedByIds].some((alarmId) => alarmId !== currentAlarmId);
     if (selectedUsedByAnotherAlarm) selectedMp3 = "";
-    else if (selected) selectedMp3 = selected;
-    if (selected && exists && !selectedVisible && !selectedUsedByAnotherAlarm) {
-        const retained = document.createElement("button");
-        retained.type = "button";
-        retained.className = "alarm-mp3-row mp3-selected-pending";
-        retained.dataset.filename = selected;
-        retained.setAttribute("role", "option");
-        retained.setAttribute("aria-selected", "true");
-        retained.textContent = `${selected} (current selection)`;
-        rows.push(retained);
-    }
+    else selectedMp3 = selected || "";
     if (selected && !exists && selectedAlarm) {
-        const missing = document.createElement("button");
-        missing.type = "button";
-        missing.className = "alarm-mp3-row mp3-selected-pending";
-        missing.dataset.filename = selected;
-        missing.setAttribute("role", "option");
-        missing.setAttribute("aria-selected", "true");
+        const missing = document.createElement("option");
+        missing.value = selected;
         missing.textContent = `${selected} (missing — retained legacy value)`;
         rows.push(missing);
         selectedMp3 = selected;
     }
-    list.replaceChildren(...rows);
+    const blank = document.createElement("option");
+    blank.value = "";
+    blank.textContent = "- Sound not selected -";
+    list.replaceChildren(blank, ...rows);
+    list.value = selectedMp3;
     updateAlarmSaveReadiness();
     const warning = document.getElementById("alarm-mp3-warning");
     warning.classList.toggle("hidden", !selected || exists);
@@ -547,7 +508,10 @@ function renderAlarmMp3Options(selected = selectedMp3) {
         : "";
 }
 
-document.getElementById("alarm-mp3-search").addEventListener("input", () => renderAlarmMp3Options());
+document.getElementById("alarm-selected-mp3").addEventListener("change", (event) => {
+    selectedMp3 = event.target.value;
+    updateAlarmSaveReadiness();
+});
 function showAlarmForm(alarm) {
     const pendingMp3 = selectedMp3;
     selectedAlarm = alarm;
@@ -618,9 +582,7 @@ async function selectKepwareAlarmTag(node) {
     loadOperationalTagContext(node);
     showAlarmForm(null);
     document.getElementById("selected-tag-path").value = canonicalPath;
-    document.getElementById("selected-tag-id").value = "Not registered";
     document.getElementById("selected-tag-node-id").value = selectedRuntimeTag.nodeId || "Available after registration";
-    document.getElementById("selected-tag-data-type").value = selectedRuntimeTag.dataType;
     const status = document.getElementById("alarm-status");
     status.textContent = "Checking TagMaster registration...";
     document.getElementById("use-tag-as-alarm").classList.add("hidden");
@@ -637,9 +599,7 @@ async function selectKepwareAlarmTag(node) {
         selectedRuntimeTag.tagId = Number(data.tag.tag_id);
         selectedRuntimeTag.nodeId = data.tag.node_id || selectedRuntimeTag.nodeId;
         selectedRuntimeTag.dataType = data.tag.data_type ?? selectedRuntimeTag.dataType;
-        document.getElementById("selected-tag-id").value = selectedRuntimeTag.tagId;
         document.getElementById("selected-tag-node-id").value = selectedRuntimeTag.nodeId || "Unknown";
-        document.getElementById("selected-tag-data-type").value = selectedRuntimeTag.dataType;
         if (data.alarm) {
             status.textContent = "Alarm configured";
             showAlarmForm(data.alarm);
@@ -657,7 +617,7 @@ document.getElementById("use-tag-as-alarm").addEventListener("click", () => show
 
 document.getElementById("alarm-form").addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (!selectedRuntimeTag?.path || !selectedAlarmMp3()) return;
+    if (!selectedRuntimeTag?.path) return;
     const result = document.getElementById("alarm-result");
     const payload = {
         alarm_mode: document.getElementById("alarm-mode").value || "HIGH",
@@ -685,9 +645,7 @@ document.getElementById("alarm-form").addEventListener("submit", async (event) =
         selectedRuntimeTag.tagId = Number(syncData.tag_id);
         selectedRuntimeTag.nodeId = syncData.node_id || "";
         selectedRuntimeTag.dataType = syncData.data_type ?? "";
-        document.getElementById("selected-tag-id").value = selectedRuntimeTag.tagId;
         document.getElementById("selected-tag-node-id").value = selectedRuntimeTag.nodeId || "Unknown";
-        document.getElementById("selected-tag-data-type").value = selectedRuntimeTag.dataType;
     }
     if (!alarmId) payload.tag_id = selectedRuntimeTag.tagId;
     const response = await fetch(alarmId ? `/api/alarms/${alarmId}` : "/api/alarms", {
@@ -727,7 +685,7 @@ async function deleteAlarmMapping(alarm) {
             selectedMp3 = "";
             document.getElementById("alarm-form").classList.add("hidden");
             document.getElementById("alarm-status").textContent = "Not configured";
-            document.getElementById("alarm-selected-mp3").value = "No MP3 selected";
+            document.getElementById("alarm-selected-mp3").value = "";
             document.getElementById("use-tag-as-alarm").classList.remove("hidden");
             updateAlarmSaveReadiness();
         }
@@ -765,7 +723,6 @@ const kepwareTreeView = document.getElementById("kepware-tree-view");
 const kepwareTree = document.getElementById("kepware-tree");
 const configurationKepwareTreeHost = document.getElementById("configuration-kepware-tree-host");
 const runtimeKepwareTreeHost = document.getElementById("runtime-kepware-tree-host");
-const runtimeMp3Panel = document.getElementById("runtime-mp3-panel");
 const runtimeSecondaryHost = document.getElementById("runtime-secondary-host");
 const operatorHealth = document.querySelector(".operator-health");
 const diagnosticsPanel = document.querySelector(".diagnostics-panel");
@@ -819,7 +776,6 @@ viewTabs.forEach((tab) => {
         if (!isOpcRuntime) {
             (isKepware ? tagConfigurationWorkspace : alarmTopWorkspace).appendChild(workspace);
         }
-        runtimeMp3Panel.classList.toggle("hidden", isKepware);
         mainPanelSplitter.classList.toggle("hidden", isKepware);
         alarmCenterSplitter.classList.toggle("hidden", isOpcRuntime);
         document.getElementById("alarm-summary").classList.toggle("hidden", isKepware || isOpcRuntime);
@@ -2194,13 +2150,7 @@ async function loadTagKnowledge(node) {
         if (!data.success) throw new Error(data.error || "Unable to load Tag Knowledge.");
         const knowledge = data.knowledge;
         const details = data.tag.tag_details || {};
-        document.getElementById("knowledge-kepware-path").textContent = knowledge.kepware_path;
-        document.getElementById("knowledge-address").textContent = details.address ?? "";
-        document.getElementById("knowledge-data-type").textContent = friendlyEnumValue("new-tag-data-type", details.data_type);
-        document.getElementById("knowledge-scan-rate").textContent = details.scan_rate ?? "";
-        document.getElementById("knowledge-access").textContent = friendlyEnumValue("new-tag-access", details.access);
         document.getElementById("knowledge-directory").textContent = knowledge.km_directory;
-        document.getElementById("knowledge-version").textContent = knowledge.exists ? String(knowledge.version) : "—";
         document.getElementById("knowledge-updated").textContent = knowledge.updated_at || "—";
         Object.entries(knowledge.fields).forEach(([key, value]) => {
             const id = `knowledge-${key.replaceAll("_", "-")}`;
@@ -2211,7 +2161,7 @@ async function loadTagKnowledge(node) {
             knowledgeAttachments[section] = [...(knowledge.attachments?.[section] || [])];
         });
         renderAllKnowledgeAttachments();
-        status.textContent = knowledge.exists ? `Active Knowledge version ${knowledge.version}` : "No Tag Knowledge";
+        status.textContent = "";
     } catch (error) {
         if (selectedKnowledgeTag !== node) return;
         status.textContent = error.message || "Unable to load Tag Knowledge.";
