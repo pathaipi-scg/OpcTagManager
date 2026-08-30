@@ -1188,9 +1188,10 @@ function renderAlarmHelpHistory(alarms) {
         const row = document.createElement("tr");
         row.dataset.historyId = String(alarm.history_id);
         row.classList.toggle("selected-history", Number(alarmHelpSelectedHistoryId) === Number(alarm.history_id));
-        [alarm.activated_at, alarm.tag_name, alarm.kepware_path, alarm.priority, alarm.state].forEach((value) => {
+        [alarm.activated_at, alarm.tag_name].forEach((value, index) => {
             const cell = document.createElement("td");
-            cell.textContent = alarmHelpText(value);
+            cell.textContent = index === 0 ? alarmHelpHistoryTime(value) : alarmHelpText(value);
+            if (index === 1) cell.title = alarmHelpText(value);
             row.appendChild(cell);
         });
         row.addEventListener("click", () => loadAlarmHelpHistoryDetail(alarm.history_id));
@@ -1198,6 +1199,21 @@ function renderAlarmHelpHistory(alarms) {
     });
     body.replaceChildren(...rows);
     document.getElementById("alarm-help-history-status").textContent = rows.length ? "" : "No alarm history";
+}
+
+function alarmHelpHistoryTime(value) {
+    if (!value) return "\u2014";
+    const match = String(value).match(/(?:T|\s)(\d{2}:\d{2}:\d{2})/);
+    return match ? match[1] : alarmHelpText(value);
+}
+
+function setAlarmHelpHistoryOpen(isOpen) {
+    const main = document.getElementById("alarm-help-main");
+    const close = document.getElementById("alarm-help-toggle-history");
+    const open = document.getElementById("alarm-help-open-history");
+    main.classList.toggle("history-collapsed", !isOpen);
+    close.setAttribute("aria-expanded", String(isOpen));
+    open.classList.toggle("hidden", isOpen);
 }
 
 async function loadAlarmHelpHistory() {
@@ -1254,6 +1270,8 @@ function startAlarmHelpPolling() {
 
 document.getElementById("alarm-help-refresh-latest").addEventListener("click", loadAlarmHelpLatest);
 document.getElementById("alarm-help-refresh-history").addEventListener("click", loadAlarmHelpHistory);
+document.getElementById("alarm-help-toggle-history").addEventListener("click", () => setAlarmHelpHistoryOpen(false));
+document.getElementById("alarm-help-open-history").addEventListener("click", () => setAlarmHelpHistoryOpen(true));
 document.getElementById("alarm-help-refresh-all").addEventListener("click", refreshAlarmHelpAll);
 document.getElementById("alarm-help-auto-refresh").addEventListener("change", () => {
     if (!alarmHelpWorkspace.classList.contains("hidden")) startAlarmHelpPolling();

@@ -110,13 +110,20 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
 .workspace { display: flex; gap: 0; height: 100%; min-height: 120px; min-width: 0; overflow: hidden; }
 .alarm-top-workspace { height: calc(100vh - 140px); min-height: 440px; }
 .tag-configuration-workspace { height: calc(100vh - 140px); min-height: 120px; }
-.alarm-help-workspace { display: grid; grid-template-rows: auto minmax(280px, 3fr) minmax(180px, 2fr) auto auto auto; gap: 10px; height: calc(100vh - 140px); min-height: 480px; overflow: auto; }
+.alarm-help-workspace { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 10px; height: calc(100vh - 140px); min-height: 480px; overflow: hidden; }
 .alarm-help-activity { display: flex; align-items: center; gap: 18px; padding: 9px 14px; overflow: visible; }
 .alarm-help-activity-row { display: grid; grid-template-columns: minmax(80px, max-content) minmax(180px, 1fr) minmax(80px, max-content) max-content; gap: 16px; width: 100%; min-width: 0; }
 .alarm-help-activity-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .alarm-help-activity-state { font-weight: bold; }
 .runtime-open-tag { padding: 3px 8px; font-size: 0.75rem; white-space: nowrap; }
-.alarm-help-detail, .alarm-help-history { min-height: 0; overflow: auto; }
+.alarm-help-main { display: grid; grid-template-columns: minmax(250px, 28%) minmax(0, 1fr); gap: 10px; min-height: 0; overflow: hidden; }
+.alarm-help-main.history-collapsed { grid-template-columns: max-content minmax(0, 1fr); }
+.alarm-help-detail, .alarm-help-history { min-width: 0; min-height: 0; overflow-y: auto; }
+.alarm-help-main.history-collapsed .alarm-help-history { display: none; }
+.alarm-help-open-history { align-self: start; padding: 7px 9px; writing-mode: vertical-rl; }
+.alarm-help-sidebar-toggle { display: inline-flex; align-items: center; gap: 5px; padding: 4px 7px; }
+.alarm-help-history-heading { align-items: flex-start; }
+.alarm-help-history-heading h2 { font-size: 1.05rem; }
 .alarm-help-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .alarm-help-heading h2 { margin: 0 0 10px; }
 .alarm-help-editor-action { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
@@ -129,21 +136,33 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
 .alarm-help-images { display: flex; flex-wrap: wrap; gap: 10px; }
 .alarm-help-images figure { width: min(240px, 100%); margin: 0; }
 .alarm-help-images img { max-width: 100%; max-height: 180px; object-fit: contain; }
-.alarm-help-history-scroll { overflow: auto; }
+.alarm-help-history-scroll { overflow: auto; margin-top: 8px; }
 .alarm-help-history table { width: 100%; border-collapse: collapse; }
 .alarm-help-history th, .alarm-help-history td { padding: 7px; border-top: 1px solid var(--border-color); text-align: left; }
+.alarm-help-history th:first-child, .alarm-help-history td:first-child { width: 1%; white-space: nowrap; }
+.alarm-help-history td:last-child { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .alarm-help-history tbody tr { cursor: pointer; }
 .alarm-help-history tbody tr:hover { background: var(--hover-bg); }
 .alarm-help-history tbody tr.selected-history { outline: 2px solid var(--selection-border); outline-offset: -2px; background: var(--selection); }
 .alarm-help-navigation:empty { display: none; }
 .alarm-help-navigation { display: flex; align-items: center; gap: 10px; }
 .alarm-help-navigation p { margin: 0; }
-.alarm-help-commissioning, .alarm-help-diagnostics { padding: 8px 12px; overflow: visible; }
+.alarm-help-sidebar-diagnostics { display: grid; gap: 8px; margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border-color); }
+.alarm-help-commissioning, .alarm-help-diagnostics { padding: 8px 10px; overflow: visible; background: transparent; }
 .alarm-help-commissioning > summary, .alarm-help-diagnostics > summary { cursor: pointer; color: var(--text-secondary); font-weight: bold; }
 .alarm-help-endpoints { display: grid; gap: 6px; margin-top: 8px; }
 .alarm-help-endpoint-row { display: flex; gap: 6px; }
 .alarm-help-endpoint-row input { flex: 1 1 auto; min-width: 0; padding: 5px 7px; font-family: monospace; }
 .alarm-help-endpoint-row button { flex: 0 0 auto; padding: 4px 9px; }
+.alarm-help-diagnostics pre { max-width: 100%; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+    .alarm-help-workspace { height: auto; min-height: 0; overflow: visible; }
+    .alarm-help-main, .alarm-help-main.history-collapsed { grid-template-columns: minmax(0, 1fr); overflow: visible; }
+    .alarm-help-history, .alarm-help-detail { max-height: 65vh; }
+    .alarm-help-open-history { writing-mode: horizontal-tb; }
+    .alarm-help-activity { align-items: flex-start; flex-direction: column; gap: 7px; }
+    .alarm-help-activity-row { grid-template-columns: 1fr auto; }
+}
 .panel { box-sizing: border-box; overflow: auto; padding: 14px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-panel); }
 .tree-panel, .details-panel { flex: 1 1 50%; min-width: 0; }
 .runtime-mp3-panel { min-width: 0; }

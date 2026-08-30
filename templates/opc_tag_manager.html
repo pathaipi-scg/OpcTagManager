@@ -491,6 +491,38 @@
             <button type="button" id="alarm-help-activity-open-tag" class="runtime-open-tag hidden">Open Tag</button>
         </div>
     </article>
+    <div id="alarm-help-main" class="alarm-help-main history-collapsed">
+    <aside id="alarm-help-history" class="alarm-help-history panel" aria-label="Recent Alarm History">
+        <div class="alarm-help-heading alarm-help-history-heading">
+            <h2>Recent Alarm History</h2>
+            <button type="button" id="alarm-help-toggle-history" class="alarm-help-sidebar-toggle" aria-controls="alarm-help-history" aria-expanded="false" title="Close history sidebar"><span aria-hidden="true">&#9664;</span><span class="alarm-help-toggle-label">Close</span></button>
+        </div>
+        <button type="button" id="alarm-help-refresh-history">Refresh History</button>
+        <p id="alarm-help-history-status" class="tree-counts">No alarm history</p>
+        <div class="alarm-help-history-scroll"><table><thead><tr><th>Time</th><th>Tag Name</th></tr></thead><tbody id="alarm-help-history-body"></tbody></table></div>
+        <div class="alarm-help-sidebar-diagnostics">
+            <details class="alarm-help-commissioning panel">
+                <summary>API Endpoints</summary>
+                <div class="alarm-help-endpoints">
+                    {% for key, path in [
+                        ('current', '/api/alarm-help/current'),
+                        ('activity', '/api/alarm-help/activity'),
+                        ('latest', '/api/alarm-help/latest'),
+                        ('recent', '/api/alarm-help/recent?limit=5'),
+                        ('history', '/api/alarm-help/history/{history_id}')
+                    ] %}
+                    <div class="alarm-help-endpoint-row">
+                        <input id="alarm-help-endpoint-{{ key }}" type="text" readonly data-endpoint-path="{{ path }}" aria-label="{{ key | title }} Alarm Help API URL">
+                        <button type="button" class="alarm-help-copy-endpoint" data-endpoint="{{ key }}">Copy</button>
+                    </div>
+                    {% endfor %}
+                </div>
+                <p id="alarm-help-copy-status" class="tree-counts" aria-live="polite"></p>
+            </details>
+            <details class="alarm-help-diagnostics panel"><summary>Raw JSON</summary><pre id="alarm-help-json"></pre></details>
+        </div>
+    </aside>
+    <button type="button" id="alarm-help-open-history" class="alarm-help-open-history" aria-controls="alarm-help-history" aria-expanded="false" title="Open history sidebar"><span aria-hidden="true">&#9654;</span><span class="alarm-help-toggle-label">Open history</span></button>
     <article class="alarm-help-detail panel">
         <div class="alarm-help-heading">
             <h2>Alarm Detail</h2>
@@ -502,13 +534,17 @@
             </div>
         </div>
         <p id="alarm-help-status" class="tree-counts">No alarm event available</p>
+        <div class="alarm-help-navigation">
+            <p id="alarm-help-newer" class="warning-message hidden">Newer alarm available</p>
+            <button type="button" id="alarm-help-back-latest" class="hidden">Back to Latest Alarm</button>
+        </div>
         <div class="alarm-help-editor-action">
             <button type="button" id="alarm-help-open-tag" class="hidden">Open in Tag Configuration</button>
             <span id="alarm-help-navigation-error" class="error-message hidden"></span>
         </div>
         <div id="alarm-help-content" class="hidden">
             <dl class="alarm-help-metadata">
-                <dt>Alarm Name</dt><dd id="alarm-help-name"></dd>
+                <dt>Tag Name</dt><dd id="alarm-help-name"></dd>
                 <dt>Kepware Path</dt><dd id="alarm-help-path"></dd>
                 <dt>Activated At</dt><dd id="alarm-help-activated"></dd>
                 <dt>Priority</dt><dd id="alarm-help-priority"></dd>
@@ -518,34 +554,7 @@
             <div id="alarm-help-knowledge"></div>
         </div>
     </article>
-    <article class="alarm-help-history panel">
-        <div class="alarm-help-heading"><h2>Recent Alarm History</h2><button type="button" id="alarm-help-refresh-history">Refresh History</button></div>
-        <p id="alarm-help-history-status" class="tree-counts">No alarm history</p>
-        <div class="alarm-help-history-scroll"><table><thead><tr><th>Activated At</th><th>Tag Name</th><th>Kepware Path</th><th>Priority</th><th>State</th></tr></thead><tbody id="alarm-help-history-body"></tbody></table></div>
-    </article>
-    <div class="alarm-help-navigation">
-        <p id="alarm-help-newer" class="warning-message hidden">Newer alarm available</p>
-        <button type="button" id="alarm-help-back-latest" class="hidden">Back to Latest Alarm</button>
     </div>
-    <details class="alarm-help-commissioning panel">
-        <summary>API Endpoints</summary>
-        <div class="alarm-help-endpoints">
-            {% for key, path in [
-                ('current', '/api/alarm-help/current'),
-                ('activity', '/api/alarm-help/activity'),
-                ('latest', '/api/alarm-help/latest'),
-                ('recent', '/api/alarm-help/recent?limit=5'),
-                ('history', '/api/alarm-help/history/{history_id}')
-            ] %}
-            <div class="alarm-help-endpoint-row">
-                <input id="alarm-help-endpoint-{{ key }}" type="text" readonly data-endpoint-path="{{ path }}" aria-label="{{ key | title }} Alarm Help API URL">
-                <button type="button" class="alarm-help-copy-endpoint" data-endpoint="{{ key }}">Copy</button>
-            </div>
-            {% endfor %}
-        </div>
-        <p id="alarm-help-copy-status" class="tree-counts" aria-live="polite"></p>
-    </details>
-    <details class="alarm-help-diagnostics panel"><summary>Raw JSON</summary><pre id="alarm-help-json"></pre></details>
 </section>
 <div id="runtime-secondary-host" class="runtime-secondary-host"></div>
 {% endblock %}
