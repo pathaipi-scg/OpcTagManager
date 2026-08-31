@@ -32,6 +32,7 @@ class RegistryApplyResult:
     changed: int
     unchanged: int
     deactivated: int
+    reactivated: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,13 +160,74 @@ class TagRegistry:
             if len(existing_by_path) != len(existing_rows):
                 raise TagRegistryError("TagMaster contains duplicate Path identities.")
 
-            counts = {"added": 0, "changed": 0, "unchanged": 0}
+            counts = {"added": 0, "changed": 0, "unchanged": 0, "reactivated": 0}
             discovered_paths = {tag.path for tag in tags}
-            for tag in tags:
-                existing = existing_by_path.get(tag.path)
-                tag_id, state = self.upsert_tag(cursor, tag, run_id, existing)
-                counts[state] += 1
-                self.rebuild_tag_levels(cursor, tag_id, tag.path)
+            bulk_levels = callable(getattr(cursor, "executemany", None))
+            tag_levels: list[tuple[int, int, str]] = []
+            discovered_tag_ids: list[int] = []
+            if bulk_levels:
+                updates = []
+                inserts = []
+                for tag in tags:
+                    existing = existing_by_path.get(tag.path)
+                    if existing is None:
+                        counts["added"] += 1
+                        inserts.append((tag.node_id, tag.path, tag.data_type, run_id))
+                        continue
+                    tag_id, old_node_id, old_data_type, old_active = existing
+                    if not bool(old_active):
+                        counts["reactivated"] += 1
+                    elif old_node_id == tag.node_id and old_data_type == tag.data_type:
+                        counts["unchanged"] += 1
+                    else:
+                        counts["changed"] += 1
+                    updates.append((tag.node_id, tag.data_type, run_id, tag_id))
+                if hasattr(cursor, "fast_executemany"):
+                    cursor.fast_executemany = True
+                if updates:
+                    cursor.executemany(
+                        """UPDATE TagMaster SET NodeId = ?, DataType = ?, UpdatedTime = GETDATE(),
+                           IsActive = 1, LastBrowseRunId = ? WHERE TagId = ?""",
+                        updates,
+                    )
+                if inserts:
+                    cursor.executemany(
+                        """INSERT INTO TagMaster
+                           (NodeId, Path, DataType, IsActive, CreatedTime, UpdatedTime, LastBrowseRunId)
+                           VALUES (?, ?, ?, 1, GETDATE(), GETDATE(), ?)""",
+                        inserts,
+                    )
+                cursor.execute("SELECT TagId, Path FROM TagMaster WHERE LastBrowseRunId = ?", run_id)
+                current_ids = {str(row[1]): int(row[0]) for row in cursor.fetchall()}
+                if len(current_ids) != len(tags):
+                    raise TagRegistryError("Bulk TagMaster reconcile did not resolve every discovered identity.")
+                for tag in tags:
+                    tag_id = current_ids[tag.path]
+                    discovered_tag_ids.append(tag_id)
+                    tag_levels.extend(
+                        (tag_id, level_no, level_name)
+                        for level_no, level_name in enumerate(tag.path.split("/"))
+                    )
+            else:
+                for tag in tags:
+                    existing = existing_by_path.get(tag.path)
+                    tag_id, state = self.upsert_tag(cursor, tag, run_id, existing)
+                    count_state = "reactivated" if existing is not None and not bool(existing[3]) else state
+                    counts[count_state] += 1
+                    self.rebuild_tag_levels(cursor, tag_id, tag.path)
+
+            if bulk_levels and discovered_tag_ids:
+                # SQL Server accepts at most 2,100 parameters per statement.
+                for offset in range(0, len(discovered_tag_ids), 2000):
+                    ids = discovered_tag_ids[offset:offset + 2000]
+                    placeholders = ",".join("?" for _item in ids)
+                    cursor.execute(f"DELETE FROM TagLevel WHERE TagId IN ({placeholders})", *ids)
+                if hasattr(cursor, "fast_executemany"):
+                    cursor.fast_executemany = True
+                cursor.executemany(
+                    "INSERT INTO TagLevel (TagId, LevelNo, LevelName) VALUES (?, ?, ?)",
+                    tag_levels,
+                )
 
             deactivated = sum(
                 1

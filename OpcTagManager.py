@@ -1,6 +1,7 @@
 from pathlib import Path
 import asyncio
 from contextlib import asynccontextmanager
+from contextlib import suppress
 import json
 import logging
 import re
@@ -44,6 +45,8 @@ from config.config import (
     OPC_FAST_SYNC_RETRY_DELAY_SEC,
     OPC_URL,
     OPC_RUNTIME_SUPERVISOR_ENABLED,
+    OPC_RUNTIME_RECONCILE_ON_STARTUP,
+    OPC_RUNTIME_RECONCILE_INTERVAL_SEC,
     KM_TAG_ROOT,
     KM_TAG_WRITE_ENABLED,
     KM_RESOURCE_WRITE_ENABLED,
@@ -122,12 +125,44 @@ runtime_supervisor = HistorianSupervisor(
 )
 
 
+async def _periodic_runtime_reconcile() -> None:
+    global last_reconcile_result
+    while True:
+        await asyncio.sleep(OPC_RUNTIME_RECONCILE_INTERVAL_SEC)
+        try:
+            last_reconcile_result = (await tag_reconcile_service.reconcile()).to_dict()
+        except (OpcDiscoveryError, SnapshotValidationError, TagRegistryError) as exc:
+            logger.error("Periodic OPC inventory reconcile failed: %s", exc)
+            last_reconcile_result = {"success": False, "error": str(exc), "subscriber_synchronized": False}
+        except Exception:
+            logger.exception("Unexpected periodic OPC inventory reconcile failure")
+
+
 @asynccontextmanager
 async def app_lifespan(_app: FastAPI):
+    global last_reconcile_result
+    refresh_task = None
+    if runtime_supervisor.enabled and OPC_RUNTIME_RECONCILE_ON_STARTUP:
+        try:
+            # The worker's first snapshot sees the reconciled registry, so no rebuild command is needed.
+            last_reconcile_result = (
+                await tag_reconcile_service.reconcile(notify_subscriber=False)
+            ).to_dict()
+        except (OpcDiscoveryError, SnapshotValidationError, TagRegistryError) as exc:
+            logger.error("Startup OPC inventory reconcile failed; using the last safe TagMaster snapshot: %s", exc)
+            last_reconcile_result = {"success": False, "error": str(exc), "subscriber_synchronized": False}
+        except Exception:
+            logger.exception("Unexpected startup OPC inventory reconcile failure")
     runtime_supervisor.start()
+    if (runtime_supervisor.enabled and OPC_RUNTIME_RECONCILE_INTERVAL_SEC > 0):
+        refresh_task = asyncio.create_task(_periodic_runtime_reconcile())
     try:
         yield
     finally:
+        if refresh_task is not None:
+            refresh_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await refresh_task
         runtime_supervisor.shutdown()
 
 
@@ -180,7 +215,7 @@ class AlarmConfigurationRequest(BaseModel):
     alarm_mode: str
     threshold_high: float | None = None
     threshold_low: float | None = None
-    mp3_file: str
+    mp3_file: str = ""
     priority: int = 1
     repeat: int = 3
     enable_alarm: bool = True

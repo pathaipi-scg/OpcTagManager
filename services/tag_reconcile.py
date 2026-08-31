@@ -6,7 +6,7 @@ from threading import Lock
 from time import perf_counter
 from typing import Awaitable, Callable, Iterable
 
-from asyncua import Client
+from asyncua import Client, ua
 from asyncua.ua import NodeClass
 
 from services.tag_registry import TagRegistry, TagSnapshot
@@ -36,6 +36,7 @@ class ReconcileResult:
     deactivated: int
     run_id: int
     duration: float
+    reactivated: int = 0
     success: bool = True
     subscriber_synchronized: bool = False
     subscriber_rebuild_requested: bool = False
@@ -56,6 +57,8 @@ def is_allowed_path(path: str) -> bool:
 
 def validate_snapshot(tags: Iterable[TagSnapshot]) -> tuple[TagSnapshot, ...]:
     ordered = tuple(sorted(tags, key=lambda item: item.path))
+    if not ordered:
+        raise SnapshotValidationError("OPC discovery returned no usable tags; the registry was not changed.")
     paths: set[str] = set()
     for tag in ordered:
         if not is_allowed_path(tag.path):
@@ -72,12 +75,13 @@ class OpcTagDiscoverer:
     """Strict OPC traversal that returns a complete in-memory snapshot or fails."""
 
     def __init__(self, opc_url: str, client_factory: Callable[..., Client] = Client,
-                 excluded_paths: Iterable[str] = ()) -> None:
+                 excluded_paths: Iterable[str] = (), request_timeout: float = 30.0) -> None:
         self._opc_url = opc_url
         self._client_factory = client_factory
         self._excluded_paths = frozenset(excluded_paths)
+        self._request_timeout = request_timeout
 
-    async def _browse_node(self, node, path: str, tags: list[TagSnapshot]) -> None:
+    async def _browse_node_legacy(self, node, path: str, tags: list[TagSnapshot]) -> None:
         node_class = await node.read_node_class()
         if (node_class == NodeClass.Variable and is_allowed_path(path)
                 and path not in self._excluded_paths):
@@ -91,13 +95,64 @@ class OpcTagDiscoverer:
             if not is_allowed_name(child_name):
                 continue
             child_path = f"{path}/{child_name}" if path else child_name
-            await self._browse_node(child, child_path, tags)
+            await self._browse_node_legacy(child, child_path, tags)
+
+    async def _browse_node(self, client, node, path: str, variables: list[tuple[object, str]]) -> None:
+        """Browse using ReferenceDescription metadata instead of three reads per OPC node."""
+        descriptions = await node.get_children_descriptions()
+        for description in descriptions:
+            child_name = description.DisplayName.Text
+            if not is_allowed_name(child_name):
+                continue
+            child_path = f"{path}/{child_name}" if path else child_name
+            child = client.get_node(description.NodeId)
+            if (description.NodeClass == NodeClass.Variable and is_allowed_path(child_path)
+                    and child_path not in self._excluded_paths):
+                variables.append((child, child_path))
+            # Kepware Tag variables are leaves. Browsing every variable creates thousands
+            # of unnecessary service calls and can exhaust the OPC session timeout.
+            if description.NodeClass != NodeClass.Variable:
+                await self._browse_node(client, child, child_path, variables)
+
+    @staticmethod
+    def _data_type_name(data_value) -> str:
+        data_value.StatusCode.check()
+        node_id = data_value.Value.Value
+        if node_id.NamespaceIndex == 0:
+            try:
+                return ua.VariantType(node_id.Identifier).name
+            except ValueError:
+                pass
+        return node_id.to_string()
+
+    async def _snapshots(self, client, variables: list[tuple[object, str]]) -> list[TagSnapshot]:
+        tags: list[TagSnapshot] = []
+        batch_size = 500
+        for offset in range(0, len(variables), batch_size):
+            batch = variables[offset:offset + batch_size]
+            values = await client.read_attributes(
+                [node for node, _path in batch], ua.AttributeIds.DataType
+            )
+            tags.extend(
+                TagSnapshot(path=path, node_id=node.nodeid.to_string(),
+                            data_type=self._data_type_name(value))
+                for (node, path), value in zip(batch, values, strict=True)
+            )
+        return tags
 
     async def discover(self) -> tuple[TagSnapshot, ...]:
         tags: list[TagSnapshot] = []
         try:
-            async with self._client_factory(url=self._opc_url) as client:
-                await self._browse_node(client.nodes.objects, "", tags)
+            # A full Kepware hierarchy is much larger than an individual runtime read.
+            # asyncua's short default request timeout can expire midway through a valid
+            # browse even while the endpoint and existing subscriptions remain healthy.
+            async with self._client_factory(url=self._opc_url, timeout=self._request_timeout) as client:
+                if hasattr(client.nodes.objects, "get_children_descriptions") and hasattr(client, "read_attributes"):
+                    variables: list[tuple[object, str]] = []
+                    await self._browse_node(client, client.nodes.objects, "", variables)
+                    tags = await self._snapshots(client, variables)
+                else:  # Small test doubles and older compatible clients.
+                    await self._browse_node_legacy(client.nodes.objects, "", tags)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -112,7 +167,7 @@ class TagReconcileService:
         self._on_registry_changed = on_registry_changed
         self._lock = Lock()
 
-    async def reconcile(self) -> ReconcileResult:
+    async def reconcile(self, notify_subscriber: bool = True) -> ReconcileResult:
         if not self._lock.acquire(blocking=False):
             raise ReconcileInProgressError("A Full Reconcile is already running.")
         try:
@@ -121,7 +176,10 @@ class TagReconcileService:
             snapshot = await self._discoverer.discover()
             applied = self._registry.apply_snapshot(run_id, snapshot)
             rebuild_requested = False
-            if self._on_registry_changed is not None:
+            registry_changed = bool(
+                applied.added or applied.changed or applied.reactivated or applied.deactivated
+            )
+            if notify_subscriber and registry_changed and self._on_registry_changed is not None:
                 try:
                     rebuild_requested = bool(self._on_registry_changed(run_id))
                 except Exception:
@@ -132,6 +190,7 @@ class TagReconcileService:
                 changed=applied.changed,
                 unchanged=applied.unchanged,
                 deactivated=applied.deactivated,
+                reactivated=applied.reactivated,
                 run_id=run_id,
                 duration=round(perf_counter() - started, 3),
                 subscriber_rebuild_requested=rebuild_requested,

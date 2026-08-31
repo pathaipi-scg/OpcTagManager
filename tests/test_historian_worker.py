@@ -182,9 +182,31 @@ def test_active_tag_query_and_load_contract():
     assert "SELECT TagId, Path, NodeId, DataType" in ACTIVE_TAG_QUERY
     assert "WHERE IsActive = 1" in ACTIVE_TAG_QUERY
     assert "AND Path NOT LIKE 'Server%'" in ACTIVE_TAG_QUERY
+    assert "Alarm_Lists" not in ACTIVE_TAG_QUERY
+    assert "EnableAlarm" not in ACTIVE_TAG_QUERY
     assert connection.cursor_value.query == ACTIVE_TAG_QUERY
     assert tags == [{"TagId": 1, "Path": "LP2_MODBUS/Device/Tag", "NodeId": "node-1", "DataType": "Bool"}]
     assert connection.closed
+
+
+def test_influx_connection_failure_uses_cooldown_without_blocking_every_callback():
+    calls = []
+
+    class UnavailableInflux:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+
+        def get_list_database(self):
+            raise ConnectionError("offline")
+
+    reporter = Reporter()
+    writer = InfluxWriter(settings(), UnavailableInflux, reporter)
+    assert writer.write("LP2/Device/Tag", 1) is False
+    assert writer.write("LP2/Device/Tag", 2) is False
+    assert len(calls) == 1
+    assert calls[0]["timeout"] == 1
+    failures = [values for event, values in reporter.events if event == "influx_write"]
+    assert len(failures) == 1 and failures[0]["success"] is False
 
 
 def test_alarm_diagnostic_query_and_load_contract():

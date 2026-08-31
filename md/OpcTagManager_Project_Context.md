@@ -162,6 +162,46 @@ Factory-KM records what actually happened. OpcTagManager manages what should be 
 
 All deployment-specific configuration is loaded from `config/.env` through `config/config.py`. The tracked `config/.env.example` contains safe placeholders.
 
+## Accepted historian architecture and verified baseline
+
+The historian and Alarm domains are separate systems. The historian architecture is:
+
+```text
+Kepware
+-> TagMaster reconciliation
+-> historian candidate filtering (IsActive=1, excluding Server%)
+-> OPC UA subscription
+-> InfluxDB
+```
+
+Application startup completes a safe Kepware browse and transactional TagMaster reconcile before starting the historian worker. Empty or partial Kepware snapshots never replace the last valid registry. A conservative periodic reconcile runs every 900 seconds; it requests a historian rebuild only when the registry contains added, updated, reactivated, or deactivated tags.
+
+Alarm List is only the subset explicitly selected for alarm usage:
+
+```text
+OPC Tag
+-> Add Alarm
+-> Alarm Configuration
+-> optional MP3
+-> Tag Knowledge
+-> alarm_sound
+```
+
+Alarm membership, Alarm configuration, EnableAlarm, MP3 selection, Tag Knowledge, and alarm_sound availability never determine historian eligibility. MP3 remains optional, and alarm_sound remains operationally independent from OPC-to-Influx historization.
+
+Accepted live baseline recorded on 2026-08-31:
+
+- Kepware discovered/accepted: 1,672 OPC variables.
+- TagMaster total: 1,672; IsActive=1: 1,672.
+- Preserved Server% exclusions: 29.
+- Historian requested/subscribed/failed: 1,643 / 1,643 / 0.
+- Alarm mappings: 207; 1,436 historian candidates had no Alarm mapping.
+- OPC callback through InfluxWriter to a real InfluxDB point: verified.
+- This machine's deployment target: local InfluxDB 1.8.3 at 127.0.0.1:8086.
+- Accepted live regression: 320 tests passed; final closeout regression: 321 tests passed after adding the no-change periodic-reconcile check.
+
+Milestone: `KEPWARE_HISTORIAN_RECONCILIATION_AND_SUBSCRIPTIONS_COMPLETED`. Treat this as the working baseline; do not redesign or make Alarm membership a historian filter.
+
 ## Deferred work
 
 Tag editing/deletion, scaling-property cloning, bulk imports, and broader Factory-KM integration are intentionally deferred. Shared Identity/Auth, Factory-KM AI quotation extraction, live cross-project writes, KMVaultManager implementation/migration, Stock master, Purchase domain beyond current Resources, automatic canonical identity creation, installed asset instances, Supplier or Equipment/Part deletion/retirement, maintenance history, and Factory-KM feedback/promotion remain later work.

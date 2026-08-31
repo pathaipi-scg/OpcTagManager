@@ -271,6 +271,16 @@ Keep deferred until separately approved:
 `QUO_` remains an OpcTagManager Shared Resource, but quotation OCR/LLM parsing and a large manual quotation-entry workflow do not belong in OpcTagManager. Candidate APIs remain read-only and never auto-select, create, update, merge, or link.
 # Phase 4.11A — Runtime Ownership Consolidation
 
+## Kepware historian reconciliation issue — COMPLETED 2026-08-31
+
+- [x] Reconcile the complete safe Kepware snapshot into TagMaster before historian startup.
+- [x] Keep historian eligibility independent of Alarm List, Alarm configuration, EnableAlarm, MP3, Tag Knowledge, and alarm_sound.
+- [x] Preserve IsActive filtering, Server% exclusion, optional MP3, and empty/partial snapshot protection.
+- [x] Run a 15-minute periodic reconcile and rebuild historian subscriptions only when registry membership or metadata changes.
+- [x] Live-verify 1,672 active TagMaster rows, 1,643 requested/subscribed tags, zero subscription failures, 207 independent Alarm mappings, and an actual OPC-to-InfluxDB point.
+- [x] Verify local InfluxDB 1.8.3 at 127.0.0.1:8086, complete the accepted 320-test live regression, and pass the final 321-test closeout suite.
+- [x] Record `KEPWARE_HISTORIAN_RECONCILIATION_AND_SUBSCRIPTIONS_COMPLETED` as the accepted baseline; do not reopen this as an Alarm-driven historian design.
+
 - [x] Slice 1: safe Tag reconcile core with strict snapshot discovery and atomic SQL registry apply.
 - [x] Add controlled Full Reconcile API/UI and structured result without subscriber synchronization.
 - [ ] Validate Slice 1 against approved non-production OPC/SQL fixtures before runtime ownership cutover.

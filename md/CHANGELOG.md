@@ -7,6 +7,16 @@ All significant project changes should be documented here.
 
 ## Unreleased
 
+### 2026-08-31 - Kepware historian reconciliation and OPC subscription baseline
+
+Fixed historian startup ordering so a complete Kepware browse and transactional TagMaster reconcile finish before the historian loads candidates. The historian candidate query remains independent of Alarm_Lists, Alarm configuration, EnableAlarm, MP3 selection, Tag Knowledge, and alarm_sound. The preserved pipeline is Kepware -> TagMaster reconciliation -> active/non-Server historian filtering -> OPC subscription -> InfluxDB. Alarm usage remains a separate subset workflow: OPC Tag -> Add Alarm -> Alarm Configuration -> optional MP3 -> Tag Knowledge -> alarm_sound.
+
+Full-tree OPC discovery now uses browse reference metadata and batched datatype reads, rejects empty or partial snapshots, and preserves the last valid registry on failure. SQL TagMaster/TagLevel application remains transactional and uses bounded batches. Startup reconcile does not send a redundant rebuild because the worker loads the completed snapshot on first start. The conservative 900-second periodic reconcile requests a historian rebuild only when tags were added, updated, reactivated, or deactivated. Influx connection failures use a bounded timeout and retry cooldown so an unavailable historian destination cannot prevent OPC subscription completion. MP3 remains optional.
+
+Live verification established the accepted baseline: Kepware discovered and accepted 1,672 OPC variables; TagMaster total and IsActive=1 were both 1,672; 29 active Server% variables were intentionally excluded; 1,643 historian candidates were requested and all 1,643 subscribed with 0 failures; 207 distinct Alarm mappings remained independent; and 1,436 subscribed historian candidates had no Alarm mapping. OPC callback -> InfluxWriter -> InfluxDB was verified with a real point. This deployment uses local InfluxDB 1.8.3 at 127.0.0.1:8086. The accepted live regression passed 320 tests; the final closeout suite, including the no-change periodic-reconcile regression, passed 321 tests.
+
+Verdict: `KEPWARE_HISTORIAN_RECONCILIATION_AND_SUBSCRIPTIONS_COMPLETED`. This is the accepted working baseline and must not be reworked as an Alarm-driven subscription design.
+
 ### 2026-08-23 - Phase 4.12 Checkpoint 5 Notebook supervision dry run
 
 Validated Notebook Task Scheduler supervision using direct venv Python actions, explicit working directories, restart policy, and `IgnoreNew` duplicate suppression. The initial batch action left an orphaned process tree on stop; changing the local task action to direct Python fixed clean stop/restart ownership without changing application source.

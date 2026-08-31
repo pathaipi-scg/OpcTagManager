@@ -9,6 +9,7 @@ from services.tag_reconcile import (
     OpcDiscoveryError,
     OpcTagDiscoverer,
     SKIP_ROOTS,
+    SnapshotValidationError,
     TagReconcileService,
     validate_snapshot,
 )
@@ -218,6 +219,20 @@ def test_connection_or_mid_tree_failure_rejects_partial_snapshot(client):
         asyncio.run(discoverer.discover())
 
 
+def test_empty_discovery_rejects_snapshot_without_mutating_registry():
+    database = MemoryDatabase({
+        "Line/Keep": {"TagId": 3, "NodeId": "keep", "DataType": "Bool", "IsActive": True, "LastBrowseRunId": 0},
+    })
+    before = copy.deepcopy(database.tags)
+    service = TagReconcileService(
+        OpcTagDiscoverer("configured-endpoint", lambda **_kwargs: FakeClient(FakeNode("Objects"))),
+        TagRegistry(database.connection),
+    )
+    with pytest.raises(SnapshotValidationError, match="no usable tags"):
+        asyncio.run(service.reconcile())
+    assert database.tags == before
+
+
 def test_registry_preserves_identity_updates_metadata_levels_run_and_counts():
     database = MemoryDatabase({
         "Line/Device/Same": {"TagId": 7, "NodeId": "old", "DataType": "Int16", "IsActive": True, "LastBrowseRunId": 0},
@@ -250,7 +265,8 @@ def test_unchanged_and_reactivated_counts_are_deterministic():
     registry = TagRegistry(database.connection)
     run_id = registry.start_run()
     result = registry.apply_snapshot(run_id, [TagSnapshot("Line/B", "b", "Bool"), TagSnapshot("Line/A", "a", "Bool")])
-    assert (result.added, result.changed, result.unchanged, result.deactivated) == (0, 1, 1, 0)
+    assert (result.added, result.changed, result.unchanged, result.deactivated) == (0, 0, 1, 0)
+    assert result.reactivated == 1
 
 
 def test_sql_failure_rolls_back_all_registry_changes_and_leaves_run_incomplete():
@@ -305,6 +321,42 @@ def test_successful_committed_reconcile_notifies_rebuild_once():
     assert notifications == [result.run_id]
     assert result.subscriber_rebuild_requested is True
     assert result.subscriber_synchronized is False
+
+
+def test_startup_reconcile_can_skip_rebuild_notification_before_worker_start():
+    database = MemoryDatabase()
+    root = FakeNode("Objects", children=[
+        FakeNode("Line", children=[FakeNode("Tag", NodeClass.Variable, "node")])
+    ])
+    notifications = []
+    service = TagReconcileService(
+        OpcTagDiscoverer("configured-endpoint", lambda **_kwargs: FakeClient(root)),
+        TagRegistry(database.connection),
+        notifications.append,
+    )
+    result = asyncio.run(service.reconcile(notify_subscriber=False))
+    assert result.total_discovered == 1
+    assert notifications == []
+    assert result.subscriber_rebuild_requested is False
+
+
+def test_unchanged_periodic_reconcile_does_not_rebuild_historian():
+    database = MemoryDatabase({
+        "Line/Tag": {"TagId": 1, "NodeId": "node", "DataType": "Int16", "IsActive": True, "LastBrowseRunId": 0},
+    })
+    root = FakeNode("Objects", children=[
+        FakeNode("Line", children=[FakeNode("Tag", NodeClass.Variable, "node")])
+    ])
+    notifications = []
+    service = TagReconcileService(
+        OpcTagDiscoverer("configured-endpoint", lambda **_kwargs: FakeClient(root)),
+        TagRegistry(database.connection),
+        notifications.append,
+    )
+    result = asyncio.run(service.reconcile())
+    assert result.unchanged == 1
+    assert notifications == []
+    assert result.subscriber_rebuild_requested is False
 
 
 def test_snapshot_validation_and_source_have_no_export_or_deployment_endpoint():

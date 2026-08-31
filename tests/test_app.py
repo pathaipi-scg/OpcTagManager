@@ -503,6 +503,12 @@ class OpcTagManagerAppTests(unittest.TestCase):
         status, _body = self.request("POST", "/api/runtime/full-reconcile", {"confirm": "no"})
         self.assertEqual(status, 422)
 
+    def test_alarm_configuration_accepts_omitted_optional_mp3(self):
+        payload = OpcTagManager.CreateAlarmRequest(
+            tag_id=1, alarm_mode="HIGH", threshold_high=1,
+        )
+        self.assertEqual(payload.mp3_file, "")
+
     def test_all_tags_source_returns_live_kepware_nodes_without_tagmaster_access(self):
         unregistered_channel = {
             "name": "UNREGISTERED_CHANNEL",

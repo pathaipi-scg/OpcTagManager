@@ -188,6 +188,8 @@ class InfluxWriter:
         self.client_factory = client_factory
         self.reporter = reporter or StatusReporter()
         self.clients: dict[str, object] = {}
+        self.retry_after: dict[str, float] = {}
+        self.retry_cooldown = 10.0
 
     def get_client(self, path: str):
         database = get_database_name(self.settings.influx_db, path)
@@ -198,6 +200,7 @@ class InfluxWriter:
             port=self.settings.influx_port,
             username=self.settings.influx_user,
             password=self.settings.influx_password,
+            timeout=1,
         )
         if not any(item["name"] == database for item in client.get_list_database()):
             client.create_database(database)
@@ -209,17 +212,21 @@ class InfluxWriter:
         normalized = normalize_value(value)
         if normalized is None:
             return False
+        database = get_database_name(self.settings.influx_db, path)
+        if time.monotonic() < self.retry_after.get(database, 0):
+            return False
         try:
-            database = get_database_name(self.settings.influx_db, path)
             self.get_client(path).write_points([
                 {"measurement": path, "fields": {"value": normalized}}
             ])
+            self.retry_after.pop(database, None)
             self.reporter.send(
                 "influx_write", success=True, database=database, path=path,
                 value=normalized, result="WRITE OK",
             )
             return True
         except Exception as exc:
+            self.retry_after[database] = time.monotonic() + self.retry_cooldown
             self.reporter.send(
                 "influx_write", success=False,
                 database=get_database_name(self.settings.influx_db, path), path=path,
