@@ -84,8 +84,27 @@ class ReadOnlyProbe:
         return result
 
 
+def extract_kepware_ipv4(value):
+    """Extract one unambiguous IPv4 from a Kepware device ID, never arbitrary properties.
+
+    Modbus TCP/IP Ethernet uses servermain.DEVICE_ID_STRING, e.g. <IP>.unit.
+    Delimiters may vary; do not salvage a valid-looking suffix from an invalid
+    octet, longer dotted address, hostname, or a multi-address identifier.
+    """
+    if not isinstance(value, str):
+        return None
+    candidates = re.findall(r"(?<![\w.])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![\w.])", value)
+    addresses = set()
+    for candidate in candidates:
+        try:
+            addresses.add(str(IPv4Address(candidate)))
+        except ValueError:
+            return None
+    return next(iter(addresses)) if len(addresses) == 1 else None
+
+
 def kepware_snapshot(client, run_id):
-    """Fresh GETs; preserve devices without a literal IP for later comparison."""
+    """Fresh GETs; retain raw IDs and normalize formatted IPv4 device addresses."""
     records = []
     for channel in client.get_channels_uncached():
         for device in client.get_devices_uncached(channel["name"]):
@@ -93,11 +112,7 @@ def kepware_snapshot(client, run_id):
             identity = {key: value for key, value in props.items() if key in {
                 "common.ALLTYPES_NAME", "servermain.DEVICE_ID_STRING", "servermain.DEVICE_MODEL",
                 "servermain.MULTIPLE_TYPES_DEVICE_DRIVER", "servermain.DEVICE_DATA_COLLECTION"}}
-            address = _property_value(props, "DEVICE_ID_STRING")
-            try:
-                address = str(IPv4Address(str(address)))
-            except ValueError:
-                address = None
+            address = extract_kepware_ipv4(_property_value(props, "DEVICE_ID_STRING"))
             records.append(dict(RunId=run_id, SnapshotTime=now(), IPAddress=address,
                                 ChannelName=channel["name"], DeviceName=device["name"],
                                 DevicePath=device["full_path"],
@@ -113,9 +128,13 @@ def merge_current(addresses, scans, kepware, manuals, evidence):
     for ip in addresses:
         scan = scans.get(ip, {})
         devices = kepware.get(ip, [])
+        # Prefer enabled configuration for display, retaining every identity as evidence.
+        display_devices = [d for d in devices if d.get("Enabled") not in (False, 0)] or devices
+        device_names = ", ".join(dict.fromkeys(d["DeviceName"] for d in display_devices))
+        channel_names = ", ".join(dict.fromkeys(d["ChannelName"] for d in display_devices))
         manual = manuals.get(ip, {})
         past = evidence.get(ip, {})
-        name = manual.get("MachineName") or ", ".join(d["DeviceName"] for d in devices) or scan.get("HostName") or "Unknown"
+        name = manual.get("MachineName") or device_names or scan.get("HostName") or "Unknown"
         known = bool(devices or manual or past.get("Known") or scan.get("HostName"))
         if scan.get("IsOnline"):
             status = "Online - Known" if devices or manual or name != "Unknown" else "Online - Unknown"
@@ -128,8 +147,8 @@ def merge_current(addresses, scans, kepware, manuals, evidence):
         else:
             status = "Candidate Free"
         rows.append({**scan, "IPAddress": ip, "MachineName": name, "Status": status,
-                     "KepwareChannel": ", ".join(d["ChannelName"] for d in devices),
-                     "KepwareDevice": ", ".join(d["DeviceName"] for d in devices),
+                     "KepwareChannel": channel_names,
+                     "KepwareDevice": device_names,
                      "KepwareIdentity": devices, "Manual": manual,
                      "Description": manual.get("Description", ""), "Location": manual.get("Location", ""),
                      "Remark": manual.get("Remark", ""), "LastScan": scan.get("ScanTime"),

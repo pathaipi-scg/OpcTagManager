@@ -24,10 +24,13 @@
     </div>
     <p id="inventory-message" role="status" aria-live="polite"></p>
     <div class="inventory-table-scroll">
-        <table class="inventory-table"><thead><tr>
+        <table class="inventory-table inventory-main-table"><colgroup>
+            <col class="inventory-col-ip"><col class="inventory-col-name"><col class="inventory-col-status">
+            <col class="inventory-col-vendor"><col class="inventory-col-type"><col class="inventory-col-device">
+            <col class="inventory-col-seen"><col class="inventory-col-description">
+        </colgroup><thead><tr>
             <th>IP Address</th><th>Machine Name</th><th>Status</th><th>Vendor</th><th>Device Type</th>
-            <th>Device Model</th><th>MAC Address</th><th>Host Name</th><th>Kepware Channel</th>
-            <th>Kepware Device</th><th>Last Scan</th><th>Last Seen</th><th>Source</th><th>Description / Location</th>
+            <th>Kepware Device</th><th>Last Seen</th><th>Description / Location</th>
         </tr></thead><tbody id="inventory-rows"></tbody></table>
     </div>
     <section id="inventory-detail" class="hidden" aria-label="IP details">

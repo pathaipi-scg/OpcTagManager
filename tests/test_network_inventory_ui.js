@@ -45,7 +45,10 @@ test('tab loads inventory without scanning; displays names as text and UTC times
     const cells = ui.get('inventory-rows').children[0].children;
     assert.equal(cells[1].textContent, row.MachineName);
     assert.equal(cells[1].children.length, 0);
-    assert.equal(cells[10].textContent, new Date(`${row.LastScan}Z`).toLocaleString());
+    assert.equal(cells.length, 8);
+    assert.equal(cells[1].title, row.MachineName);
+    assert.equal(cells[6].textContent, new Date(`${row.LastSeen}Z`).toLocaleString());
+    assert.equal(cells[6].title, cells[6].textContent);
     assert(ui.get('inventory-freshness').textContent.includes(new Date(`${row.LastScan}Z`).toLocaleString()));
 });
 
@@ -78,6 +81,14 @@ test('selected IP loads all three histories and manual save posts a new revision
     await new Promise(resolve => setImmediate(resolve));
     assert(ui.calls.some(call => call.url === `/api/network-inventory/${row.IPAddress}/history`));
     assert.equal(ui.get('inventory-histories').children.length, 3);
+    const details = ui.get('inventory-current').children;
+    const fields = new Map();
+    for (let i = 0; i < details.length; i += 2) fields.set(details[i].textContent, details[i + 1].textContent);
+    for (const label of ['IP Address', 'Effective Machine Name', 'Status', 'Vendor', 'Device Type', 'Device Model',
+        'MAC Address', 'Host Name', 'Kepware Channel', 'Kepware Device', 'Last Scan', 'Last Seen',
+        'Source', 'Description', 'Location', 'Detection Source']) assert(fields.has(label), label);
+    assert.equal(fields.get('Last Scan'), new Date(`${row.LastScan}Z`).toLocaleString());
+    assert.equal(fields.get('Effective Machine Name'), row.MachineName);
     ui.get('field-MachineName').value = 'Packing Camera';
     await ui.get('inventory-manual').events.submit({preventDefault() {}, submitter: new Element()});
     const save = ui.calls.find(call => call.url.endsWith('/manual'));

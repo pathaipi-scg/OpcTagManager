@@ -11,13 +11,73 @@ import pytest
 
 from services.network_inventory import (
     InventoryError, InventoryStore, NetworkInventory, ReadOnlyProbe,
-    TABLES, filter_rows, kepware_snapshot, merge_current, now, scan_range,
+    TABLES, extract_kepware_ipv4, filter_rows, kepware_snapshot, merge_current, now, scan_range,
 )
 from services.kepware_config_api import KepwareConfigApi, KepwareConfigSettings
 
 
 IP = "172.28.231.1"
 END = "172.28.231.3"
+
+
+@pytest.mark.parametrize("value", ["172.28.231.20", "<172.28.231.20>.0",
+    " [172.28.231.20]:502 ", "address=(172.28.231.20), unit=0", "172.28.231.20,0,1"])
+def test_formatted_kepware_ipv4(value):
+    assert extract_kepware_ipv4(value) == "172.28.231.20"
+
+
+@pytest.mark.parametrize("value", [None, 123, "1", "plc.local", "<999.28.231.20>.0",
+    "<172.028.231.20>.0", "1172.28.231.20", "172.28.231.2000", "172.28.231.20.1",
+    "plc172.28.231.20.local", "172.28.231.20 / 172.28.231.21", "::1"])
+def test_invalid_or_ambiguous_kepware_ipv4_not_matched(value):
+    assert extract_kepware_ipv4(value) is None
+
+
+def test_enabled_kepware_identity_preferred_and_duplicate_names_not_repeated():
+    devices = [{"ChannelName": "LP2", "DeviceName": "MIX", "Enabled": False},
+               {"ChannelName": "LP2_MODBUS", "DeviceName": "MIX", "Enabled": True}]
+    row = merge_current([IP], {}, {IP: devices}, {}, {})[0]
+    assert (row["MachineName"], row["KepwareChannel"], row["KepwareDevice"]) == ("MIX", "LP2_MODBUS", "MIX")
+    assert row["KepwareIdentity"] == devices
+    devices[0]["Enabled"] = True
+    row = merge_current([IP], {}, {IP: devices}, {}, {})[0]
+    assert row["MachineName"] == row["KepwareDevice"] == "MIX"
+    assert row["KepwareChannel"] == "LP2, LP2_MODBUS"
+    for device in devices:
+        device["Enabled"] = False
+    row = merge_current([IP], {}, {IP: devices}, {}, {})[0]
+    assert row["MachineName"] == "MIX" and row["Status"] == "Offline - Known"
+
+
+def test_live_modbus_formats_append_and_resolve_current_inventory(inventory):
+    service, connection = inventory
+    service.start, service.end = "172.28.231.20", "172.28.231.78"
+    mappings = {"172.28.231.20": "MIX", "172.28.231.26": "SANDBIN",
+                "172.28.231.27": "CURING", "172.28.231.78": "AUTOFEED"}
+    service.client.get_channels_uncached.return_value = [dict(name="LP2_MODBUS", properties={})]
+    devices = []
+    for ip, name in mappings.items():
+        node = device(name, f"<{ip}>.0")
+        node["full_path"] = f"LP2_MODBUS.{name}"
+        node["properties"]["servermain.MULTIPLE_TYPES_DEVICE_DRIVER"] = "Modbus TCP/IP Ethernet"
+        devices.append(node)
+    service.client.get_devices_uncached.return_value = devices
+    # Model an existing snapshot made by the previous parser. Its NULL IP remains untouched.
+    with patch("services.network_inventory.extract_kepware_ipv4", return_value=None):
+        old_run = service.scan("old parser")
+    new_run = service.scan("fixed parser")
+    rows = service.store.current(service.addresses)["rows"]
+    for ip, name in mappings.items():
+        row = next(row for row in rows if row["IPAddress"] == ip)
+        assert (row["MachineName"], row["KepwareChannel"], row["KepwareDevice"]) == (name, "LP2_MODBUS", name)
+        assert row["Status"] == "Offline - Known"
+        history = service.store.history(ip)["kepware"]
+        assert history[0]["RunId"] == new_run["RunId"]
+        assert json.loads(history[0]["RawIdentityFields"])["servermain.DEVICE_ID_STRING"] == f"<{ip}>.0"
+    assert connection.db.execute("SELECT COUNT(*) FROM KepwareDeviceHistory WHERE RunId=? AND IPAddress IS NULL", (old_run["RunId"],)).fetchone()[0] == 4
+    assert connection.db.execute("SELECT COUNT(*) FROM KepwareDeviceHistory").fetchone()[0] == 8
+    service.save_manual("172.28.231.20", {"MachineName": "Manual MIX"}, "operator")
+    assert service.store.current(service.addresses)["rows"][0]["MachineName"] == "Manual MIX"
 
 
 class Cursor:

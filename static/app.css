@@ -380,3 +380,13 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 #inventory-detail { margin-top: 20px; border-top: 1px solid #78859155; padding-top: 12px; }
 #inventory-histories details { margin: 12px 0; }
 [data-theme="light"] .inventory-table th { background: #eef2f6; }
+.inventory-main-table { table-layout: fixed; min-width: 1050px; }
+.inventory-main-table th, .inventory-main-table td { overflow: hidden; text-overflow: ellipsis; padding: 6px 8px; }
+.inventory-main-table .inventory-col-ip { width: 140px; }
+.inventory-main-table .inventory-col-name { width: 17%; }
+.inventory-main-table .inventory-col-status { width: 155px; }
+.inventory-main-table .inventory-col-vendor { width: 10%; }
+.inventory-main-table .inventory-col-type { width: 9%; }
+.inventory-main-table .inventory-col-device { width: 13%; }
+.inventory-main-table .inventory-col-seen { width: 200px; }
+.inventory-main-table td:first-child button { padding: 3px 5px; font-weight: 700; }

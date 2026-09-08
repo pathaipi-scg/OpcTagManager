@@ -32,12 +32,17 @@ Each completed scan inserts the run, every IP result (including offline/error re
 and a fresh Kepware snapshot in one transaction. A Kepware read failure is recorded on
 the run, retains the previous successful current Kepware identity and withholds free
 classification. An empty successful snapshot removes devices from current identity;
-all previous snapshots remain available as evidence. Devices with non-literal IPv4
-identifiers are retained with a NULL IP; they cannot reliably reserve an IP without a
+all previous snapshots remain available as evidence. IPv4 addresses are extracted from
+`servermain.DEVICE_ID_STRING`, including Modbus Ethernet IDs such as `<172.28.231.20>.0`,
+and strictly validated. Original formatted IDs remain in RawIdentityFields. Ambiguous,
+invalid, or non-IP identifiers are retained with a NULL IP; they cannot reliably reserve an IP without a
 manual mapping. Raw fields are restricted to identity properties, excluding credentials.
 
 Current identity uses the latest active manual record, then current Kepware devices,
-then hostname, then Unknown. Multiple Kepware devices sharing an IP are all shown.
+then hostname, then Unknown. Enabled Kepware devices take display precedence over
+disabled duplicates, with disabled devices used if no enabled identity exists.
+Repeated display names are deduplicated; distinct enabled channels remain visible.
+All matching devices, including disabled identities, remain in snapshot histories.
 Historical scans, Kepware records and even inactive manual records protect an IP from
 Candidate Free. There is no clear/delete workflow. Never-scanned or failed probes show
 Not Verified. Online devices without a usable name show Online - Unknown.
@@ -48,5 +53,33 @@ principal. Manual saves always insert a new row. Histories sort newest first wit
 identity-column tie breakers. Current reads use indexed latest-row queries and a
 history evidence aggregation rather than transferring full history to the browser.
 
-Verification uses mocked network/Kepware calls and an in-memory SQL compatibility
+Automated verification uses mocked network/Kepware calls and an in-memory SQL compatibility
 harness. It does not scan the plant or apply schema changes to a live database.
+
+The main table contains eight columns: IP, machine name, status, vendor, type,
+Kepware device, last seen, and description/location. Fixed column sizing and ellipsis
+keep rows compact; tooltips expose full values. Model, MAC, hostname, channel, last
+scan, source and detection details remain available in the IP detail panel and histories.
+
+## Live verification, 2026-09-08
+
+Read-only Kepware GETs confirmed the Modbus TCP/IP Ethernet address property is
+`servermain.DEVICE_ID_STRING`, containing `<172.28.231.20>.0` for LP2_MODBUS/MIX.
+The same format was confirmed for SANDBIN (.26), CURING (.27), and AUTOFEED (.78).
+
+Run `824d94b2-0662-4b96-9678-04ed862741f3` appended a complete 254-IP scan and fresh
+Kepware snapshot. The updated current service, reading the actual SQL database,
+resolved MIX to LP2_MODBUS/MIX, SANDBIN to SANDBIN, CURING to CURING, and AUTOFEED
+to AUTOFEED. SANDBIN and CURING also have enabled entries in LP2_COATING and
+LP2_CURING respectively; both channels remain represented. MIX has an additional
+disabled LP2 entry, retained in history but superseded in the display by LP2_MODBUS.
+
+The verification host received zero ICMP replies; this is not evidence that the
+plant equipment is powered off. Previous Last Seen evidence remains preserved.
+The read-only `verify_network_inventory.sql` checks passed for all four tables and
+append-only triggers and both complete runs. The original run's 39 NULL-IP
+Kepware history rows remain unchanged. No OPC writes or configuration changes occurred.
+
+The running application serves the compact HTML/assets immediately. Backend changes
+require an application restart; its active historian worker shares the application
+lifecycle, so restart timing must account for that interruption.

@@ -36,9 +36,12 @@
                 const button = text(ipCell, "button", row.IPAddress);
                 button.type = "button";
                 button.addEventListener("click", () => showDetails(row));
-                for (const key of ["MachineName", "Status", "Vendor", "DeviceType", "DeviceModel", "MACAddress", "HostName", "KepwareChannel", "KepwareDevice", "LastScan", "LastSeen", "Source"])
-                    text(tr, "td", cellText(key, row[key]));
-                text(tr, "td", [row.Description, row.Location].filter(Boolean).join(" / "));
+                for (const key of ["MachineName", "Status", "Vendor", "DeviceType", "KepwareDevice", "LastSeen"]) {
+                    const value = cellText(key, row[key]);
+                    text(tr, "td", value).title = value;
+                }
+                const description = [row.Description, row.Location].filter(Boolean).join(" / ");
+                text(tr, "td", description).title = description;
                 tr.addEventListener("click", event => { if (event.target !== button) showDetails(row); });
                 el("rows").appendChild(tr);
             }
@@ -61,8 +64,10 @@
         el("detail").classList.remove("hidden");
         el("detail-title").textContent = `${row.IPAddress} — ${row.MachineName}`;
         el("current").replaceChildren();
-        for (const key of ["Status", "Vendor", "DeviceType", "DeviceModel", "MACAddress", "HostName", "KepwareChannel", "KepwareDevice", "Description", "Location", "Remark", "LastScan", "LastSeen", "DetectionSource", "ScanError"]) {
-            text(el("current"), "dt", key.replace(/([a-z])([A-Z])/g, "$1 $2"));
+        for (const key of ["IPAddress", "MachineName", "Status", "Vendor", "DeviceType", "DeviceModel", "MACAddress", "HostName", "KepwareChannel", "KepwareDevice", "Description", "Location", "Remark", "LastScan", "LastSeen", "Source", "ResponseMs", "DetectionSource", "ScanError"]) {
+            const label = key === "MachineName" ? "Effective Machine Name" : key
+                .replace(/([A-Z])([A-Z][a-z])/g, "$1 $2").replace(/([a-z])([A-Z])/g, "$1 $2");
+            text(el("current"), "dt", label);
             text(el("current"), "dd", cellText(key, row[key]));
         }
         for (const key of ["MachineName", "Description", "Location", "Remark"])
