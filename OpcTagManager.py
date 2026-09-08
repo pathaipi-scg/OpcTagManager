@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field
+from services.tag_value import TagValueReader
 
 logger = logging.getLogger("opctagmanager")
 
@@ -597,6 +598,17 @@ def alarm_integrity():
 @app.get("/api/runtime/alarm-readiness")
 def alarm_readiness():
     return alarm_preflight.run()
+
+
+class TagValueRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    node_id: str = Field(min_length=1, max_length=2000)
+
+
+@app.post("/api/opc-tags/current-value")
+async def read_current_tag_value(payload: TagValueRequest):
+    result = await TagValueReader(OPC_URL).read(payload.node_id)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/opc-tags/{tag_id}/alarm")

@@ -356,3 +356,13 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
     .opc-runtime-workspace { grid-template-columns: 1fr; height: auto; }
     .runtime-activity-pane { min-height: 420px; }
 }
+ .current-tag-value {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+    font-size: 0.85rem;
+ }
+ .current-tag-value > div { min-width: 0; overflow-wrap: anywhere; max-height: 9rem; overflow: auto; }
+ .current-tag-value button { flex-shrink: 0; }

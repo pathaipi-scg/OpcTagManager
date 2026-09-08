@@ -1,4 +1,60 @@
 let selectedRuntimeTag = null;
+let tagValueGeneration = 0;
+let tagValueController = null;
+let activePreviewTag = null;
+
+function resetTagValuePreview(tag = selectedRuntimeTag) {
+    activePreviewTag = tag;
+    tagValueGeneration += 1;
+    tagValueController?.abort();
+    tagValueController = null;
+    document.getElementById("refresh-tag-value").disabled = !tag?.nodeId;
+    document.getElementById("current-tag-value").textContent = !tag ? "No tag selected" :
+        (tag.nodeId ? "Click Refresh Value" : "Unavailable: no existing Node ID");
+    document.getElementById("current-tag-quality").textContent = "—";
+    document.getElementById("current-tag-read-at").textContent = "—";
+    document.getElementById("current-tag-data-type").textContent = "";
+}
+
+async function refreshTagValue() {
+    const tag = activePreviewTag;
+    const button = document.getElementById("refresh-tag-value");
+    if (!tag?.nodeId || button.disabled) return;
+    resetTagValuePreview();
+    const generation = tagValueGeneration;
+    const controller = new AbortController();
+    tagValueController = controller;
+    button.disabled = true;
+    document.getElementById("current-tag-value").textContent = "Reading…";
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    try {
+        const response = await fetch("/api/opc-tags/current-value", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ node_id: tag.nodeId }),
+            signal: controller.signal,
+        });
+        const data = await response.json();
+        if (generation !== tagValueGeneration) return;
+        if (!response.ok || !data.success) throw new Error(data.error || "Current value unavailable.");
+        document.getElementById("current-tag-value").textContent = data.value;
+        document.getElementById("current-tag-quality").textContent = data.quality;
+        document.getElementById("current-tag-read-at").textContent = data.read_at;
+        document.getElementById("current-tag-data-type").textContent = data.data_type ? `Data Type: ${data.data_type}` : "";
+    } catch (error) {
+        if (generation !== tagValueGeneration) return;
+        document.getElementById("current-tag-value").textContent = error.name === "AbortError"
+            ? "OPC value read timed out. Try Refresh Value again." : (error.message || "Current value unavailable.");
+    } finally {
+        clearTimeout(timeout);
+        if (generation === tagValueGeneration) {
+            tagValueController = null;
+            button.disabled = !selectedRuntimeTag?.nodeId;
+        }
+    }
+}
+
+document.getElementById("refresh-tag-value").addEventListener("click", refreshTagValue);
 let selectedAlarm = null;
 let alarmMp3Loaded = false;
 let alarmMp3Files = [];
@@ -427,6 +483,7 @@ function selectMappedAlarm(alarm) {
         dataType: alarm.data_type || "",
     };
     document.getElementById("selected-tag-path").value = selectedRuntimeTag.path;
+    resetTagValuePreview();
     document.getElementById("selected-tag-node-id").value = selectedRuntimeTag.nodeId;
     document.querySelectorAll("#alarm-summary-body tr").forEach((row) => {
         row.classList.toggle("selected-mapping", Number(row.dataset.alarmId) === Number(alarm.alarm_id));
@@ -574,6 +631,8 @@ async function selectKepwareAlarmTag(node) {
         dataType: tagDetails.data_type ?? "",
     };
     loadOperationalTagContext(node);
+    const selection = selectedRuntimeTag;
+    resetTagValuePreview();
     showAlarmForm(null);
     document.getElementById("selected-tag-path").value = canonicalPath;
     document.getElementById("selected-tag-node-id").value = selectedRuntimeTag.nodeId || "Available after registration";
@@ -584,6 +643,7 @@ async function selectKepwareAlarmTag(node) {
         const response = await fetch(`/api/opc-tags/resolve/by-path?path=${encodeURIComponent(canonicalPath)}`);
         const data = await response.json();
         if (!response.ok || !data.success) throw new Error("Tag lookup failed");
+        if (selectedRuntimeTag !== selection || activePreviewTag !== selection) return;
         if (!data.registered) {
             selectedAlarm = null;
             status.textContent = "Not registered - it will be registered when the Alarm is saved.";
@@ -593,6 +653,7 @@ async function selectKepwareAlarmTag(node) {
         selectedRuntimeTag.tagId = Number(data.tag.tag_id);
         selectedRuntimeTag.nodeId = data.tag.node_id || selectedRuntimeTag.nodeId;
         selectedRuntimeTag.dataType = data.tag.data_type ?? selectedRuntimeTag.dataType;
+        resetTagValuePreview();
         document.getElementById("selected-tag-node-id").value = selectedRuntimeTag.nodeId || "Unknown";
         if (data.alarm) {
             status.textContent = "Alarm configured";
@@ -638,6 +699,7 @@ document.getElementById("alarm-form").addEventListener("submit", async (event) =
         }
         selectedRuntimeTag.tagId = Number(syncData.tag_id);
         selectedRuntimeTag.nodeId = syncData.node_id || "";
+        resetTagValuePreview();
         selectedRuntimeTag.dataType = syncData.data_type ?? "";
         document.getElementById("selected-tag-node-id").value = selectedRuntimeTag.nodeId || "Unknown";
     }
@@ -1559,6 +1621,7 @@ function selectKepwareObject(button, node) {
     const runtimeViewActive = document.querySelector('.view-tab[data-view="runtime"]').classList.contains("active");
     if (runtimeViewActive) {
         if (node.object_type === "Tag") selectKepwareAlarmTag(node);
+        else resetTagValuePreview(null);
         return;
     }
     displayKepwareObject(node);

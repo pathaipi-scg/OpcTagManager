@@ -169,6 +169,15 @@
                 <label for="selected-tag-node-id">Node ID</label>
                 <input id="selected-tag-node-id" type="text" readonly value="">
             </div>
+            <section class="current-tag-value" aria-label="Current Tag Value">
+                <div aria-live="polite">
+                    <div>Current Value: <output id="current-tag-value">No tag selected</output></div>
+                    <div>Quality: <span id="current-tag-quality">—</span></div>
+                    <div>Read At: <span id="current-tag-read-at">—</span></div>
+                    <small id="current-tag-data-type"></small>
+                </div>
+                <button type="button" id="refresh-tag-value" class="refresh-button" disabled>Refresh Value</button>
+            </section>
             <div class="field-group alarm-description-field">
                 <label for="knowledge-description">Description / Meaning</label>
                 <textarea id="knowledge-description" rows="3" {{ 'disabled' if not km_tag_write_enabled else '' }}></textarea>
