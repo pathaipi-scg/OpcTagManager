@@ -36,12 +36,16 @@
                 const button = text(ipCell, "button", row.IPAddress);
                 button.type = "button";
                 button.addEventListener("click", () => showDetails(row));
-                for (const key of ["MachineName", "Status", "Vendor", "DeviceType", "KepwareDevice", "LastSeen"]) {
+                for (const key of ["MachineName", "Status", "KepwareDevice", "LastSeen"]) {
                     const value = cellText(key, row[key]);
                     text(tr, "td", value).title = value;
                 }
                 const description = [row.Description, row.Location].filter(Boolean).join(" / ");
                 text(tr, "td", description).title = description;
+                for (const key of ["Vendor", "DeviceType"]) {
+                    const value = cellText(key, row[key]);
+                    text(tr, "td", value).title = value;
+                }
                 tr.addEventListener("click", event => { if (event.target !== button) showDetails(row); });
                 el("rows").appendChild(tr);
             }

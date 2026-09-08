@@ -31,6 +31,7 @@ function setup(handler) {
     return {get, calls};
 }
 const row = {IPAddress: '172.28.231.1', MachineName: '<img src=x onerror=alert(1)>', Status: 'Offline - Known',
+    KepwareDevice: 'MIX', Description: 'Mixer', Location: 'Packing', Vendor: 'Example Vendor', DeviceType: 'PLC',
     LastScan: '2026-09-08T01:00:00', LastSeen: '2026-09-07T01:00:00', Manual: {}, KepwareIdentity: []};
 const current = {rows: [row], scan_start: row.IPAddress, scan_end: row.IPAddress,
     last_run: {FinishedAt: row.LastScan}};
@@ -47,8 +48,10 @@ test('tab loads inventory without scanning; displays names as text and UTC times
     assert.equal(cells[1].children.length, 0);
     assert.equal(cells.length, 8);
     assert.equal(cells[1].title, row.MachineName);
-    assert.equal(cells[6].textContent, new Date(`${row.LastSeen}Z`).toLocaleString());
-    assert.equal(cells[6].title, cells[6].textContent);
+    assert.equal(cells[0].children[0].textContent, row.IPAddress);
+    assert.deepEqual(cells.slice(1).map(cell => cell.textContent), [row.MachineName, row.Status,
+        row.KepwareDevice, new Date(`${row.LastSeen}Z`).toLocaleString(), 'Mixer / Packing', row.Vendor, row.DeviceType]);
+    assert.equal(cells[4].title, cells[4].textContent);
     assert(ui.get('inventory-freshness').textContent.includes(new Date(`${row.LastScan}Z`).toLocaleString()));
 });
 
