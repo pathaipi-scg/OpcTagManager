@@ -63,3 +63,9 @@ Neither script grants sysadmin, db_owner, db_datawriter, db_ddladmin, broad serv
 - Scripts contain no server IP, hostname, password, login secret, production row, or commissioning row.
 - Back up an existing database and run `verify_schema.sql` before any separately reviewed schema change.
 - Never execute `bootstrap_raw.sql` on a deployment target.
+
+## OT Network Inventory migration
+
+After the existing bootstrap, apply `network_inventory.sql`, then run
+`verify_network_inventory.sql`. Existing deployments use the same additive migration.
+See `../md/OT_Network_Inventory.md` for configuration and discovery behavior.

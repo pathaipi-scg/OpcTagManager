@@ -1,0 +1,49 @@
+<section id="network-inventory-workspace" class="panel hidden" aria-label="OT Network Inventory">
+    <h2>OT Network Inventory</h2>
+    <div class="inventory-toolbar">
+        <button type="button" id="inventory-scan">Scan Now</button>
+        <button type="button" id="inventory-refresh">Refresh Inventory</button>
+        <button type="button" id="inventory-free">Show Candidate Free IPs</button>
+        <span id="inventory-range"></span>
+    </div>
+    <p id="inventory-freshness">Last Inventory Scan: Never</p>
+    <p>Candidate Free means no recorded usage evidence. Confirm site reservations before assigning an IP.</p>
+    <div class="inventory-toolbar">
+        <label class="inventory-search">Search IP, machine, vendor or location
+            <input id="inventory-search" type="search" placeholder="172.28.231.45, Packing, Siemens, Camera…">
+        </label>
+        <label>Filter <select id="inventory-filter">
+            <option>All</option><option>Online</option><option>Offline Known</option><option>Unknown</option>
+            <option>Candidate Free</option><option>Kepware</option><option>Manual</option><option>Scan Only</option>
+        </select></label>
+        <label>Sort <select id="inventory-sort">
+            <option value="IPAddress">IP Address</option><option value="MachineName">Machine Name</option>
+            <option value="Status">Status</option><option value="LastSeen">Last Seen</option>
+        </select></label>
+        <label><input id="inventory-descending" type="checkbox"> Descending</label>
+    </div>
+    <p id="inventory-message" role="status" aria-live="polite"></p>
+    <div class="inventory-table-scroll">
+        <table class="inventory-table"><thead><tr>
+            <th>IP Address</th><th>Machine Name</th><th>Status</th><th>Vendor</th><th>Device Type</th>
+            <th>Device Model</th><th>MAC Address</th><th>Host Name</th><th>Kepware Channel</th>
+            <th>Kepware Device</th><th>Last Scan</th><th>Last Seen</th><th>Source</th><th>Description / Location</th>
+        </tr></thead><tbody id="inventory-rows"></tbody></table>
+    </div>
+    <section id="inventory-detail" class="hidden" aria-label="IP details">
+        <h3 id="inventory-detail-title"></h3>
+        <dl id="inventory-current" class="object-properties"></dl>
+        <form id="inventory-manual">
+            <h3>Manual identity / reservation</h3>
+            <div class="inventory-toolbar">
+                <label>Machine Name <input name="MachineName" maxlength="2000"></label>
+                <label>Description <input name="Description" maxlength="2000"></label>
+                <label>Location <input name="Location" maxlength="2000"></label>
+                <label>Remark <input name="Remark" maxlength="2000"></label>
+                <button type="submit">Save New Manual Revision</button>
+            </div>
+        </form>
+        <p id="inventory-detail-message" role="status"></p>
+        <div id="inventory-histories"></div>
+    </section>
+</section>

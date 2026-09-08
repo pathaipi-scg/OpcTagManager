@@ -355,6 +355,16 @@ def get_conn():
     )
 
 
+from config.config import OT_SCAN_START, OT_SCAN_END, OT_OUI_FILE, OT_RESOLVE_HOSTNAMES
+from services.network_inventory import InventoryStore, NetworkInventory
+from services.network_inventory_routes import inventory_router
+
+inventory_oui = json.loads(Path(OT_OUI_FILE).read_text(encoding="utf-8")) if OT_OUI_FILE else {}
+network_inventory = NetworkInventory(InventoryStore(get_conn), kepware_config_api,
+                                     OT_SCAN_START, OT_SCAN_END, oui=inventory_oui,
+                                     resolve_hostnames=OT_RESOLVE_HOSTNAMES)
+app.include_router(inventory_router(network_inventory))
+
 tag_registry = TagRegistry(get_conn)
 reload_control_path = "/".join((RELOAD_ALARM_CHANNEL, RELOAD_ALARM_DEVICE,
                                 *RELOAD_ALARM_GROUP_PATH, "RELOAD_ALARM"))

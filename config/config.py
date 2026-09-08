@@ -85,6 +85,12 @@ def get_choice_default(name: str, allowed: set[str], default: str) -> str:
 
 
 # Application
+OT_SCAN_START = get_optional("OT_SCAN_START")
+OT_SCAN_END = get_optional("OT_SCAN_END")
+# Optional local JSON object mapping AA:BB:CC prefixes to verified vendor names.
+OT_OUI_FILE = get_optional("OT_OUI_FILE")
+OT_RESOLVE_HOSTNAMES = get_bool_default("OT_RESOLVE_HOSTNAMES", False)
+
 APP_HOST = get_required("APP_HOST")
 APP_PORT = get_int("APP_PORT")
 LOG_LEVEL = get_required("LOG_LEVEL")

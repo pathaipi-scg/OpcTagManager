@@ -825,6 +825,8 @@ viewTabs.forEach((tab) => {
         const isKepware = tab.dataset.view === "kepware";
         const isOpcRuntime = tab.dataset.view === "opc-runtime";
         const isAlarmHelp = tab.dataset.view === "alarm-help";
+        const isInventory = tab.dataset.view === "network-inventory";
+        document.getElementById("network-inventory-workspace").classList.toggle("hidden", !isInventory);
         viewTabs.forEach((item) => item.classList.toggle("active", item === tab));
         document.getElementById("runtime-tree-view").classList.toggle("hidden", isKepware);
         document.getElementById("kepware-tree-view").classList.toggle("hidden", !isKepware);
@@ -832,21 +834,21 @@ viewTabs.forEach((tab) => {
         document.getElementById("kepware-details-view").classList.toggle("hidden", !isKepware);
         document.getElementById("full-reconcile").classList.toggle("hidden", isKepware);
         workspace.classList.toggle("runtime-mode", !isKepware);
-        alarmTopWorkspace.classList.toggle("hidden", isKepware || isOpcRuntime || isAlarmHelp);
+        alarmTopWorkspace.classList.toggle("hidden", isKepware || isOpcRuntime || isAlarmHelp || isInventory);
         tagConfigurationWorkspace.classList.toggle("hidden", !isKepware);
         opcRuntimeWorkspace.classList.toggle("hidden", !isOpcRuntime);
         alarmHelpWorkspace.classList.toggle("hidden", !isAlarmHelp);
-        if (!isOpcRuntime && !isAlarmHelp) {
+        if (!isOpcRuntime && !isAlarmHelp && !isInventory) {
             (isKepware ? tagConfigurationWorkspace : alarmTopWorkspace).appendChild(workspace);
         }
         mainPanelSplitter.classList.toggle("hidden", isKepware);
-        alarmCenterSplitter.classList.toggle("hidden", isOpcRuntime || isAlarmHelp);
-        document.getElementById("alarm-summary").classList.toggle("hidden", isKepware || isOpcRuntime || isAlarmHelp);
-        alarmHorizontalSplitter.classList.toggle("hidden", isKepware || isOpcRuntime || isAlarmHelp);
-        runtimeSecondaryHost.classList.toggle("hidden", isKepware || isOpcRuntime || isAlarmHelp);
+        alarmCenterSplitter.classList.toggle("hidden", isOpcRuntime || isAlarmHelp || isInventory);
+        document.getElementById("alarm-summary").classList.toggle("hidden", isKepware || isOpcRuntime || isAlarmHelp || isInventory);
+        alarmHorizontalSplitter.classList.toggle("hidden", isKepware || isOpcRuntime || isAlarmHelp || isInventory);
+        runtimeSecondaryHost.classList.toggle("hidden", isKepware || isOpcRuntime || isAlarmHelp || isInventory);
         (isKepware ? configurationKepwareTreeHost : runtimeKepwareTreeHost).appendChild(kepwareTree);
 
-        if (!kepwareLoaded && !isAlarmHelp) {
+        if (!kepwareLoaded && !isAlarmHelp && !isInventory) {
             kepwareLoaded = true;
             loadKepwareChannels();
         }
@@ -854,7 +856,7 @@ viewTabs.forEach((tab) => {
             applyAlarmTopHeight();
             applyMainPanelRatio();
         }
-        if (!isKepware && !isOpcRuntime && !isAlarmHelp) {
+        if (!isKepware && !isOpcRuntime && !isAlarmHelp && !isInventory) {
             applyAlarmPaneWidths();
             applyAlarmTopHeight();
             runtimeSecondaryHost.append(operatorHealth, diagnosticsPanel);

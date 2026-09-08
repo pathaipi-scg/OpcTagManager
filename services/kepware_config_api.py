@@ -353,9 +353,9 @@ class KepwareConfigApi:
         data = self._collection(self._get("/project/channels", use_cache=False), "Channel")
         return [self._node("Channel", name := self._name(p, "Channel"), name, p, {"channel": name}) for p in data]
 
-    def get_devices(self, channel: str) -> list[dict[str, Any]]:
+    def get_devices(self, channel: str, *, use_cache: bool = True) -> list[dict[str, Any]]:
         api_path = f"/project/channels/{self._segment(channel, 'Channel')}/devices"
-        devices = self._collection(self._get(api_path), "Device")
+        devices = self._collection(self._get(api_path, use_cache=use_cache), "Device")
         return [
             self._node(
                 "Device",
@@ -366,6 +366,9 @@ class KepwareConfigApi:
             )
             for properties in devices
         ]
+
+    def get_devices_uncached(self, channel: str) -> list[dict[str, Any]]:
+        return self.get_devices(channel, use_cache=False)
 
     def get_device(self, channel: str, device: str) -> dict[str, Any] | None:
         path = f"/project/channels/{self._segment(channel, 'Channel')}/devices"
