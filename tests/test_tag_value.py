@@ -1,13 +1,34 @@
 import asyncio
+import json
 import unittest
 from unittest.mock import AsyncMock, MagicMock
 from asyncua import ua
-from services.tag_value import TagValueReader, read_attributes_once
+from services.tag_value import TagValueReader, PreviewClient, read_attributes_once
+from asyncua import Client
 from asyncua.ua.ua_binary import struct_to_binary
 from asyncua.common.utils import Buffer
 from unittest.mock import patch
 import OpcTagManager
 import test_app
+
+
+class PreviewTransportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_session_helper_timeout_is_overridden_only_on_preview(self):
+        client = PreviewClient('opc.tcp://test', timeout=8)
+        protocol = MagicMock()
+        protocol.send_request = AsyncMock(return_value='response')
+        original_send = protocol.send_request
+        client.uaclient.protocol = protocol
+        trace = MagicMock()
+        client.preview_trace = trace
+        with patch.object(Client, 'connect_socket', new_callable=AsyncMock):
+            await client.connect_socket()
+        request = ua.ActivateSessionRequest()
+        self.assertEqual(await protocol.send_request(request, timeout=1), 'response')
+        original_send.assert_awaited_once_with(request, timeout=8, message_type=ua.MessageType.SecureMessage)
+        self.assertGreater(client._watchdog_intervall, 10)
+        trace.assert_any_call('ua_request_start', request='ActivateSessionRequest',
+                              timeout_seconds=8, helper_timeout_seconds=1)
 
 class TagValueTests(unittest.IsolatedAsyncioTestCase):
     async def test_wire_read_uses_explicit_timeout_and_exact_node(self):
@@ -50,6 +71,9 @@ class TagValueTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['quality'], 'Good')
         self.assertIn('+00:00', result['read_at'])
         self.assertTrue(result['connected_at_read'])
+        self.assertEqual([t['event'] for t in result['timings']],
+                         ['client_create', 'connect_start', 'session_activated',
+                          'read_data_value_start', 'read_data_value_finish', 'service_finish'])
         self.node.read_data_value.assert_awaited_once_with(raise_on_bad_status=False)
         self.client.__aexit__.assert_awaited_once()
         self.assertEqual([c[0] for c in self.node.mock_calls], ['read_data_value'])
@@ -104,8 +128,11 @@ class TagValueRouteTests(unittest.TestCase):
     def test_exact_node(self):
         with patch.object(OpcTagManager.TagValueReader, 'read', new_callable=AsyncMock) as read:
             read.return_value = {'success': True, 'value': '42'}
-            status, _ = test_app.OpcTagManagerAppTests.request('POST', '/api/opc-tags/current-value', {'node_id': 'ns=2;s=A'})
+            status, result = test_app.OpcTagManagerAppTests.request('POST', '/api/opc-tags/current-value', {'node_id': 'ns=2;s=A'})
             self.assertEqual(status, 200)
+            result = json.loads(result)
+            self.assertIn('api_request_started', result)
+            self.assertIn('endpoint_duration_ms', result)
             read.assert_awaited_once_with('ns=2;s=A')
 
     def test_rejects_multiple_nodes_and_write_payload(self):

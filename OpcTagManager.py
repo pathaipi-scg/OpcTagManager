@@ -5,6 +5,7 @@ from contextlib import suppress
 import json
 import logging
 import re
+from time import perf_counter
 from datetime import datetime
 from typing import Literal
 from urllib.parse import urlencode
@@ -617,7 +618,14 @@ class TagValueRequest(BaseModel):
 
 @app.post("/api/opc-tags/current-value")
 async def read_current_tag_value(payload: TagValueRequest):
+    started = perf_counter()
+    request_started = datetime.now().astimezone().isoformat()
+    logger.info("Current Value API start node=%s at=%s", payload.node_id, request_started)
     result = await TagValueReader(OPC_URL).read(payload.node_id)
+    result["api_request_started"] = request_started
+    result["endpoint_duration_ms"] = round((perf_counter() - started) * 1000, 2)
+    logger.info("Current Value API finish node=%s duration_ms=%s success=%s",
+                payload.node_id, result["endpoint_duration_ms"], result["success"])
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
