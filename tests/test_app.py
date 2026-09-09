@@ -331,6 +331,8 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertIn('selectedMp3 = ""', javascript)
         self.assertIn('Mapping Delete        Failed', javascript)
         self.assertIn('runtimeSecondaryHost.append(operatorHealth, diagnosticsPanel)', javascript)
+        self.assertIn('runtimeSecondaryHost.classList.toggle("hidden", isKepware || isOpcRuntime || isAlarmHelp || isInventory)', javascript)
+        self.assertNotIn('<h3>Operational Health</h3>', html)
         self.assertIn('opcTagManager.alarmPane.leftWidth', javascript)
         self.assertIn('opcTagManager.alarmPane.centerWidth', javascript)
         self.assertIn('opcTagManager.alarmPane.topHeight', javascript)

@@ -861,9 +861,9 @@ viewTabs.forEach((tab) => {
             applyMainPanelRatio();
         }
         if (!isKepware && !isOpcRuntime && !isAlarmHelp && !isInventory) {
+            runtimeSecondaryHost.append(operatorHealth, diagnosticsPanel);
             applyAlarmPaneWidths();
             applyAlarmTopHeight();
-            runtimeSecondaryHost.append(operatorHealth, diagnosticsPanel);
             loadRuntimeStatus();
             loadAlarmMp3();
             loadAlarmSummary();
