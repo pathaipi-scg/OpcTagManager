@@ -1,17 +1,15 @@
 <section id="network-inventory-workspace" class="panel hidden" aria-label="OT Network Inventory">
-    <h2>OT Network Inventory</h2>
-    <div class="inventory-toolbar">
+    <div class="inventory-toolbar inventory-topbar">
         <button type="button" id="inventory-scan">Scan Now</button>
         <button type="button" id="inventory-refresh">Refresh Inventory</button>
         <button type="button" id="inventory-free">Show Candidate Free IPs</button>
-        <span id="inventory-range"></span>
+        <span id="inventory-range">IP range: —</span>
+        <span id="inventory-freshness">Scanned: Never</span>
     </div>
-    <p id="inventory-freshness">Last Inventory Scan: Never</p>
-    <p>Candidate Free means no recorded usage evidence. Confirm site reservations before assigning an IP.</p>
     <div class="inventory-toolbar">
-        <label class="inventory-search">Search IP, machine, vendor or location
-            <input id="inventory-search" type="search" placeholder="172.28.231.45, Packing, Siemens, Camera…">
-        </label>
+        <div class="inventory-search">
+            <input id="inventory-search" type="search" aria-label="Search IP, machine, vendor or location" placeholder="172.28.231.45, Packing, Siemens, Camera…">
+        </div>
         <label>Filter <select id="inventory-filter">
             <option>All</option><option>Online</option><option>Offline Known</option><option>Unknown</option>
             <option>Candidate Free</option><option>Kepware</option><option>Manual</option><option>Scan Only</option>
@@ -23,6 +21,17 @@
         <label><input id="inventory-descending" type="checkbox"> Descending</label>
     </div>
     <p id="inventory-message" role="status" aria-live="polite"></p>
+    <form id="inventory-manual">
+        <div class="inventory-manual-heading"><strong>Manual Identity / reservation</strong><span id="inventory-manual-selection" aria-live="polite">Select an IP to edit</span></div>
+        <div class="inventory-toolbar">
+            <label>Machine Name <input name="MachineName" maxlength="2000" disabled></label>
+            <label>Description <input name="Description" maxlength="2000" disabled></label>
+            <label>Location <input name="Location" maxlength="2000" disabled></label>
+            <label>Remark <input name="Remark" maxlength="2000" disabled></label>
+            <button id="inventory-manual-save" type="submit" disabled>Save New Manual Revision</button>
+        </div>
+        <p id="inventory-manual-message" role="status"></p>
+    </form>
     <div class="inventory-table-scroll">
         <table class="inventory-table inventory-main-table"><colgroup>
             <col class="inventory-col-ip"><col class="inventory-col-name"><col class="inventory-col-status">
@@ -36,16 +45,6 @@
     <section id="inventory-detail" class="hidden" aria-label="IP details">
         <h3 id="inventory-detail-title"></h3>
         <dl id="inventory-current" class="object-properties"></dl>
-        <form id="inventory-manual">
-            <h3>Manual identity / reservation</h3>
-            <div class="inventory-toolbar">
-                <label>Machine Name <input name="MachineName" maxlength="2000"></label>
-                <label>Description <input name="Description" maxlength="2000"></label>
-                <label>Location <input name="Location" maxlength="2000"></label>
-                <label>Remark <input name="Remark" maxlength="2000"></label>
-                <button type="submit">Save New Manual Revision</button>
-            </div>
-        </form>
         <p id="inventory-detail-message" role="status"></p>
         <div id="inventory-histories"></div>
     </section>

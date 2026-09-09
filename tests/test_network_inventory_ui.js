@@ -42,6 +42,7 @@ test('tab loads inventory without scanning; displays names as text and UTC times
     assert.equal(ui.calls.length, 0);
     await ui.get('tab').events.click();
     assert.equal(ui.calls.length, 1);
+    assert.equal(ui.get('inventory-message').textContent, '');
     assert(!ui.calls[0].url.includes('/scan'));
     const cells = ui.get('inventory-rows').children[0].children;
     assert.equal(cells[1].textContent, row.MachineName);
@@ -52,7 +53,8 @@ test('tab loads inventory without scanning; displays names as text and UTC times
     assert.deepEqual(cells.slice(1).map(cell => cell.textContent), [row.MachineName, row.Status,
         row.KepwareDevice, new Date(`${row.LastSeen}Z`).toLocaleString(), 'Mixer / Packing', row.Vendor, row.DeviceType]);
     assert.equal(cells[4].title, cells[4].textContent);
-    assert(ui.get('inventory-freshness').textContent.includes(new Date(`${row.LastScan}Z`).toLocaleString()));
+    assert.equal(ui.get('inventory-freshness').textContent, `Scanned: ${new Date(`${row.LastScan}Z`).toLocaleString()}`);
+    assert.equal(ui.get('inventory-range').textContent, `IP range: ${current.scan_start}-${current.scan_end}`);
 });
 
 test('candidate action clears search and submits exact filter', async () => {
@@ -79,11 +81,17 @@ test('scan is explicit, POST-only and disables button until completed', async ()
 
 test('selected IP loads all three histories and manual save posts a new revision', async () => {
     const ui = setup(async url => ok(url.endsWith('/history') ? {network: [{ScanTime: row.LastScan}], kepware: [], manual: []} : current));
+    assert.equal(ui.get('inventory-manual-save').disabled, true);
+    assert.equal(ui.get('field-MachineName').disabled, true);
+    assert.equal(ui.get('inventory-manual-selection').textContent, 'Select an IP to edit');
     await ui.get('tab').events.click();
     ui.get('inventory-rows').children[0].children[0].children[0].events.click();
     await new Promise(resolve => setImmediate(resolve));
     assert(ui.calls.some(call => call.url === `/api/network-inventory/${row.IPAddress}/history`));
     assert.equal(ui.get('inventory-histories').children.length, 3);
+    assert.equal(ui.get('inventory-manual-save').disabled, false);
+    assert.equal(ui.get('field-MachineName').disabled, false);
+    assert.equal(ui.get('inventory-manual-selection').textContent, `Editing IP: ${row.IPAddress}`);
     const details = ui.get('inventory-current').children;
     const fields = new Map();
     for (let i = 0; i < details.length; i += 2) fields.set(details[i].textContent, details[i + 1].textContent);
@@ -97,6 +105,22 @@ test('selected IP loads all three histories and manual save posts a new revision
     const save = ui.calls.find(call => call.url.endsWith('/manual'));
     assert.equal(save.options.method, 'POST');
     assert.equal(JSON.parse(save.options.body).MachineName, 'Packing Camera');
+    assert.equal(save.url, `/api/network-inventory/${row.IPAddress}/manual`);
+    assert.match(ui.get('inventory-manual-message').textContent, /Previous revisions preserved/);
+});
+
+test('filtering out the selected IP clears and disables the editor; submitting cannot save', async () => {
+    let visible = true;
+    const ui = setup(async url => ok(url.endsWith('/history') ? {network: [], kepware: [], manual: []} : {...current, rows: visible ? [row] : []}));
+    await ui.get('tab').events.click();
+    await ui.get('inventory-rows').children[0].children[0].children[0].events.click();
+    ui.get('field-MachineName').value = 'Draft';
+    visible = false;
+    await ui.get('inventory-refresh').events.click();
+    assert.equal(ui.get('field-MachineName').value, '');
+    assert.equal(ui.get('inventory-manual-save').disabled, true);
+    await ui.get('inventory-manual').events.submit({preventDefault() {}});
+    assert.equal(ui.calls.filter(call => call.url.endsWith('/manual')).length, 0);
 });
 
 test('out-of-order refresh responses cannot overwrite the latest search', async () => {
@@ -114,4 +138,10 @@ test('configuration/database errors are visible', async () => {
     const ui = setup(async () => ({ok: false, json: async () => ({error: 'Configure OT_SCAN_START'})}));
     await ui.get('tab').events.click();
     assert.equal(ui.get('inventory-message').textContent, 'Configure OT_SCAN_START');
+});
+
+test('removing the address count preserves Kepware scan errors', async () => {
+    const ui = setup(async () => ok({...current, last_run: {KepwareError: 'Kepware capture unavailable'}}));
+    await ui.get('tab').events.click();
+    assert.equal(ui.get('inventory-message').textContent, 'Kepware capture unavailable');
 });

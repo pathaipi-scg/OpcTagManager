@@ -1,20 +1,13 @@
 {% extends "base.html" %}
 
 {% block content %}
-<header class="header-bar">
-    <h1>OpcTagManager</h1>
-
-    <div class="header-actions">
-        <button type="button" id="theme-toggle" class="theme-toggle" aria-label="Switch to Light theme">☀ Light</button>
-    </div>
-</header>
-
 <nav class="view-tabs" aria-label="Tag tree source">
     <button type="button" class="view-tab active" data-view="runtime">OPC Tag List</button>
     <button type="button" class="view-tab" data-view="kepware">Tag Configuration</button>
     <button type="button" class="view-tab" data-view="opc-runtime">OPC Runtime</button>
     <button type="button" class="view-tab" data-view="alarm-help">Alarm Help</button>
     <button type="button" class="view-tab" data-view="network-inventory">OT Network Inventory</button>
+    <button type="button" id="theme-toggle" class="theme-toggle" aria-label="Switch to Light theme">☀ Light</button>
 </nav>
 
 {% include "network_inventory.html" %}
@@ -25,7 +18,6 @@
     <div id="alarm-upper-workspace" class="alarm-upper-workspace">
     <section class="panel tree-panel" aria-label="Tag tree">
         <div id="runtime-tree-view" class="tree-view">
-            <h2>OPC Tag List</h2>
             <div class="alarm-filter" role="tablist" aria-label="Alarm authoring tag source">
                 <button type="button" class="alarm-filter-button active" data-alarm-filter="all">All Tags</button>
                 <button type="button" class="alarm-filter-button" data-alarm-filter="alarm">Alarm Tags</button>
@@ -98,7 +90,6 @@
             data-default-access="{{ kepware_tag_default_access }}"
         >
             <div class="kepware-heading">
-                <h2>Tag Configuration Tree</h2>
                 <div class="kepware-controls">
                 <span id="kepware-status" class="connection-status pending">
                     Kepware API: Checking…
@@ -230,7 +221,6 @@
 
         <div id="kepware-details-view" class="details-view hidden">
             <h2>Selected Kepware Object</h2>
-            <p id="kepware-no-selection">Select an object in the Tag Configuration Tree.</p>
 
             <div id="kepware-object-details" class="hidden">
                 <dl class="object-properties">
@@ -476,12 +466,10 @@
     </article>
     <article class="runtime-activity-pane">
         <h2>Influx Write Activity</h2>
-        <p class="tree-counts">Actual results returned by InfluxWriter.write().</p>
         <div id="influx-activity-list" class="runtime-activity-list" aria-live="polite"></div>
     </article>
     <article class="runtime-activity-pane">
         <h2>Alarm Tag Activity</h2>
-        <p class="tree-counts">Diagnostics only. alarm_sound remains playback authority.</p>
         <dl class="runtime-activity-summary">
             <dt>Configured</dt><dd id="activity-alarm-configured">0</dd>
             <dt>Active</dt><dd id="activity-alarm-active">0</dd>
@@ -537,7 +525,6 @@
     <button type="button" id="alarm-help-open-history" class="alarm-help-open-history" aria-controls="alarm-help-history" aria-expanded="false" title="Open history sidebar"><span aria-hidden="true">&#9654;</span><span class="alarm-help-toggle-label">Open history</span></button>
     <article class="alarm-help-detail panel">
         <div class="alarm-help-heading">
-            <h2>Alarm Detail</h2>
             <div class="preview-actions">
                 <button type="button" id="alarm-help-refresh-latest">Refresh Latest</button>
                 <button type="button" id="alarm-help-refresh-all">Refresh All</button>

@@ -1660,7 +1660,6 @@ function selectKepwareObject(button, node) {
 }
 
 function displayKepwareObject(node) {
-    document.getElementById("kepware-no-selection").classList.add("hidden");
     document.getElementById("kepware-object-details").classList.remove("hidden");
     document.getElementById("kepware-object-type").textContent = node.object_type;
     document.getElementById("kepware-object-name").textContent = node.name;

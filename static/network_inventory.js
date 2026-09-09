@@ -4,6 +4,17 @@
     const root = document.getElementById("network-inventory-workspace");
     if (!root) return;
     let rows = [], selected = null, generation = 0, detailGeneration = 0;
+    let saving = false;
+    function updateManualState() {
+        el("manual-selection").textContent = selected ? `Editing IP: ${selected.IPAddress}` : "Select an IP to edit";
+        for (const key of ["MachineName", "Description", "Location", "Remark"]) {
+            const field = el("manual").elements.namedItem(key);
+            field.disabled = !selected || saving;
+            if (!selected) field.value = "";
+        }
+        el("manual-save").disabled = !selected || saving;
+    }
+    updateManualState();
     const timestamp = value => value ? new Date(/[zZ]$|[+-]\d\d:\d\d$/.test(value) ? value : `${value}Z`).toLocaleString() : "Never";
     const cellText = (key, value) => /Time$|At$|^Last(Scan|Seen)$/.test(key) ? timestamp(value) : (value ?? "Unknown");
     async function api(path = "", options = {}) {
@@ -26,9 +37,9 @@
             const data = await api(`?${params}`);
             if (request !== generation) return;
             rows = data.rows;
-            el("range").textContent = `Configured OT range: ${data.scan_start} – ${data.scan_end}`;
-            el("freshness").textContent = `Last Inventory Scan: ${timestamp(data.last_run?.FinishedAt)} (local time)`;
-            el("message").textContent = `${rows.length} addresses. ${data.last_run?.KepwareError || ""}`;
+            el("range").textContent = `IP range: ${data.scan_start}-${data.scan_end}`;
+            el("freshness").textContent = `Scanned: ${timestamp(data.last_run?.FinishedAt)}`;
+            el("message").textContent = data.last_run?.KepwareError || "";
             el("rows").replaceChildren();
             for (const row of rows) {
                 const tr = document.createElement("tr");
@@ -54,6 +65,8 @@
                 if (current) await showDetails(current);
                 else {
                     selected = null;
+                    updateManualState();
+                    el("manual-message").textContent = "";
                     ++detailGeneration;
                     el("detail").classList.add("hidden");
                 }
@@ -64,6 +77,8 @@
     }
     async function showDetails(row) {
         selected = row;
+        updateManualState();
+        el("manual-message").textContent = "";
         const request = ++detailGeneration;
         el("detail").classList.remove("hidden");
         el("detail-title").textContent = `${row.IPAddress} — ${row.MachineName}`;
@@ -110,16 +125,18 @@
     });
     el("manual").addEventListener("submit", async event => {
         event.preventDefault();
-        if (!selected) return;
-        const button = event.submitter;
-        button.disabled = true;
+        if (!selected || saving) return;
+        const ip = selected.IPAddress;
+        const body = Object.fromEntries(new FormData(el("manual")));
+        saving = true;
+        updateManualState();
+        el("manual-message").textContent = `Saving revision for ${ip}…`;
         try {
-            const body = Object.fromEntries(new FormData(el("manual")));
-            await api(`/${selected.IPAddress}/manual`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+            await api(`/${ip}/manual`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
             await refresh();
-            el("detail-message").textContent = "Manual revision saved. Previous revisions preserved.";
-        } catch (error) { el("detail-message").textContent = error.message; }
-        finally { button.disabled = false; }
+            el("manual-message").textContent = `Manual revision saved for ${ip}. Previous revisions preserved.`;
+        } catch (error) { el("manual-message").textContent = error.message; }
+        finally { saving = false; updateManualState(); }
     });
     let debounce;
     el("search").addEventListener("input", () => { clearTimeout(debounce); debounce = setTimeout(refresh, 180); });
