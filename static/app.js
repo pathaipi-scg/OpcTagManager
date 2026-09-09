@@ -26,7 +26,7 @@ async function refreshTagValue() {
     tagValueController = controller;
     button.disabled = true;
     document.getElementById("current-tag-value").textContent = "Reading…";
-    const timeout = setTimeout(() => controller.abort(), 8000);
+    const timeout = setTimeout(() => controller.abort(), 18000);
     try {
         const response = await fetch("/api/opc-tags/current-value", {
             method: "POST",
@@ -36,7 +36,11 @@ async function refreshTagValue() {
         });
         const data = await response.json();
         if (generation !== tagValueGeneration) return;
-        if (!response.ok || !data.success) throw new Error(data.error || "Current value unavailable.");
+        if (!response.ok || !data.success) {
+            document.getElementById("current-tag-quality").textContent =
+                [data.quality, data.status_code].filter(Boolean).join(" ") || "No OPC DataValue received";
+            throw new Error(data.error || data.exception_message || "Current value unavailable.");
+        }
         document.getElementById("current-tag-value").textContent = data.value;
         document.getElementById("current-tag-quality").textContent = data.quality;
         document.getElementById("current-tag-read-at").textContent = data.read_at;

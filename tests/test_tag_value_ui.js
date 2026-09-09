@@ -3,6 +3,17 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
+test('failed read displays actual OPC status and error safely', async () => {
+    const ui = setup(async () => ({ok: true, json: async () => ({
+        success: false, quality: 'BadNodeIdUnknown', status_code: '0x80340000',
+        error: 'OPC UA BadNodeIdUnknown: <node>'
+    })}));
+    ui.run('selectedRuntimeTag = {nodeId: "ns=2;s=A"}; resetTagValuePreview()');
+    await ui.run('refreshTagValue()');
+    assert.equal(ui.elements.get('current-tag-value').textContent, 'OPC UA BadNodeIdUnknown: <node>');
+    assert.equal(ui.elements.get('current-tag-quality').textContent, 'BadNodeIdUnknown 0x80340000');
+});
+
 function setup(fetch) {
     const elements = new Map();
     const context = vm.createContext({
