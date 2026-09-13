@@ -17,7 +17,7 @@ test('left views are exclusive and switching preserves selection and list conten
         return elements.get(id);
     } };
     const source = fs.readFileSync('static/app.js', 'utf8');
-    const context = vm.createContext({ document, findKepwareTagByPath: async () => null, selectedAlarm: null, selectedRuntimeTag: { path: 'Channel/Device/Tag' } });
+    const context = vm.createContext({ document, runtimeKepwareTreeHost: { appendChild() {} }, kepwareTree: {}, ensureKepwareRoot: async () => {}, findKepwareTagByPath: async () => null, selectedAlarm: null, selectedRuntimeTag: { path: 'Channel/Device/Tag' } });
     vm.runInContext(source.slice(source.indexOf('function revealNavigationItem('), source.indexOf('function renderAlarmTagTree(')), context);
     const row = {};
     document.getElementById('alarm-summary').children.push(row);
@@ -98,6 +98,7 @@ test('live path lookup loads each ancestor, shares pending root load and stops s
     let finishRoot;
     const rootPromise = new Promise(resolve => { finishRoot = () => { tree.nodes = [channel]; resolve(); }; });
     const context = vm.createContext({ kepwareLoaded: true, kepwareChannelsPromise: rootPromise,
+        ensureKepwareRoot: () => rootPromise,
         document: { getElementById: () => tree },
         async ensureKepwareChildren(button) {
             loaded.push(button.kepwareNode.name);
@@ -122,6 +123,7 @@ test('late All Tags lookup cannot reveal an old path or overwrite right-side sta
     const revealed = [];
     const state = { path: 'Channel/Device/Tag' };
     const context = vm.createContext({ selectedRuntimeTag: state, selectedMp3: 'sound.mp3', activePreviewTag: state,
+        runtimeKepwareTreeHost: { appendChild() {} }, kepwareTree: {}, ensureKepwareRoot: async () => {},
         document: { querySelectorAll: () => [], querySelector: () => ({ classList: { contains: () => true } }),
             getElementById: () => ({ classList: { toggle() {} } }) },
         syncAlarmNavigationSelection: view => revealed.push(view),
@@ -129,11 +131,13 @@ test('late All Tags lookup cannot reveal an old path or overwrite right-side sta
     const source = fs.readFileSync('static/app.js', 'utf8');
     vm.runInContext(source.slice(source.indexOf('let alarmNavigationGeneration'), source.indexOf('function renderAlarmTagTree(')), context);
     const pending = context.setAlarmNavigationView('all');
+    await new Promise(setImmediate);
     await context.setAlarmNavigationView('alarm');
     finish();
     await pending;
     assert.deepEqual(revealed, ['all', 'alarm']);
     const next = context.setAlarmNavigationView('all');
+    await new Promise(setImmediate);
     state.path = 'Channel/Device/NewTag';
     finish();
     await next;
@@ -143,4 +147,59 @@ test('late All Tags lookup cannot reveal an old path or overwrite right-side sta
     context.findKepwareTagByPath = async () => { throw new Error('unavailable'); };
     await assert.doesNotReject(context.setAlarmNavigationView('all'));
     assert.equal(context.selectedRuntimeTag, state);
+});
+
+test('All Tags restores the full live root before best-effort navigation, even after a failed initial load', async () => {
+    const source = fs.readFileSync('static/app.js', 'utf8');
+    // Exercise startup order: the initial runtime click must see initialized loader state.
+    assert.ok(source.indexOf('let kepwareChannelsPromise = null;') < source.indexOf("document.querySelector('.view-tab[data-view=\"runtime\"]').click();", source.indexOf('// Alarm authoring')));
+    for (const from of ['list', 'alarm']) {
+        const state = { path: 'LP2/MIX/FML/DryMix' };
+        const tree = { nodes: [], querySelector() { return this.nodes[0]; } };
+        const host = { appendChild(node) { this.tree = node; } };
+        let completeRoot;
+        let loads = 0;
+        const navigation = [];
+        const context = vm.createContext({ selectedRuntimeTag: state, selectedMp3: 'sound.mp3', activePreviewTag: state,
+            kepwareLoaded: true, kepwareChannelsPromise: null, kepwareTree: tree, runtimeKepwareTreeHost: host,
+            document: { querySelectorAll: () => [], querySelector: () => ({ classList: { contains: () => true } }),
+                getElementById: () => ({ classList: { toggle() {} } }) },
+            syncAlarmNavigationSelection() {},
+            fetchKepwareChannels() {
+                loads++;
+                return new Promise(resolve => { completeRoot = () => { tree.nodes = ['LP2', 'OtherChannel']; resolve(); }; });
+            },
+            async findKepwareTagByPath(path) {
+                assert.equal(host.tree, tree);
+                assert.deepEqual(tree.nodes, ['LP2', 'OtherChannel']);
+                navigation.push(path);
+                if (path.endsWith('Missing')) throw new Error('missing');
+            } });
+        vm.runInContext(source.slice(source.indexOf('async function ensureKepwareRoot('), source.indexOf('async function fetchKepwareChannels(')), context);
+        vm.runInContext(source.slice(source.indexOf('let alarmNavigationGeneration'), source.indexOf('function renderAlarmTagTree(')), context);
+        await context.setAlarmNavigationView(from);
+        const pending = context.setAlarmNavigationView('all');
+        assert.equal(loads, 1);
+        assert.deepEqual(navigation, []);
+        completeRoot();
+        await pending;
+        assert.deepEqual(navigation, [state.path]);
+        assert.deepEqual(tree.nodes, ['LP2', 'OtherChannel']);
+        state.path = 'LP2/MIX/FML/Missing';
+        await context.setAlarmNavigationView(from);
+        await context.setAlarmNavigationView('all');
+        assert.deepEqual(tree.nodes, ['LP2', 'OtherChannel']);
+        assert.equal(loads, 1);
+        assert.equal(context.selectedRuntimeTag, state);
+        assert.equal(context.activePreviewTag, state);
+        assert.equal(context.selectedMp3, 'sound.mp3');
+        // No selected tag must still restore an empty root.
+        context.selectedRuntimeTag = null;
+        tree.nodes = [];
+        const emptySelection = context.setAlarmNavigationView('all');
+        completeRoot();
+        await emptySelection;
+        assert.deepEqual(tree.nodes, ['LP2', 'OtherChannel']);
+        assert.equal(loads, 2);
+    }
 });

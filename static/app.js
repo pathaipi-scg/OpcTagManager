@@ -414,13 +414,21 @@ async function setAlarmNavigationView(view) {
     document.getElementById("runtime-tree-description").classList.toggle("hidden", view !== "all");
     document.getElementById("alarm-summary").classList.toggle("hidden", view !== "list");
     document.getElementById("alarm-tag-tree").classList.toggle("hidden", view !== "alarm");
-    syncAlarmNavigationSelection(view);
-    if (view !== "all" || !selectedRuntimeTag?.path) return;
-    const path = selectedRuntimeTag.path;
-    const isCurrent = () => generation === alarmNavigationGeneration
-        && selectedRuntimeTag?.path === path
+    if (view !== "all") {
+        syncAlarmNavigationSelection(view);
+        return;
+    }
+    const isCurrentView = () => generation === alarmNavigationGeneration
         && document.querySelector('.view-tab[data-view="runtime"]').classList.contains("active");
     try {
+        // Restore the live source independently of whether a selected path exists.
+        runtimeKepwareTreeHost.appendChild(kepwareTree);
+        await ensureKepwareRoot();
+        if (!isCurrentView()) return;
+        syncAlarmNavigationSelection(view);
+        const path = selectedRuntimeTag?.path;
+        if (!path) return;
+        const isCurrent = () => isCurrentView() && selectedRuntimeTag?.path === path;
         await findKepwareTagByPath(path, isCurrent);
         if (isCurrent()) syncAlarmNavigationSelection(view);
     } catch (_error) {
@@ -768,6 +776,7 @@ document.getElementById("preview-alarm-mp3").addEventListener("click", () => {
 
 const viewTabs = document.querySelectorAll(".view-tab");
 let kepwareLoaded = false;
+let kepwareChannelsPromise = null;
 let loadedCounts = { channels: 0, devices: 0, tag_groups: 0, tags: 0 };
 const kepwareWriteEnabled =
     document.getElementById("kepware-tree-view").dataset.writeEnabled === "true";
@@ -1334,11 +1343,7 @@ async function findKepwareTagByPath(kepwarePath, isCurrent = () => true) {
             ? kepwarePath.split("/").filter(Boolean)
             : kepwarePath.split(".").filter(Boolean);
         if (parts.length < 3) throw new Error("missing");
-        if (!kepwareLoaded) {
-            kepwareLoaded = true;
-            await loadKepwareChannels();
-        }
-        if (kepwareChannelsPromise) await kepwareChannelsPromise;
+        await ensureKepwareRoot();
         if (!isCurrent()) return null;
         const findButton = (container, predicate) =>
             [...container.querySelectorAll(".kepware-object")].find((button) => predicate(button.kepwareNode));
@@ -1428,7 +1433,14 @@ document.getElementById("refresh-kepware").addEventListener("click", async () =>
     await loadKepwareChannels(true);
 });
 
-let kepwareChannelsPromise = null;
+async function ensureKepwareRoot() {
+    if (kepwareChannelsPromise) {
+        await kepwareChannelsPromise;
+        return;
+    }
+    // The loaded flag may describe an earlier attempt, not a rendered hierarchy.
+    if (!kepwareTree.querySelector(".kepware-object")) await loadKepwareChannels();
+}
 
 async function loadKepwareChannels(refresh = false) {
     if (kepwareChannelsPromise) return kepwareChannelsPromise;
