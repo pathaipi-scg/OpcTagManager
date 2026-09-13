@@ -104,17 +104,11 @@ const tagConfigurationWorkspace = document.getElementById("tag-configuration-wor
 const treePanel = document.querySelector(".tree-panel");
 const detailsPanel = document.querySelector(".details-panel");
 const alarmLeftCenterWorkspace = document.getElementById("alarm-left-center-workspace");
-const alarmUpperWorkspace = document.getElementById("alarm-upper-workspace");
 const mainPanelSplitter = document.getElementById("main-panel-splitter");
 const alarmCenterSplitter = document.getElementById("alarm-center-splitter");
 const alarmLeftWidthKey = "opcTagManager.alarmPane.leftWidth";
 const alarmCenterWidthKey = "opcTagManager.alarmPane.centerWidth";
-const alarmTopHeightKey = "opcTagManager.alarmPane.topHeight";
 const alarmMinimumWidths = { left: 260, center: 240, right: 320 };
-const alarmMinimumHeights = { top: 280, mapping: 160 };
-const alarmHorizontalSplitter = document.getElementById("alarm-horizontal-splitter");
-const alarmMappingWorkspace = document.getElementById("alarm-summary");
-const initialAlarmTopHeight = alarmUpperWorkspace.getBoundingClientRect().height;
 let mainPanelRatio = readSavedPanelRatio();
 let resizeFrame = null;
 
@@ -215,7 +209,6 @@ window.addEventListener("resize", () => {
         applyMainPanelRatio();
         if (workspace.classList.contains("runtime-mode")) {
             applyAlarmPaneWidths();
-            applyAlarmTopHeight();
         }
     });
 });
@@ -281,93 +274,6 @@ function persistAlarmPaneWidths() {
     }
 }
 
-function alarmVerticalTotalHeight() {
-    const style = getComputedStyle(alarmHorizontalSplitter);
-    const splitterHeight = alarmHorizontalSplitter.getBoundingClientRect().height
-        + Number.parseFloat(style.marginTop || "0")
-        + Number.parseFloat(style.marginBottom || "0");
-    return Math.max(
-        alarmMinimumHeights.top + alarmMinimumHeights.mapping,
-        alarmLeftCenterWorkspace.clientHeight - splitterHeight,
-    );
-}
-
-function clampAlarmTopHeight(height) {
-    const total = alarmVerticalTotalHeight();
-    return Math.max(alarmMinimumHeights.top, Math.min(height, total - alarmMinimumHeights.mapping));
-}
-
-function savedAlarmTopHeight() {
-    try {
-        const value = Number.parseFloat(localStorage.getItem(alarmTopHeightKey));
-        return Number.isFinite(value) && value > 0 ? value : null;
-    } catch (_error) {
-        return null;
-    }
-}
-
-function applyAlarmTopHeight(useDefault = false) {
-    if (!workspace.classList.contains("runtime-mode") || workspace.clientWidth <= 980) {
-        alarmUpperWorkspace.style.removeProperty("height");
-        alarmMappingWorkspace.style.removeProperty("height");
-        return;
-    }
-    const requested = useDefault ? initialAlarmTopHeight : (savedAlarmTopHeight() ?? initialAlarmTopHeight);
-    const topHeight = clampAlarmTopHeight(requested);
-    alarmUpperWorkspace.style.height = `${topHeight}px`;
-    alarmMappingWorkspace.style.height = `${alarmVerticalTotalHeight() - topHeight}px`;
-    alarmHorizontalSplitter.setAttribute("aria-valuenow", String(Math.round(topHeight)));
-}
-
-function persistAlarmTopHeight() {
-    try {
-        localStorage.setItem(alarmTopHeightKey, String(alarmUpperWorkspace.getBoundingClientRect().height));
-    } catch (_error) {
-        // Horizontal resizing remains available when browser storage is unavailable.
-    }
-}
-
-function beginAlarmHorizontalResize(event) {
-    if (!workspace.classList.contains("runtime-mode") || workspace.clientWidth <= 980 || event.button !== 0) return;
-    const startY = event.clientY;
-    const startTopHeight = alarmUpperWorkspace.getBoundingClientRect().height;
-    alarmHorizontalSplitter.classList.add("dragging");
-    document.body.style.userSelect = "none";
-    alarmHorizontalSplitter.setPointerCapture?.(event.pointerId);
-
-    const onPointerMove = (moveEvent) => {
-        const topHeight = clampAlarmTopHeight(startTopHeight + moveEvent.clientY - startY);
-        alarmUpperWorkspace.style.height = `${topHeight}px`;
-        alarmMappingWorkspace.style.height = `${alarmVerticalTotalHeight() - topHeight}px`;
-        alarmHorizontalSplitter.setAttribute("aria-valuenow", String(Math.round(topHeight)));
-    };
-    const finishResize = (finishEvent) => {
-        alarmHorizontalSplitter.classList.remove("dragging");
-        document.body.style.userSelect = "";
-        alarmHorizontalSplitter.removeEventListener("pointermove", onPointerMove);
-        alarmHorizontalSplitter.removeEventListener("pointerup", finishResize);
-        alarmHorizontalSplitter.removeEventListener("pointercancel", finishResize);
-        if (alarmHorizontalSplitter.hasPointerCapture?.(finishEvent.pointerId)) {
-            alarmHorizontalSplitter.releasePointerCapture(finishEvent.pointerId);
-        }
-        persistAlarmTopHeight();
-    };
-    alarmHorizontalSplitter.addEventListener("pointermove", onPointerMove);
-    alarmHorizontalSplitter.addEventListener("pointerup", finishResize);
-    alarmHorizontalSplitter.addEventListener("pointercancel", finishResize);
-    event.preventDefault();
-}
-
-alarmHorizontalSplitter.addEventListener("pointerdown", beginAlarmHorizontalResize);
-alarmHorizontalSplitter.addEventListener("dblclick", () => {
-    try {
-        localStorage.removeItem(alarmTopHeightKey);
-    } catch (_error) {
-        // Reset still applies for this page load.
-    }
-    applyAlarmTopHeight(true);
-});
-
 function beginAlarmPaneResize(splitter, event, side) {
     if (!workspace.classList.contains("runtime-mode") || workspace.clientWidth <= 980 || event.button !== 0) return;
     const startX = event.clientX;
@@ -423,9 +329,7 @@ bindAlarmPaneSplitter(alarmCenterSplitter, "center");
 });
 
 async function loadAlarmSummary() {
-    const summary = document.getElementById("alarm-summary");
     const body = document.getElementById("alarm-summary-body");
-    summary.classList.remove("hidden");
     body.replaceChildren();
     const response = await fetch("/api/alarms");
     const data = await response.json();
@@ -434,6 +338,7 @@ async function loadAlarmSummary() {
         return;
     }
     document.getElementById("alarm-summary-count").textContent = `${data.alarms.length} alarms`;
+    renderAlarmTagTree(data.alarms);
     usedAlarmMp3 = new Map();
     data.alarms.filter((alarm) => alarm.mp3_file).forEach((alarm) => {
         const key = alarm.mp3_file.toLocaleLowerCase();
@@ -446,6 +351,7 @@ async function loadAlarmSummary() {
         const row = document.createElement("tr");
         row.dataset.tagid = alarm.tag_id;
         row.dataset.alarmId = String(alarm.alarm_id);
+        row.dataset.canonicalPath = alarm.tag_path;
         row.className = alarm.enable_alarm ? "alarm-enabled" : "alarm-disabled";
         row.classList.toggle("selected-mapping", Number(selectedAlarm?.alarm_id) === Number(alarm.alarm_id));
         row.tabIndex = 0;
@@ -468,16 +374,93 @@ async function loadAlarmSummary() {
         });
         body.appendChild(row);
     });
+    syncAlarmNavigationSelection();
+}
+
+function revealNavigationItem(item) {
+    if (!item) return;
+    for (let parent = item.parentElement; parent; parent = parent.parentElement) {
+        if (parent.tagName === "DETAILS") parent.open = true;
+    }
+    item.scrollIntoView({ block: "nearest" });
+}
+
+function syncAlarmNavigationSelection(view = document.querySelector(".alarm-filter-button.active")?.dataset.alarmFilter) {
+    const path = selectedRuntimeTag?.path;
+    const sources = [
+        ["all", ".kepware-object", "selected-object"],
+        ["list", "#alarm-summary-body tr", "selected-mapping"],
+        ["alarm", "#alarm-tag-tree button", "selected-object"],
+    ];
+    sources.forEach(([source, selector, highlight]) => {
+        const items = [...document.querySelectorAll(selector)];
+        const matches = items.filter((item) => path && item.dataset.canonicalPath === path);
+        const target = matches.find((item) => Number(item.dataset.alarmId) === Number(selectedAlarm?.alarm_id)) || matches[0];
+        items.forEach((item) => item.classList.toggle(highlight, item === target));
+        if (source === view) revealNavigationItem(target);
+    });
+}
+
+function setAlarmNavigationView(view) {
+    document.querySelectorAll(".alarm-filter-button").forEach((button) => {
+        const active = button.dataset.alarmFilter === view;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-pressed", String(active));
+    });
+    document.getElementById("runtime-kepware-tree-host").classList.toggle("hidden", view !== "all");
+    document.getElementById("runtime-tree-description").classList.toggle("hidden", view !== "all");
+    document.getElementById("alarm-summary").classList.toggle("hidden", view !== "list");
+    document.getElementById("alarm-tag-tree").classList.toggle("hidden", view !== "alarm");
+    syncAlarmNavigationSelection(view);
 }
 
 document.querySelectorAll(".alarm-filter-button").forEach((button) => {
-    button.addEventListener("click", async () => {
-        document.querySelectorAll(".alarm-filter-button").forEach((item) => item.classList.toggle("active", item === button));
-        const alarmOnly = button.dataset.alarmFilter === "alarm";
-        document.getElementById("runtime-kepware-tree-host").classList.toggle("hidden", alarmOnly);
-        if (alarmOnly) await loadAlarmSummary();
-    });
+    button.addEventListener("click", () => setAlarmNavigationView(button.dataset.alarmFilter));
 });
+
+function renderAlarmTagTree(alarms) {
+    const host = document.getElementById("alarm-tag-tree");
+    const expanded = new Set([...host.querySelectorAll("details[open]")].map((item) => item.dataset.path));
+    const root = document.createElement("ul");
+    root.className = "tree";
+    const branches = new Map();
+    alarms.forEach((alarm) => {
+        const tagPath = String(alarm.tag_path || "");
+        const parts = tagPath.split(tagPath.includes("/") ? "/" : ".").filter(Boolean);
+        let parent = root;
+        parts.slice(0, -1).forEach((name, index) => {
+            const path = parts.slice(0, index + 1).join("/");
+            if (!branches.has(path)) {
+                const item = document.createElement("li");
+                const branch = document.createElement("details");
+                branch.dataset.path = path;
+                branch.open = expanded.has(path);
+                const label = document.createElement("summary");
+                label.textContent = name;
+                const children = document.createElement("ul");
+                children.className = "tree";
+                branch.append(label, children);
+                item.appendChild(branch);
+                parent.appendChild(item);
+                branches.set(path, children);
+            }
+            parent = branches.get(path);
+        });
+        const item = document.createElement("li");
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "tag-name";
+        button.dataset.alarmId = String(alarm.alarm_id);
+        button.dataset.canonicalPath = alarm.tag_path;
+        button.classList.toggle("selected-object", Number(selectedAlarm?.alarm_id) === Number(alarm.alarm_id));
+        button.textContent = parts.at(-1) || alarm.tag_path;
+        button.title = alarm.tag_path;
+        button.addEventListener("click", () => selectMappedAlarm(alarm));
+        item.appendChild(button);
+        parent.appendChild(item);
+    });
+    host.replaceChildren(root);
+}
 
 function selectMappedAlarm(alarm) {
     selectedRuntimeTag = {
@@ -489,16 +472,8 @@ function selectMappedAlarm(alarm) {
     document.getElementById("selected-tag-path").value = selectedRuntimeTag.path;
     resetTagValuePreview();
     document.getElementById("selected-tag-node-id").value = selectedRuntimeTag.nodeId;
-    document.querySelectorAll("#alarm-summary-body tr").forEach((row) => {
-        row.classList.toggle("selected-mapping", Number(row.dataset.alarmId) === Number(alarm.alarm_id));
-    });
-    const loadedTag = document.querySelector(`.kepware-object[data-canonical-path="${CSS.escape(alarm.tag_path)}"]`);
-    if (loadedTag) {
-        document.querySelectorAll(".kepware-object").forEach((item) => item.classList.remove("selected-object"));
-        loadedTag.classList.add("selected-object");
-        loadedTag.scrollIntoView({ block: "nearest" });
-    }
     showAlarmForm(alarm);
+    syncAlarmNavigationSelection();
     loadOperationalTagContext(knowledgeNodeFromAlarm(alarm));
 }
 
@@ -847,8 +822,6 @@ viewTabs.forEach((tab) => {
         }
         mainPanelSplitter.classList.toggle("hidden", isKepware);
         alarmCenterSplitter.classList.toggle("hidden", isOpcRuntime || isAlarmHelp || isInventory);
-        document.getElementById("alarm-summary").classList.toggle("hidden", isKepware || isOpcRuntime || isAlarmHelp || isInventory);
-        alarmHorizontalSplitter.classList.toggle("hidden", isKepware || isOpcRuntime || isAlarmHelp || isInventory);
         runtimeSecondaryHost.classList.toggle("hidden", isKepware || isOpcRuntime || isAlarmHelp || isInventory);
         (isKepware ? configurationKepwareTreeHost : runtimeKepwareTreeHost).appendChild(kepwareTree);
 
@@ -857,13 +830,11 @@ viewTabs.forEach((tab) => {
             loadKepwareChannels();
         }
         if (isKepware) {
-            applyAlarmTopHeight();
             applyMainPanelRatio();
         }
         if (!isKepware && !isOpcRuntime && !isAlarmHelp && !isInventory) {
             runtimeSecondaryHost.append(operatorHealth, diagnosticsPanel);
             applyAlarmPaneWidths();
-            applyAlarmTopHeight();
             loadRuntimeStatus();
             loadAlarmMp3();
             loadAlarmSummary();
@@ -1385,7 +1356,7 @@ async function openTagByKepwarePath(kepwarePath, error) {
         if (!target) throw new Error("missing");
         document.querySelector('.view-tab[data-view="runtime"]').click();
         selectKepwareObject(target, target.kepwareNode);
-        target.scrollIntoView({ block: "nearest" });
+        revealNavigationItem(target);
         return true;
     } catch (_error) {
         error.textContent = "Tag is no longer available in the current Kepware configuration.";

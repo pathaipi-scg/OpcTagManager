@@ -18,12 +18,23 @@
     <div id="alarm-upper-workspace" class="alarm-upper-workspace">
     <section class="panel tree-panel" aria-label="Tag tree">
         <div id="runtime-tree-view" class="tree-view">
-            <div class="alarm-filter" role="tablist" aria-label="Alarm authoring tag source">
-                <button type="button" class="alarm-filter-button active" data-alarm-filter="all">All Tags</button>
-                <button type="button" class="alarm-filter-button" data-alarm-filter="alarm">Alarm Tags</button>
+            <div class="alarm-filter" role="group" aria-label="Alarm authoring tag source">
+                <button type="button" class="alarm-filter-button active" aria-pressed="true" data-alarm-filter="all">All Tags</button>
+                <button type="button" class="alarm-filter-button" aria-pressed="false" data-alarm-filter="list">Alarm List</button>
+                <button type="button" class="alarm-filter-button" aria-pressed="false" data-alarm-filter="alarm">Alarm Tags</button>
             </div>
-            <p class="tree-counts">All Tags browses the live Kepware hierarchy. Alarm Tags shows configured Alarm mappings.</p>
+            <p id="runtime-tree-description" class="tree-counts">All Tags browses the live Kepware hierarchy. Alarm Tags shows configured Alarm mappings.</p>
             <div id="runtime-kepware-tree-host" aria-live="polite"></div>
+    <section id="alarm-summary" class="alarm-summary alarm-mapping-workspace hidden" aria-live="polite">
+        <div class="alarm-summary-heading"><strong>Alarm List</strong><span id="alarm-summary-count"></span></div>
+        <div class="alarm-summary-scroll">
+            <table>
+                <thead><tr><th>Tag Name / Tag Path</th></tr></thead>
+                <tbody id="alarm-summary-body"></tbody>
+            </table>
+        </div>
+    </section>
+            <div id="alarm-tag-tree" class="hidden" aria-label="Alarm tag hierarchy"></div>
             <section class="operator-health" aria-label="Operational health" aria-live="polite">
                 <dl class="health-grid">
                     <dt>OPC UA</dt><dd id="operator-opc-state">Checking...</dd>
@@ -118,25 +129,6 @@
 
     </div>
 
-    <div
-        id="alarm-horizontal-splitter"
-        class="alarm-horizontal-splitter"
-        role="separator"
-        aria-label="Resize OPC Tag List above Alarm List"
-        aria-orientation="horizontal"
-        tabindex="0"
-        title="Drag to resize Alarm List"
-    ></div>
-
-    <section id="alarm-summary" class="alarm-summary alarm-mapping-workspace" aria-live="polite">
-        <div class="alarm-summary-heading"><strong>Alarm List</strong><span id="alarm-summary-count"></span></div>
-        <div class="alarm-summary-scroll">
-            <table>
-                <thead><tr><th>Tag Name / Tag Path</th></tr></thead>
-                <tbody id="alarm-summary-body"></tbody>
-            </table>
-        </div>
-    </section>
     </div>
 
     <div
