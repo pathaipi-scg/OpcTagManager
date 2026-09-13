@@ -401,7 +401,10 @@ function syncAlarmNavigationSelection(view = document.querySelector(".alarm-filt
     });
 }
 
-function setAlarmNavigationView(view) {
+let alarmNavigationGeneration = 0;
+
+async function setAlarmNavigationView(view) {
+    const generation = ++alarmNavigationGeneration;
     document.querySelectorAll(".alarm-filter-button").forEach((button) => {
         const active = button.dataset.alarmFilter === view;
         button.classList.toggle("active", active);
@@ -412,6 +415,17 @@ function setAlarmNavigationView(view) {
     document.getElementById("alarm-summary").classList.toggle("hidden", view !== "list");
     document.getElementById("alarm-tag-tree").classList.toggle("hidden", view !== "alarm");
     syncAlarmNavigationSelection(view);
+    if (view !== "all" || !selectedRuntimeTag?.path) return;
+    const path = selectedRuntimeTag.path;
+    const isCurrent = () => generation === alarmNavigationGeneration
+        && selectedRuntimeTag?.path === path
+        && document.querySelector('.view-tab[data-view="runtime"]').classList.contains("active");
+    try {
+        await findKepwareTagByPath(path, isCurrent);
+        if (isCurrent()) syncAlarmNavigationSelection(view);
+    } catch (_error) {
+        // Missing live tags and unavailable branches leave authoring state intact.
+    }
 }
 
 document.querySelectorAll(".alarm-filter-button").forEach((button) => {
@@ -1315,10 +1329,7 @@ document.getElementById("alarm-help-refresh-all").addEventListener("click", refr
 document.getElementById("alarm-help-auto-refresh").addEventListener("change", () => {
     if (!alarmHelpWorkspace.classList.contains("hidden")) startAlarmHelpPolling();
 });
-async function openTagByKepwarePath(kepwarePath, error) {
-    if (!kepwarePath) return false;
-    error.classList.add("hidden");
-    try {
+async function findKepwareTagByPath(kepwarePath, isCurrent = () => true) {
         const parts = kepwarePath.includes("/")
             ? kepwarePath.split("/").filter(Boolean)
             : kepwarePath.split(".").filter(Boolean);
@@ -1327,16 +1338,20 @@ async function openTagByKepwarePath(kepwarePath, error) {
             kepwareLoaded = true;
             await loadKepwareChannels();
         }
+        if (kepwareChannelsPromise) await kepwareChannelsPromise;
+        if (!isCurrent()) return null;
         const findButton = (container, predicate) =>
             [...container.querySelectorAll(".kepware-object")].find((button) => predicate(button.kepwareNode));
         const tree = document.getElementById("kepware-tree");
         const channel = findButton(tree, (node) => node?.object_type === "Channel" && node.name === parts[0]);
         if (!channel) throw new Error("missing");
         await ensureKepwareChildren(channel);
+        if (!isCurrent()) return null;
         const device = findButton(channel.kepwareChildren, (node) =>
             node?.object_type === "Device" && node.context?.channel === parts[0] && node.name === parts[1]);
         if (!device) throw new Error("missing");
         await ensureKepwareChildren(device);
+        if (!isCurrent()) return null;
         let parent = device;
         const groups = parts.slice(2, -1);
         for (let index = 0; index < groups.length; index += 1) {
@@ -1348,12 +1363,21 @@ async function openTagByKepwarePath(kepwarePath, error) {
                 && (node.context?.group_path || []).join("/") === expectedGroups);
             if (!group) throw new Error("missing");
             await ensureKepwareChildren(group);
+            if (!isCurrent()) return null;
             parent = group;
         }
         const targetPath = [parts[0], parts[1], ...groups, parts[parts.length - 1]].join("/");
         const target = [...parent.kepwareChildren.querySelectorAll(".kepware-object")]
             .find((button) => button.dataset.canonicalPath === targetPath);
         if (!target) throw new Error("missing");
+        return target;
+}
+
+async function openTagByKepwarePath(kepwarePath, error) {
+    if (!kepwarePath) return false;
+    error.classList.add("hidden");
+    try {
+        const target = await findKepwareTagByPath(kepwarePath);
         document.querySelector('.view-tab[data-view="runtime"]').click();
         selectKepwareObject(target, target.kepwareNode);
         revealNavigationItem(target);
@@ -1404,7 +1428,19 @@ document.getElementById("refresh-kepware").addEventListener("click", async () =>
     await loadKepwareChannels(true);
 });
 
+let kepwareChannelsPromise = null;
+
 async function loadKepwareChannels(refresh = false) {
+    if (kepwareChannelsPromise) return kepwareChannelsPromise;
+    kepwareChannelsPromise = fetchKepwareChannels(refresh);
+    try {
+        return await kepwareChannelsPromise;
+    } finally {
+        kepwareChannelsPromise = null;
+    }
+}
+
+async function fetchKepwareChannels(refresh = false) {
     const status = document.getElementById("kepware-status");
     const error = document.getElementById("kepware-error");
     const button = document.getElementById("refresh-kepware");
