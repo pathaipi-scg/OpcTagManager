@@ -132,11 +132,46 @@ def test_legacy_null_history_readable_unassigned_and_never_rewritten():
     assert len(old) == 1 and old[0]['NetworkId'] is None
     assert conn.db.execute('SELECT * FROM NetworkDeviceManualHistory').fetchall() == before
     current = service.current()
-    assert current['legacy_count'] == 1
-    assert [r for r in current['rows'] if r['network_id'] is None][0]['MachineName'] == 'Original reservation'
+    assert current['legacy_count'] == 0
+    matching = [r for r in current['rows'] if r['IPAddress'] == IP]
+    assert len(matching) == 1 and matching[0]['NetworkId'] == service.networks[0].network_id
+    assert service.history(IP, 'legacy')['manual'] == old
+    assert conn.db.execute('SELECT * FROM NetworkDeviceManualHistory').fetchall() == before
     assert service.history(IP, service.networks[0].network_id)['manual'] == []
     with pytest.raises(InventoryError):
         service.save_manual(IP, {'MachineName': 'rewrite'}, 'operator', 'legacy')
+
+
+@pytest.mark.parametrize('selector', [None, 'all'])
+def test_only_legacy_presentation_is_suppressed_for_assigned_ips(selector):
+    service, conn = make_service(f'MC1|{IP}|{END};MC2|{IP}|{END}')
+    legacy_only = '10.9.9.9'
+    for ip in (IP, legacy_only):
+        service.store.insert(conn.cursor(), 'NetworkScanHistory', scan_result(ip, True))
+        service.store.insert(conn.cursor(), 'NetworkDeviceManualHistory', dict(
+            IPAddress=ip, MachineName='Legacy machine', Description='', Location='', Remark='',
+            UpdatedAt=now(), UpdatedBy='legacy', IsActive=True))
+    conn.commit()
+    service.scan('test')
+    tables = ('NetworkInventoryRun', 'NetworkScanHistory', 'KepwareDeviceHistory', 'NetworkDeviceManualHistory')
+    before = {t: conn.db.execute(f'SELECT * FROM {t}').fetchall() for t in tables}
+    legacy_history = {ip: service.history(ip, 'legacy') for ip in (IP, legacy_only)}
+    current = service.current(selector)
+    matches = [r for r in current['rows'] if r['IPAddress'] == IP]
+    assert len(matches) == 2
+    assert {r['NetworkId'] for r in matches} == {n.network_id for n in service.networks}
+    assert len({(r['NetworkId'], r['IPAddress']) for r in current['rows']}) == len(current['rows'])
+    legacy_rows = [r for r in current['rows'] if r['NetworkId'] is None]
+    assert len(legacy_rows) == current['legacy_count'] == 1
+    assert legacy_rows[0]['IPAddress'] == legacy_only
+    assert legacy_rows[0]['NetworkName'] == 'Legacy / unassigned'
+    assert legacy_rows[0]['MachineName'] == 'Legacy machine'
+    # Selecting one network must not resurrect legacy duplicates or alter its counts.
+    selected = service.current(service.networks[0].network_id)
+    assert all(r['NetworkId'] == service.networks[0].network_id for r in selected['rows'])
+    assert selected['legacy_count'] == 1
+    assert {ip: service.history(ip, 'legacy') for ip in (IP, legacy_only)} == legacy_history
+    assert {t: conn.db.execute(f'SELECT * FROM {t}').fetchall() for t in tables} == before
 
 
 def test_new_writes_reject_null_network_and_guards_reject_update_delete():

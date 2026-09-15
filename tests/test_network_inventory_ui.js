@@ -337,8 +337,8 @@ test('same IP manual save and history use the selected row network in All Networ
     assert.equal(ui.get('inventory-manual-selection').textContent, `Editing IP: MC2 / ${row.IPAddress}`);
 });
 
-test('legacy NULL rows are distinct, readable and cannot be edited', async () => {
-    const legacy = {...row, network_id: null, NetworkId: null, network_name: 'Legacy / unassigned'};
+test('legacy-only NULL rows remain readable and cannot be edited', async () => {
+    const legacy = {...row, IPAddress: '10.9.9.9', network_id: null, NetworkId: null, network_name: 'Legacy / unassigned'};
     const ui = setup(async url => ok(url.includes('/history') ? {network: [], kepware: [], manual: [{NetworkId: null}]} :
         {...multi, legacy_count: 1, rows: [multiRows[0], legacy]}));
     await ui.get('tab').events.click();

@@ -644,12 +644,14 @@ class NetworkInventory:
                 rows.append({**row, **network.payload(), 'NetworkId': network.network_id,
                              'NetworkName': network.network_name, 'Ambiguity': ambiguity})
         runs = [n['last_run'] for n in summaries if n['last_run']]
-        # NULL history is displayed separately, never inferred to belong to a profile.
+        # Every configured address already has a current NetworkId-scoped row.
+        # Suppress only its legacy presentation; never merge identities or history.
+        assigned_ips = {ip for network in all_networks for ip in network.addresses}
         legacy = self.store.current(None, oui=self.oui)
         legacy_rows = [{**r, 'NetworkId': None, 'NetworkName': 'Legacy / unassigned',
                         'network_id': None, 'network_name': 'Legacy / unassigned',
                         'Status': 'Not Verified' if r['Status'] == 'Candidate Free' else r['Status']}
-                       for r in legacy['rows']]
+                       for r in legacy['rows'] if r['IPAddress'] not in assigned_ips]
         if network_id in (None, 'all'):
             rows.extend(legacy_rows)
         return {'rows': rows, 'networks': [n.payload() for n in all_networks],
