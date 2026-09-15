@@ -52,13 +52,14 @@ const activeProgress = {status: 'running', scan_id: 'test-run', network_name: 'D
     network_number: 1, total_networks: 3, scanned_ips: 87, total_ips: 762,
     current_ip: '172.28.231.87', online_count: 14, mac_count: 9, elapsed_seconds: 18, phase: 'ICMP'};
 
-test('live progress polls once per second, advances networks and keeps completion summary', async () => {
+test('live progress stays visible while scanning and collapses to a compact completed summary', async () => {
     const clock = fakeTimers();
     let finish, progress = {...activeProgress};
     const ui = setup(url => url.endsWith('/scan') ? new Promise(resolve => {finish = resolve;}) :
         ok(url.endsWith('/progress') ? progress : current), clock);
     const pending = ui.get('inventory-scan').events.click();
     assert.match(ui.get('inventory-progress').textContent, /Starting scan/);
+    assert.equal(ui.get('inventory-progress').hidden, false);
     assert.equal(clock.timers.size, 1);
     assert.equal([...clock.timers.values()][0].delay, 1000);
     await clock.fire();
@@ -66,14 +67,20 @@ test('live progress polls once per second, advances networks and keeps completio
     for (const part of ['Scanning DEFAULT_OT', 'Network 1/3', 'Progress: 87 / 762', 'Current IP: 172.28.231.87',
                         'Online: 14', 'MAC Found: 9', 'Elapsed: 00:18']) assert(text.includes(part), part);
     assert(ui.get('inventory-scan').disabled);
+    assert.equal(ui.get('inventory-progress').hidden, false);
     progress = {...progress, network_name: 'REJECT_OT', network_number: 2, scanned_ips: 300};
     await clock.fire();
     assert.match(ui.get('inventory-progress').textContent, /Network 2\/3/);
     progress = {...progress, network_number: 3, status: 'completed', scanned_ips: 762, elapsed_seconds: 42};
-    finish(ok({progress}));
+    const finishedAt = '2026-09-15T15:23:32Z';
+    finish(ok({progress, runs: [{FinishedAt: finishedAt}]}));
     await pending;
-    assert.match(ui.get('inventory-progress').textContent, /Scan completed\n762 IPs scanned/);
-    assert.match(ui.get('inventory-progress').textContent, /Duration: 00:42/);
+    assert.equal(ui.get('inventory-progress').hidden, true);
+    assert.equal(ui.get('inventory-progress').textContent, '');
+    const time = new Date(finishedAt).toLocaleTimeString([], {
+        hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true});
+    assert.equal(ui.get('inventory-freshness').textContent, `Last scan: ${time} | 14 online | 9 MAC`);
+    assert(!ui.get('inventory-freshness').textContent.includes('\n'));
     assert(!ui.get('inventory-scan').disabled);
     assert.equal(clock.timers.size, 0);
 });
@@ -90,7 +97,9 @@ test('late running poll cannot overwrite the completed POST summary', async () =
     await pending;
     pollFinish(ok(activeProgress));
     await polling;
-    assert.match(ui.get('inventory-progress').textContent, /Scan completed/);
+    assert.equal(ui.get('inventory-progress').hidden, true);
+    assert.equal(ui.get('inventory-progress').textContent, '');
+    assert.match(ui.get('inventory-freshness').textContent, /^Last scan: .* \| 14 online \| 9 MAC$/);
     assert(!ui.get('inventory-scan').disabled);
     assert.equal(clock.timers.size, 0);
 });
@@ -103,8 +112,13 @@ test('scan error displays partial summary and stops polling', async () => {
     await ui.get('inventory-scan').events.click();
     assert.match(ui.get('inventory-progress').textContent, /Scan failed/);
     assert.match(ui.get('inventory-progress').textContent, /87 IPs scanned/);
+    assert.equal(ui.get('inventory-progress').hidden, false);
+    const errorText = ui.get('inventory-progress').textContent;
     assert(!ui.get('inventory-scan').disabled);
     assert.equal(clock.timers.size, 0);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(ui.get('inventory-progress').hidden, false);
+    assert.equal(ui.get('inventory-progress').textContent, errorText);
 });
 
 test('disconnected POST keeps button disabled while server continues scanning', async () => {
@@ -120,6 +134,8 @@ test('disconnected POST keeps button disabled while server continues scanning', 
     progress = {...progress, status: 'completed'};
     await clock.fire();
     assert(!ui.get('inventory-scan').disabled);
+    assert.equal(ui.get('inventory-progress').hidden, true);
+    assert.match(ui.get('inventory-freshness').textContent, /^Last scan: .* \| 14 online \| 9 MAC$/);
     assert.equal(clock.timers.size, 0);
 });
 
@@ -131,6 +147,31 @@ test('refresh discovers an existing scan without posting another scan', async ()
     assert.match(ui.get('inventory-progress').textContent, /Network 1\/3/);
     assert.equal(clock.timers.size, 1);
     assert(ui.calls.every(c => c.options?.method !== 'POST'));
+});
+
+test('refresh renders completed zero counts with the stored UTC finish time', async () => {
+    const finishedAt = '2026-09-15T15:23:32';
+    const clock = fakeTimers();
+    const ui = setup(() => ok({...current, last_run: {FinishedAt: finishedAt},
+        progress: {...activeProgress, status: 'completed', online_count: 0, mac_count: 0}}), clock);
+    await ui.get('tab').events.click();
+    const time = new Date(`${finishedAt}Z`).toLocaleTimeString([], {
+        hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true});
+    assert.equal(ui.get('inventory-freshness').textContent, `Last scan: ${time} | 0 online | 0 MAC`);
+    assert.equal(ui.get('inventory-progress').hidden, true);
+    assert.equal(ui.get('inventory-progress').textContent, '');
+    assert.equal(clock.timers.size, 0);
+});
+
+test('failed scan request stays visible when progress describes an older completed scan', async () => {
+    const clock = fakeTimers();
+    const ui = setup(url => url.endsWith('/scan') ? {ok: false, json: async () => ({error: 'Invalid network'})} :
+        ok({...activeProgress, status: 'completed'}), clock);
+    await ui.get('inventory-scan').events.click();
+    assert.equal(ui.get('inventory-progress').hidden, false);
+    assert.match(ui.get('inventory-progress').textContent, /Scan request failed: Invalid network/);
+    assert.equal(clock.timers.size, 0);
+    assert(!ui.get('inventory-scan').disabled);
 });
 
 test('tab loads inventory without scanning; displays names as text and UTC timestamps in local time', async () => {

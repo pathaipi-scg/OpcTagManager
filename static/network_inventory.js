@@ -6,11 +6,19 @@
     let rows = [], selected = null, generation = 0, detailGeneration = 0;
     let saving = false;
     let scanPending = false, progressTimer = null, progressEpoch = 0;
+    let completedSummary = null;
+    function renderCompletedSummary() {
+        if (!completedSummary) return;
+        const {finishedAt, online, mac} = completedSummary;
+        const time = new Date(finishedAt).toLocaleTimeString([], {
+            hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true});
+        el('freshness').textContent = `Last scan: ${time} | ${online} online | ${mac} MAC`;
+    }
     const duration = seconds => {
         const total = Math.max(0, Math.floor(seconds || 0));
         return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
     };
-    function renderProgress(progress) {
+    function renderProgress(progress, finishedAt) {
         if (!progress?.status) return;
         if (scanPending && progress.status !== 'running') return;
         if (progress.status === 'idle') {
@@ -30,8 +38,19 @@
                 `Online: ${progress.online_count}\nMAC Found: ${progress.mac_count}\n` +
                 `Elapsed: ${duration(progress.elapsed_seconds)}\n${progress.phase || ''}` +
                 '\nMAC count updates after each network\'s ARP collection.';
+        } else if (progress.status === 'completed') {
+            el('progress').hidden = true;
+            el('progress').textContent = '';
+            completedSummary = {
+                scanId: progress.scan_id,
+                finishedAt: finishedAt ? (/[zZ]$|[+-]\d\d:\d\d$/.test(finishedAt) ? finishedAt : `${finishedAt}Z`) :
+                    (completedSummary?.scanId === progress.scan_id ? completedSummary.finishedAt : new Date().toISOString()),
+                online: progress.online_count,
+                mac: progress.mac_count,
+            };
+            renderCompletedSummary();
         } else {
-            el('progress').textContent = `${progress.status === 'completed' ? 'Scan completed' : 'Scan failed'}\n` +
+            el('progress').textContent = 'Scan failed\n' +
                 `${progress.scanned_ips} IPs scanned\n${progress.online_count} online\n` +
                 `${progress.mac_count} MAC addresses found\nDuration: ${duration(progress.elapsed_seconds)}` +
                 (progress.error ? `\n${progress.error}` : '');
@@ -107,7 +126,10 @@
             if (request !== generation) return;
             rows = data.rows;
             if (!scanPending && data.progress) {
-                renderProgress(data.progress);
+                const finishedAt = (data.network_summaries || []).find(
+                    n => n.network_id === data.progress.network_id)?.last_run?.FinishedAt ||
+                    (data.last_run?.NetworkId == null || data.last_run.NetworkId === data.progress.network_id ? data.last_run?.FinishedAt : undefined);
+                renderProgress(data.progress, finishedAt);
                 if (data.progress.status === 'running') scheduleProgressPolling();
             }
             if (data.networks) {
@@ -123,6 +145,7 @@
             el("range").textContent = allMultiple ? `All Networks: ${data.networks.length} configured` : `IP range: ${data.scan_start}-${data.scan_end}`;
             el("freshness").textContent = allMultiple ? `Scanned: ${(data.network_summaries || []).filter(n => n.last_run).length}/${data.networks.length} networks` : `Scanned: ${timestamp(data.last_run?.FinishedAt)}`;
             el('freshness').title = (data.network_summaries || []).map(n => `${n.network_name}: ${timestamp(n.last_run?.FinishedAt)}`).join('\n');
+            renderCompletedSummary();
             el("message").textContent = [data.last_run?.KepwareError,
                 ...(data.network_summaries || []).map(n => n.last_run?.KepwareError ? `${n.network_name}: ${n.last_run.KepwareError}` : ''),
                 rows.some(r => r.Ambiguity) ? 'Overlapping ranges: physical network is ambiguous without NIC binding; Candidate Free is withheld for those addresses.' : '',
@@ -215,17 +238,18 @@
             const result = await api(`/scan${networkQuery(el('network').value)}`, {method: "POST"});
             scanPending = false;
             stopProgressPolling();
-            renderProgress(result.progress);
+            renderProgress(result.progress, result.runs?.[result.runs.length - 1]?.FinishedAt || result.run?.FinishedAt);
             await refresh();
         } catch (error) {
             scanPending = false;
             stopProgressPolling();
             el('progress').textContent = `Scan request failed: ${error.message}`;
+            el('progress').hidden = false;
             el('message').textContent = error.message;
             // A disconnected POST does not cancel the server's scan.
             try {
                 const progress = await api('/progress');
-                renderProgress(progress);
+                if (progress.status === 'running' || progress.status === 'error') renderProgress(progress);
                 if (progress.status === 'running') scheduleProgressPolling();
             } catch (_) {
                 el('progress').textContent += '\nScan status unavailable; checking again...';
