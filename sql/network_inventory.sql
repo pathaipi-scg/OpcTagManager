@@ -52,6 +52,7 @@ BEGIN
         ManualHistoryId bigint IDENTITY PRIMARY KEY, IPAddress varchar(15) NOT NULL,
         MachineName nvarchar(2000) NOT NULL, Description nvarchar(2000) NOT NULL,
         Location nvarchar(2000) NOT NULL, Remark nvarchar(2000) NOT NULL,
+        Vendor nvarchar(512) NULL, DeviceType nvarchar(512) NULL,
         UpdatedAt datetime2(3) NOT NULL, UpdatedBy nvarchar(256) NOT NULL, IsActive bit NOT NULL
     );
     CREATE INDEX IX_ManualHistory_IPTime ON dbo.NetworkDeviceManualHistory (IPAddress, UpdatedAt DESC, ManualHistoryId DESC);

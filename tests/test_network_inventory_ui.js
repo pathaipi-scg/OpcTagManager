@@ -25,7 +25,8 @@ function setup(handler) {
     const context = vm.createContext({document: {getElementById: get,
         querySelector: () => get('tab'), createElement: () => new Element()},
         URLSearchParams, Date, setTimeout, clearTimeout,
-        FormData: class { constructor() { return ['MachineName', 'Description', 'Location', 'Remark'].map(key => [key, get(`field-${key}`).value]); } },
+        encodeURIComponent,
+        FormData: class { constructor() { return ['MachineName', 'Description', 'Location', 'Remark', 'Vendor', 'DeviceType'].map(key => [key, get(`field-${key}`).value]); } },
         fetch: async (url, options) => { calls.push({url, options}); return handler(url, options); }});
     vm.runInContext(fs.readFileSync('static/network_inventory.js', 'utf8'), context);
     return {get, calls};
@@ -144,4 +145,80 @@ test('removing the address count preserves Kepware scan errors', async () => {
     const ui = setup(async () => ok({...current, last_run: {KepwareError: 'Kepware capture unavailable'}}));
     await ui.get('tab').events.click();
     assert.equal(ui.get('inventory-message').textContent, 'Kepware capture unavailable');
+});
+
+const networks = [
+    {network_id: 7, network_name: 'MC1', scan_start: row.IPAddress, scan_end: row.IPAddress},
+    {network_id: 9, network_name: 'MC2', scan_start: row.IPAddress, scan_end: row.IPAddress},
+];
+const multiRows = networks.map(n => ({...row, ...n, NetworkId: n.network_id, NetworkName: n.network_name}));
+const multi = {...current, networks, rows: multiRows, scan_start: null, scan_end: null,
+    network_summaries: networks.map(n => ({...n, last_run: current.last_run}))};
+
+test('All Networks shows separate same-IP rows and network column; scan has no target override', async () => {
+    const ui = setup(async () => ok(multi));
+    await ui.get('tab').events.click();
+    assert.equal(ui.get('inventory-network').children.length, 3);
+    assert.equal(ui.get('inventory-network-heading').hidden, false);
+    assert.equal(ui.get('inventory-network-col').hidden, false);
+    assert.equal(ui.get('inventory-range').textContent, 'All Networks: 2 configured');
+    assert.equal(ui.get('inventory-freshness').textContent, 'Scanned: 2/2 networks');
+    assert.equal(ui.get('inventory-rows').children.length, 2);
+    assert.deepEqual(ui.get('inventory-rows').children.map(tr => tr.children[8].textContent), ['MC1', 'MC2']);
+    await ui.get('inventory-scan').events.click();
+    assert(ui.calls.some(c => c.url === '/api/network-inventory/scan' && c.options.method === 'POST'));
+});
+
+test('selector scopes refresh, scan, candidate filter and clears stale manual target', async () => {
+    const ui = setup(async url => ok(url.includes('/history') ? {network: [], kepware: [], manual: []} :
+        {...multi, rows: url.includes('network_id=9') ? [multiRows[1]] : multiRows}));
+    await ui.get('tab').events.click();
+    await ui.get('inventory-rows').children[0].children[0].children[0].events.click();
+    ui.get('inventory-network').value = '9';
+    await ui.get('inventory-network').events.change();
+    assert.equal(ui.get('inventory-manual-save').disabled, true);
+    assert.equal(ui.get('inventory-network-heading').hidden, true);
+    assert.equal(ui.get('inventory-rows').children.length, 1);
+    await ui.get('inventory-scan').events.click();
+    assert(ui.calls.some(c => c.url === '/api/network-inventory/scan?network_id=9'));
+    ui.get('inventory-free').events.click();
+    const free = new URL(ui.calls.at(-1).url, 'http://localhost');
+    assert.equal(free.searchParams.get('network_id'), '9');
+    assert.equal(free.searchParams.get('category'), 'Candidate Free');
+});
+
+test('same IP manual save and history use the selected row network in All Networks', async () => {
+    const ui = setup(async url => ok(url.includes('/history') ? {network: [], kepware: [], manual: []} : multi));
+    await ui.get('tab').events.click();
+    await ui.get('inventory-rows').children[1].children[0].children[0].events.click();
+    assert.equal(ui.get('inventory-manual-selection').textContent, `Editing IP: MC2 / ${row.IPAddress}`);
+    assert(ui.calls.some(c => c.url === `/api/network-inventory/${row.IPAddress}/history?network_id=9`));
+    ui.get('field-MachineName').value = 'MC2 Camera';
+    await ui.get('inventory-manual').events.submit({preventDefault() {}});
+    assert(ui.calls.some(c => c.url === `/api/network-inventory/${row.IPAddress}/manual?network_id=9`));
+    assert.equal(ui.get('inventory-manual-selection').textContent, `Editing IP: MC2 / ${row.IPAddress}`);
+});
+
+test('legacy NULL rows are distinct, readable and cannot be edited', async () => {
+    const legacy = {...row, network_id: null, NetworkId: null, network_name: 'Legacy / unassigned'};
+    const ui = setup(async url => ok(url.includes('/history') ? {network: [], kepware: [], manual: [{NetworkId: null}]} :
+        {...multi, legacy_count: 1, rows: [multiRows[0], legacy]}));
+    await ui.get('tab').events.click();
+    await ui.get('inventory-rows').children[1].children[0].children[0].events.click();
+    assert(ui.calls.some(c => c.url.endsWith('/history?network_id=legacy')));
+    assert.equal(ui.get('inventory-manual-save').disabled, true);
+    await ui.get('inventory-manual').events.submit({preventDefault() {}});
+    assert(!ui.calls.some(c => c.url.includes('/manual')));
+});
+
+test('late network response cannot replace selection or rows after a network switch', async () => {
+    const pending = [];
+    const ui = setup(() => new Promise(resolve => pending.push(resolve)));
+    const all = ui.get('tab').events.click();
+    ui.get('inventory-network').value = '9';
+    const selected = ui.get('inventory-network').events.change();
+    pending[1](ok({...multi, rows: [multiRows[1]]})); await selected;
+    pending[0](ok(multi)); await all;
+    assert.equal(ui.get('inventory-network').value, '9');
+    assert.equal(ui.get('inventory-rows').children.length, 1);
 });

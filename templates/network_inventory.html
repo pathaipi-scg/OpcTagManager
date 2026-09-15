@@ -1,5 +1,6 @@
 <section id="network-inventory-workspace" class="panel hidden" aria-label="OT Network Inventory">
     <div class="inventory-toolbar inventory-topbar">
+        <label class="inventory-network-label">Network <select id="inventory-network" aria-label="Network"><option value="all">All Networks</option></select></label>
         <button type="button" id="inventory-scan">Scan Now</button>
         <button type="button" id="inventory-refresh">Refresh Inventory</button>
         <button type="button" id="inventory-free">Show Candidate Free IPs</button>
@@ -28,6 +29,8 @@
             <label>Description <input name="Description" maxlength="2000" disabled></label>
             <label>Location <input name="Location" maxlength="2000" disabled></label>
             <label>Remark <input name="Remark" maxlength="2000" disabled></label>
+            <label>Verified Vendor <input name="Vendor" maxlength="512" disabled></label>
+            <label>Verified Device Type <input name="DeviceType" maxlength="512" disabled></label>
             <button id="inventory-manual-save" type="submit" disabled>Save New Manual Revision</button>
         </div>
         <p id="inventory-manual-message" role="status"></p>
@@ -37,9 +40,11 @@
             <col class="inventory-col-ip"><col class="inventory-col-name"><col class="inventory-col-status">
             <col class="inventory-col-device"><col class="inventory-col-seen"><col class="inventory-col-description">
             <col class="inventory-col-vendor"><col class="inventory-col-type">
+            <col id="inventory-network-col" class="inventory-col-network" hidden>
         </colgroup><thead><tr>
             <th>IP Address</th><th>Machine Name</th><th>Status</th><th>Kepware Device</th>
             <th>Last Seen</th><th>Description / Location</th><th>Vendor</th><th>Device Type</th>
+            <th id="inventory-network-heading" hidden>Network</th>
         </tr></thead><tbody id="inventory-rows"></tbody></table>
     </div>
     <section id="inventory-detail" class="hidden" aria-label="IP details">

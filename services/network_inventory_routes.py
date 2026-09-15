@@ -29,27 +29,29 @@ def inventory_router(service):
         return "client:" + (request.client.host if request.client else "unknown")
 
     @router.get("")
-    def current(q: str = "", category: str = "All", sort: str = "IPAddress", descending: bool = False):
+    def current(q: str = "", category: str = "All", sort: str = "IPAddress", descending: bool = False, network_id: str | None = None):
         def operation():
-            result = service.store.current(service.addresses)
+            result = service.current(network_id)
             result["rows"] = filter_rows(result["rows"], q, category, sort, descending)
-            return {**result, "scan_start": service.start, "scan_end": service.end}
+            return result
         return call(operation)
 
     @router.post("/scan")
-    def scan(request: Request):
-        return call(lambda: {"run": service.scan(actor(request))})
+    def scan(request: Request, network_id: str | None = None):
+        def operation():
+            result = service.scan(actor(request), network_id)
+            runs = result.get('runs', [result])
+            return {'run': runs[0] if len(runs) == 1 else None, 'runs': runs}
+        return call(operation)
 
     @router.get("/{ip}/history")
-    def history(ip: str):
+    def history(ip: str, network_id: str | None = None):
         def operation():
-            if ip not in service.addresses:
-                raise InventoryError("IP is outside the configured OT range.")
-            return service.store.history(ip)
+            return service.history(ip, network_id)
         return call(operation)
 
     @router.post("/{ip}/manual")
-    def manual(ip: str, payload: ManualMappingRequest, request: Request):
-        return call(lambda: service.save_manual(ip, payload.model_dump(), actor(request)))
+    def manual(ip: str, payload: ManualMappingRequest, request: Request, network_id: str | None = None):
+        return call(lambda: service.save_manual(ip, payload.model_dump(), actor(request), network_id))
 
     return router

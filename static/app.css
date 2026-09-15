@@ -376,6 +376,9 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 .inventory-search input { box-sizing: border-box; width: 100%; }
 .inventory-manual-heading { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0 0 8px; font-size: 12px; }
 .inventory-topbar { align-items: center; }
+.inventory-topbar .inventory-network-label { flex-direction: row; align-items: center; gap: 5px; }
+#inventory-network { max-width: min(330px, 65vw); min-height: 24px; font-size: 12px; }
+.inventory-main-table .inventory-col-network { width: 150px; }
 .inventory-topbar > span { font-size: 12px; white-space: nowrap; }
 #inventory-message:empty { display: none; }
 /* The active desktop workspace consumes all space left by the wrapped tabs

@@ -5,14 +5,19 @@
     if (!root) return;
     let rows = [], selected = null, generation = 0, detailGeneration = 0;
     let saving = false;
+    const editable = () => selected && selected.network_id !== null;
+    const identity = row => `${row.network_id ?? row.NetworkId ?? 'legacy'}|${row.IPAddress}`;
+    const networkQuery = value => value == null || value === 'all' || value === '' ? '' : `?network_id=${encodeURIComponent(value)}`;
+    const rowNetwork = row => row.network_id === null ? 'legacy' : (row.network_id ?? row.NetworkId);
+    const rowLabel = row => row.network_name ? `${row.network_name} / ${row.IPAddress}` : row.IPAddress;
     function updateManualState() {
-        el("manual-selection").textContent = selected ? `Editing IP: ${selected.IPAddress}` : "Select an IP to edit";
-        for (const key of ["MachineName", "Description", "Location", "Remark"]) {
+        el("manual-selection").textContent = selected ? (editable() ? `Editing IP: ${rowLabel(selected)}` : 'Legacy / unassigned history is read-only') : "Select an IP to edit";
+        for (const key of ["MachineName", "Description", "Location", "Remark", "Vendor", "DeviceType"]) {
             const field = el("manual").elements.namedItem(key);
-            field.disabled = !selected || saving;
+            field.disabled = !editable() || saving;
             if (!selected) field.value = "";
         }
-        el("manual-save").disabled = !selected || saving;
+        el("manual-save").disabled = !editable() || saving;
     }
     updateManualState();
     const timestamp = value => value ? new Date(/[zZ]$|[+-]\d\d:\d\d$/.test(value) ? value : `${value}Z`).toLocaleString() : "Never";
@@ -33,13 +38,29 @@
         const request = ++generation;
         const params = new URLSearchParams({q: el("search").value, category: el("filter").value,
             sort: el("sort").value, descending: el("descending").checked});
+        const network = el('network').value || 'all';
+        if (network !== 'all') params.set('network_id', network);
         try {
             const data = await api(`?${params}`);
             if (request !== generation) return;
             rows = data.rows;
-            el("range").textContent = `IP range: ${data.scan_start}-${data.scan_end}`;
-            el("freshness").textContent = `Scanned: ${timestamp(data.last_run?.FinishedAt)}`;
-            el("message").textContent = data.last_run?.KepwareError || "";
+            if (data.networks) {
+                el('network').replaceChildren();
+                text(el('network'), 'option', 'All Networks').value = 'all';
+                for (const item of data.networks) text(el('network'), 'option', `${item.network_name} — ${item.scan_start}-${item.scan_end}`).value = String(item.network_id);
+                el('network').value = network;
+            }
+            const allMultiple = network === 'all' && data.networks?.length > 1;
+            const showNetwork = network === 'all' && (data.networks?.length > 1 || data.legacy_count > 0);
+            el('network-heading').hidden = !showNetwork;
+            el('network-col').hidden = !showNetwork;
+            el("range").textContent = allMultiple ? `All Networks: ${data.networks.length} configured` : `IP range: ${data.scan_start}-${data.scan_end}`;
+            el("freshness").textContent = allMultiple ? `Scanned: ${(data.network_summaries || []).filter(n => n.last_run).length}/${data.networks.length} networks` : `Scanned: ${timestamp(data.last_run?.FinishedAt)}`;
+            el('freshness').title = (data.network_summaries || []).map(n => `${n.network_name}: ${timestamp(n.last_run?.FinishedAt)}`).join('\n');
+            el("message").textContent = [data.last_run?.KepwareError,
+                ...(data.network_summaries || []).map(n => n.last_run?.KepwareError ? `${n.network_name}: ${n.last_run.KepwareError}` : ''),
+                rows.some(r => r.Ambiguity) ? 'Overlapping ranges: physical network is ambiguous without NIC binding; Candidate Free is withheld for those addresses.' : '',
+                data.legacy_count ? `${data.legacy_count} legacy IPs have unassigned history (visible in All Networks).` : ''].filter(Boolean).join(' ');
             el("rows").replaceChildren();
             for (const row of rows) {
                 const tr = document.createElement("tr");
@@ -48,7 +69,7 @@
                 button.type = "button";
                 button.addEventListener("click", () => showDetails(row));
                 for (const key of ["MachineName", "Status", "KepwareDevice", "LastSeen"]) {
-                    const value = cellText(key, row[key]);
+                    const value = cellText(key, row[key]) + (key === 'Status' && row.Ambiguity ? ' (ambiguous)' : '');
                     text(tr, "td", value).title = value;
                 }
                 const description = [row.Description, row.Location].filter(Boolean).join(" / ");
@@ -57,11 +78,12 @@
                     const value = cellText(key, row[key]);
                     text(tr, "td", value).title = value;
                 }
+                if (showNetwork) text(tr, 'td', row.network_name || row.NetworkName || 'Legacy / unassigned').title = row.Ambiguity || rowLabel(row);
                 tr.addEventListener("click", event => { if (event.target !== button) showDetails(row); });
                 el("rows").appendChild(tr);
             }
             if (selected) {
-                const current = rows.find(r => r.IPAddress === selected.IPAddress);
+                const current = rows.find(r => identity(r) === identity(selected));
                 if (current) await showDetails(current);
                 else {
                     selected = null;
@@ -81,20 +103,20 @@
         el("manual-message").textContent = "";
         const request = ++detailGeneration;
         el("detail").classList.remove("hidden");
-        el("detail-title").textContent = `${row.IPAddress} — ${row.MachineName}`;
+        el("detail-title").textContent = `${rowLabel(row)} — ${row.MachineName}`;
         el("current").replaceChildren();
-        for (const key of ["IPAddress", "MachineName", "Status", "Vendor", "DeviceType", "DeviceModel", "MACAddress", "HostName", "KepwareChannel", "KepwareDevice", "Description", "Location", "Remark", "LastScan", "LastSeen", "Source", "ResponseMs", "DetectionSource", "ScanError"]) {
+        for (const key of ["NetworkId", "NetworkName", "Ambiguity", "IPAddress", "MachineName", "Status", "Vendor", "DeviceType", "DeviceModel", "MACAddress", "HostName", "KepwareChannel", "KepwareDevice", "Description", "Location", "Remark", "LastScan", "LastSeen", "Source", "ResponseMs", "DetectionSource", "ScanError"]) {
             const label = key === "MachineName" ? "Effective Machine Name" : key
                 .replace(/([A-Z])([A-Z][a-z])/g, "$1 $2").replace(/([a-z])([A-Z])/g, "$1 $2");
             text(el("current"), "dt", label);
             text(el("current"), "dd", cellText(key, row[key]));
         }
-        for (const key of ["MachineName", "Description", "Location", "Remark"])
+        for (const key of ["MachineName", "Description", "Location", "Remark", "Vendor", "DeviceType"])
             el("manual").elements.namedItem(key).value = row.Manual?.[key] || "";
         el("histories").replaceChildren();
         el("detail-message").textContent = "Loading history…";
         try {
-            const histories = await api(`/${row.IPAddress}/history`);
+            const histories = await api(`/${row.IPAddress}/history${networkQuery(rowNetwork(row))}`);
             if (request !== detailGeneration) return;
             for (const [key, title] of [["network", "Network Scan History"], ["kepware", "Kepware History"], ["manual", "Manual Edit History"]]) {
                 const section = text(el("histories"), "details", "");
@@ -116,29 +138,38 @@
     }
     el("scan").addEventListener("click", async () => {
         el("scan").disabled = true;
-        el("message").textContent = "Scanning the configured OT range and capturing Kepware. This can take several minutes…";
+        el("message").textContent = "Scanning selected configured networks sequentially and capturing Kepware. This can take several minutes…";
         try {
-            await api("/scan", {method: "POST"});
+            await api(`/scan${networkQuery(el('network').value)}`, {method: "POST"});
             await refresh();
         } catch (error) { el("message").textContent = error.message; }
         finally { el("scan").disabled = false; }
     });
     el("manual").addEventListener("submit", async event => {
         event.preventDefault();
-        if (!selected || saving) return;
+        if (!editable() || saving) return;
         const ip = selected.IPAddress;
+        const network = rowNetwork(selected);
         const body = Object.fromEntries(new FormData(el("manual")));
         saving = true;
         updateManualState();
         el("manual-message").textContent = `Saving revision for ${ip}…`;
         try {
-            await api(`/${ip}/manual`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+            await api(`/${ip}/manual${networkQuery(network)}`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
             await refresh();
             el("manual-message").textContent = `Manual revision saved for ${ip}. Previous revisions preserved.`;
         } catch (error) { el("manual-message").textContent = error.message; }
         finally { saving = false; updateManualState(); }
     });
     let debounce;
+    el('network').addEventListener('change', () => {
+        selected = null;
+        ++detailGeneration;
+        updateManualState();
+        el('detail').classList.add('hidden');
+        el('manual-message').textContent = '';
+        return refresh();
+    });
     el("search").addEventListener("input", () => { clearTimeout(debounce); debounce = setTimeout(refresh, 180); });
     ["filter", "sort", "descending"].forEach(id => el(id).addEventListener("change", refresh));
     el("refresh").addEventListener("click", refresh);

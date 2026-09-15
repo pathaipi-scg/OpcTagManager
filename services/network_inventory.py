@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from dataclasses import dataclass, replace
+from functools import cached_property
 from ipaddress import IPv4Address, IPv4Network
 import json
 import os
+from pathlib import Path
 import re
 import subprocess
 from threading import Lock
@@ -21,7 +24,7 @@ class InventoryError(RuntimeError):
     pass
 
 
-def scan_range(start, end):
+def scan_range(start, end, *, explicit_named=False):
     if not start or not end:
         raise InventoryError("Configure OT_SCAN_START and OT_SCAN_END before using inventory.")
     try:
@@ -30,20 +33,101 @@ def scan_range(start, end):
         raise InventoryError("OT scan range must contain literal IPv4 addresses.") from exc
     network = IPv4Network(f"{first}/24", strict=False)
     private = any(first in IPv4Network(net) for net in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
-    if (not private or first.is_loopback or first.is_link_local
+    if ((not private and not explicit_named) or first.is_loopback or first.is_link_local
             or first.is_multicast or first.is_unspecified
+            or first.is_reserved or int(first) < int(IPv4Address('1.0.0.0'))
             or last not in network or first > last
             or first == network.network_address or last == network.broadcast_address):
-        raise InventoryError("OT range must be private unicast host addresses within one /24.")
+        raise InventoryError("OT range must contain unicast host addresses within one /24; legacy ranges must be private.")
     return tuple(str(IPv4Address(value)) for value in range(int(first), int(last) + 1))
+
+
+@dataclass(frozen=True)
+class NetworkProfile:
+    network_name: str
+    scan_start: str
+    scan_end: str
+    network_id: int | None = None
+    nic_name: str | None = None
+    nic_mac: str | None = None
+    source_ip: str | None = None
+    kepware_channel: str | None = None
+    explicit_named: bool = True
+
+    @cached_property
+    def addresses(self):
+        return scan_range(self.scan_start, self.scan_end, explicit_named=self.explicit_named)
+
+    def payload(self):
+        return {key: getattr(self, key) for key in ('network_id', 'network_name', 'scan_start',
+                'scan_end', 'nic_name', 'nic_mac', 'source_ip', 'kepware_channel')}
+
+
+def configured_networks(ranges=None, start='', end=''):
+    # Present-but-empty new configuration fails closed, never falls back silently.
+    if ranges is None:
+        profile = NetworkProfile('DEFAULT_OT', start, end, explicit_named=False)
+        profile.addresses
+        return (profile,)
+    profiles, names = [], set()
+    for entry in ranges.split(';'):
+        fields = [field.strip() for field in entry.split('|')]
+        if len(fields) != 3 or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_. -]{0,99}', fields[0]):
+            raise InventoryError('OT_SCAN_RANGES must be Name|IPv4Start|IPv4End entries separated by semicolons.')
+        name, first, last = fields
+        if name.casefold() in names:
+            raise InventoryError('OT_SCAN_RANGES network names must be unique (case-insensitive).')
+        names.add(name.casefold())
+        profile = NetworkProfile(name, first, last)
+        profile.addresses
+        profiles.append(profile)
+    return tuple(profiles)
+
+
+def normalize_mac(value):
+    compact = re.sub(r"[:-]", "", str(value or "")).upper()
+    if not re.fullmatch(r"[0-9A-F]{12}", compact) or compact == "0" * 12 or int(compact[:2], 16) & 1:
+        return None
+    return ":".join(compact[i:i + 2] for i in range(0, 12, 2))
+
+
+def load_oui_file(filename=None):
+    """Load local JSON prefix -> manufacturer evidence without network access."""
+    try:
+        data = json.loads(Path(filename or os.environ.get("OT_OUI_FILE", "")).read_text(encoding="utf-8-sig"))
+        if not isinstance(data, dict):
+            return {}
+        result = {}
+        for prefix, vendor in data.items():
+            prefix = re.sub(r"[:-]", "", prefix).upper()
+            if re.fullmatch(r"[0-9A-F]{6}", prefix) and isinstance(vendor, str) and vendor.strip():
+                result[":".join(prefix[i:i + 2] for i in range(0, 6, 2))] = vendor.strip()[:512]
+        return result
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def detection_source(scan, devices=()):
+    return " + ".join(source for source, present in (
+        ("ICMP", scan.get("IsOnline")), ("ARP", scan.get("MACAddress")),
+        ("Kepware", devices)) if present) or "ICMP: no reply"
+
+
+def identity_value(value):
+    return value if value and str(value).strip().casefold() != "unknown" else None
 
 
 class ReadOnlyProbe:
     """One ICMP echo and ARP cache lookup; optional Windows reverse-name lookup. No TCP probes."""
-    def __init__(self, addresses, oui=None, resolve_hostnames=False):
+    def __init__(self, addresses, oui=None, resolve_hostnames=False, *, network=None, defer_neighbors=False):
         self.addresses = frozenset(addresses)
-        self.oui = oui or {}
+        self.oui = load_oui_file() if oui is None else oui
         self.resolve_hostnames = resolve_hostnames
+        self.defer_neighbors = defer_neighbors
+        self.neighbor_error = None
+        # Phase 2 can consume network.nic_name / nic_mac / source_ip here.
+        # Phase 1 deliberately uses the existing Windows routing behavior.
+        self.network = network
 
     def __call__(self, ip):
         if ip not in self.addresses:
@@ -69,19 +153,45 @@ class ReadOnlyProbe:
                 match = re.search(r"(?:time|เวลา)[=<]\s*([\d.]+)\s*ms", reply.stdout, re.I)
                 result["ResponseMs"] = float(match[1]) if match else None
                 result["DetectionSource"] = "ICMP reply"
-            arp = subprocess.run(["arp", "-a", ip], capture_output=True, text=True, timeout=2,
-                                 errors="replace", creationflags=subprocess.CREATE_NO_WINDOW if windows else 0)
-            for line in arp.stdout.splitlines():
-                if re.search(r"(?<![\d.])" + re.escape(ip) + r"(?![\d.])", line):
-                    mac = re.search(r"\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b", line, re.I)
-                    if mac and mac[0].lower().replace("-", ":") not in ("ff:ff:ff:ff:ff:ff", "00:00:00:00:00:00"):
-                        result["MACAddress"] = mac[0].upper().replace("-", ":")
-                        result["Vendor"] = self.oui.get(result["MACAddress"][:8])
-                        result["DetectionSource"] += "; ARP cache (may be stale)"
+            neighbors = {} if self.defer_neighbors else self.collect_neighbors(ip)
+            if ip in neighbors:
+                result["MACAddress"] = neighbors[ip]
+                result["Vendor"] = self.oui.get(neighbors[ip][:8])
+                result["DetectionSource"] = detection_source(result)
         except (OSError, subprocess.TimeoutExpired):
             # Tool failure must never produce a candidate-free address.
             result["ScanError"] = "Discovery tool unavailable or timed out"
         return result
+
+
+    def collect_neighbors(self, target=None):
+        """Read cache evidence; cache entries never establish current liveness.
+
+        Conflicting MACs across interfaces are withheld. Routing is unchanged.
+        """
+        windows = os.name == "nt"
+        self.neighbor_error = None
+        try:
+            reply = subprocess.run(["arp", "-a"] + ([target] if target else []),
+                                   capture_output=True, text=True, timeout=3, errors="replace",
+                                   creationflags=subprocess.CREATE_NO_WINDOW if windows else 0)
+            if reply.returncode:
+                self.neighbor_error = "ARP cache unavailable"
+                return {}
+        except (OSError, subprocess.TimeoutExpired):
+            self.neighbor_error = "ARP cache unavailable or timed out"
+            return {}
+        candidates = {}
+        for line in reply.stdout.splitlines():
+            ips = re.findall(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])", line)
+            macs = re.findall(r"\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b", line, re.I)
+            for ip in ips:
+                if ip in self.addresses:
+                    for value in macs:
+                        mac = normalize_mac(value)
+                        if mac:
+                            candidates.setdefault(ip, set()).add(mac)
+        return {ip: next(iter(macs)) for ip, macs in candidates.items() if len(macs) == 1}
 
 
 def extract_kepware_ipv4(value):
@@ -123,7 +233,7 @@ def kepware_snapshot(client, run_id):
     return records
 
 
-def merge_current(addresses, scans, kepware, manuals, evidence):
+def merge_current(addresses, scans, kepware, manuals, evidence, oui=None):
     rows = []
     for ip in addresses:
         scan = scans.get(ip, {})
@@ -135,6 +245,12 @@ def merge_current(addresses, scans, kepware, manuals, evidence):
         manual = manuals.get(ip, {})
         past = evidence.get(ip, {})
         name = manual.get("MachineName") or device_names or scan.get("HostName") or "Unknown"
+        mac = normalize_mac(scan.get("MACAddress"))
+        vendor = next((value for value in map(identity_value, (
+            manual.get("Vendor"), (oui or {}).get(mac[:8] if mac else ""),
+            scan.get("Vendor"), past.get("Vendor"))) if value), "Unknown")
+        device_type = next((value for value in map(identity_value, (
+            manual.get("DeviceType"), scan.get("DeviceType"), past.get("DeviceType"))) if value), "Unknown")
         known = bool(devices or manual or past.get("Known") or scan.get("HostName"))
         if scan.get("IsOnline"):
             status = "Online - Known" if devices or manual or name != "Unknown" else "Online - Unknown"
@@ -147,6 +263,8 @@ def merge_current(addresses, scans, kepware, manuals, evidence):
         else:
             status = "Candidate Free"
         rows.append({**scan, "IPAddress": ip, "MachineName": name, "Status": status,
+                     "Vendor": vendor, "DeviceType": device_type,
+                     "DetectionSource": detection_source(scan, devices),
                      "KepwareChannel": channel_names,
                      "KepwareDevice": device_names,
                      "KepwareIdentity": devices, "Manual": manual,
@@ -168,7 +286,7 @@ def filter_rows(rows, query="", category="All", sort="IPAddress", descending=Fal
     }
     if category not in filters or sort not in ("IPAddress", "MachineName", "Status", "LastSeen"):
         raise InventoryError("Invalid inventory filter or sort.")
-    fields = ("IPAddress", "MachineName", "KepwareChannel", "KepwareDevice", "Vendor", "DeviceType",
+    fields = ("IPAddress", "NetworkName", "MachineName", "KepwareChannel", "KepwareDevice", "Vendor", "DeviceType",
               "DeviceModel", "HostName", "Description", "Location", "Remark")
     result = [r for r in rows if filters[category](r) and query.casefold().strip() in
               " ".join(str(r.get(f) or "") for f in fields).casefold()]
@@ -176,16 +294,47 @@ def filter_rows(rows, query="", category="All", sort="IPAddress", descending=Fal
 
 
 TABLES = {
-    "NetworkInventoryRun": "RunId StartedAt FinishedAt ScanStartIP ScanEndIP TriggeredBy TotalIPs OnlineCount KepwareSnapshotComplete KepwareError",
-    "NetworkScanHistory": "RunId IPAddress IsOnline ResponseMs MACAddress HostName Vendor DeviceType DeviceModel DetectionSource ScanTime ScanError",
-    "KepwareDeviceHistory": "RunId SnapshotTime IPAddress ChannelName DeviceName DevicePath DriverName Enabled RawIdentityFields",
-    "NetworkDeviceManualHistory": "IPAddress MachineName Description Location Remark UpdatedAt UpdatedBy IsActive",
+    "NetworkInventoryRun": "RunId NetworkId StartedAt FinishedAt ScanStartIP ScanEndIP TriggeredBy TotalIPs OnlineCount KepwareSnapshotComplete KepwareError",
+    "NetworkScanHistory": "RunId NetworkId IPAddress IsOnline ResponseMs MACAddress HostName Vendor DeviceType DeviceModel DetectionSource ScanTime ScanError",
+    "KepwareDeviceHistory": "RunId NetworkId SnapshotTime IPAddress ChannelName DeviceName DevicePath DriverName Enabled RawIdentityFields",
+    "NetworkDeviceManualHistory": "NetworkId IPAddress MachineName Description Location Remark Vendor DeviceType UpdatedAt UpdatedBy IsActive",
 }
 
 
 class InventoryStore:
     def __init__(self, connection_factory):
         self.connection_factory = connection_factory
+
+    def sync_profiles(self, configured):
+        connection = self.connection_factory()
+        try:
+            cursor = connection.cursor()
+            # Serializable range locks protect name identity even across processes.
+            existing = self.query(cursor, 'SELECT * FROM dbo.OTNetworkProfile WITH (UPDLOCK, HOLDLOCK) ORDER BY NetworkName')
+            by_name = {row['NetworkName'].casefold(): row for row in existing}
+            names = {profile.network_name.casefold() for profile in configured}
+            result = []
+            for profile in configured:
+                row = by_name.get(profile.network_name.casefold())
+                if row is None:
+                    cursor.execute('INSERT INTO dbo.OTNetworkProfile (NetworkName,ScanStart,ScanEnd) VALUES (?,?,?)',
+                                   profile.network_name, profile.scan_start, profile.scan_end)
+                    row = self.query(cursor, 'SELECT * FROM dbo.OTNetworkProfile WHERE NetworkName=?', profile.network_name)[0]
+                elif (row['ScanStart'], row['ScanEnd'], bool(row['Enabled'])) != (profile.scan_start, profile.scan_end, True):
+                    cursor.execute('UPDATE dbo.OTNetworkProfile SET ScanStart=?,ScanEnd=?,Enabled=1,UpdatedAt=? WHERE NetworkId=?',
+                                   profile.scan_start, profile.scan_end, now(), row['NetworkId'])
+                result.append(replace(profile, network_id=int(row['NetworkId']), nic_name=row['NicName'],
+                                      nic_mac=row['NicMac'], source_ip=row['SourceIP'], kepware_channel=row['KepwareChannel']))
+            for row in existing:
+                if row['NetworkName'].casefold() not in names and row['Enabled']:
+                    cursor.execute('UPDATE dbo.OTNetworkProfile SET Enabled=0,UpdatedAt=? WHERE NetworkId=?', now(), row['NetworkId'])
+            connection.commit()
+            return tuple(result)
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     @staticmethod
     def insert(cursor, table, record):
@@ -194,7 +343,9 @@ class InventoryStore:
                        *[record.get(col) for col in columns])
 
     def persist(self, run, scans, devices):
-        expected = scan_range(run["ScanStartIP"], run["ScanEndIP"])
+        if not isinstance(run.get('NetworkId'), int) or run['NetworkId'] < 1:
+            raise InventoryError('New scans require a persisted NetworkId.')
+        expected = scan_range(run["ScanStartIP"], run["ScanEndIP"], explicit_named=True)
         if len(scans) != len(expected) or {r["IPAddress"] for r in scans} != set(expected):
             raise InventoryError("Refusing an incomplete network snapshot.")
         connection = self.connection_factory()
@@ -202,9 +353,9 @@ class InventoryStore:
             cursor = connection.cursor()
             self.insert(cursor, "NetworkInventoryRun", run)
             for record in scans:
-                self.insert(cursor, "NetworkScanHistory", {**record, "RunId": run["RunId"]})
+                self.insert(cursor, "NetworkScanHistory", {**record, "RunId": run["RunId"], 'NetworkId': run['NetworkId']})
             for record in devices:
-                self.insert(cursor, "KepwareDeviceHistory", {**record, "RunId": run["RunId"]})
+                self.insert(cursor, "KepwareDeviceHistory", {**record, "RunId": run["RunId"], 'NetworkId': run['NetworkId']})
             connection.commit()
         except Exception:
             connection.rollback()
@@ -213,6 +364,8 @@ class InventoryStore:
             connection.close()
 
     def manual(self, record):
+        if not isinstance(record.get('NetworkId'), int) or record['NetworkId'] < 1:
+            raise InventoryError('New manual revisions require a persisted NetworkId.')
         connection = self.connection_factory()
         try:
             self.insert(connection.cursor(), "NetworkDeviceManualHistory", record)
@@ -228,43 +381,66 @@ class InventoryStore:
         cursor.execute(sql, *args)
         return [dict(zip([c[0] for c in cursor.description], row)) for row in cursor.fetchall()]
 
-    def current(self, addresses):
+    def current(self, addresses, network_id=None, oui=None):
         connection = self.connection_factory()
         try:
             cursor = connection.cursor()
-            scans = self.query(cursor, """WITH latest AS (
-                SELECT *, ROW_NUMBER() OVER (PARTITION BY IPAddress ORDER BY ScanTime DESC, ScanHistoryId DESC) AS rn
-                FROM dbo.NetworkScanHistory) SELECT * FROM latest WHERE rn=1""")
-            manuals = self.query(cursor, """WITH latest AS (
-                SELECT *, ROW_NUMBER() OVER (PARTITION BY IPAddress ORDER BY UpdatedAt DESC, ManualHistoryId DESC) AS rn
-                FROM dbo.NetworkDeviceManualHistory WHERE IsActive=1) SELECT * FROM latest WHERE rn=1""")
-            devices = self.query(cursor, """SELECT * FROM dbo.KepwareDeviceHistory WHERE RunId=(
-                SELECT TOP (1) RunId FROM dbo.NetworkInventoryRun WHERE KepwareSnapshotComplete=1
-                ORDER BY FinishedAt DESC, RunSequence DESC) ORDER BY ChannelName, DeviceName""")
-            evidence_rows = self.query(cursor, """SELECT IPAddress, MAX(LastSeen) AS LastSeen, MAX(Known) AS Known FROM (
+            scope = 'NetworkId IS NULL' if network_id is None else 'NetworkId=?'
+            args = () if network_id is None else (network_id,)
+            scans = self.query(cursor, f"""WITH latest AS (
+                SELECT *, ROW_NUMBER() OVER (PARTITION BY NetworkId, IPAddress ORDER BY ScanTime DESC, ScanHistoryId DESC) AS rn
+                FROM dbo.NetworkScanHistory WHERE {scope}) SELECT * FROM latest WHERE rn=1""", *args)
+            manuals = self.query(cursor, f"""WITH latest AS (
+                SELECT *, ROW_NUMBER() OVER (PARTITION BY NetworkId, IPAddress ORDER BY UpdatedAt DESC, ManualHistoryId DESC) AS rn
+                FROM dbo.NetworkDeviceManualHistory WHERE IsActive=1 AND {scope}) SELECT * FROM latest WHERE rn=1""", *args)
+            devices = self.query(cursor, f"""SELECT * FROM dbo.KepwareDeviceHistory WHERE {scope} AND RunId=(
+                SELECT TOP (1) RunId FROM dbo.NetworkInventoryRun WHERE KepwareSnapshotComplete=1 AND {scope}
+                ORDER BY FinishedAt DESC, RunSequence DESC) ORDER BY ChannelName, DeviceName""", *(args + args))
+            evidence_rows = self.query(cursor, f"""SELECT IPAddress, MAX(LastSeen) AS LastSeen, MAX(Known) AS Known FROM (
                 SELECT IPAddress, CASE WHEN IsOnline=1 THEN ScanTime END AS LastSeen,
-                    CASE WHEN IsOnline=1 OR MACAddress IS NOT NULL OR HostName IS NOT NULL THEN 1 ELSE 0 END AS Known FROM dbo.NetworkScanHistory
-                UNION ALL SELECT IPAddress, NULL, 1 FROM dbo.KepwareDeviceHistory WHERE IPAddress IS NOT NULL
-                UNION ALL SELECT IPAddress, NULL, 1 FROM dbo.NetworkDeviceManualHistory
-                ) e GROUP BY IPAddress""")
-            runs = self.query(cursor, "SELECT TOP (1) * FROM dbo.NetworkInventoryRun ORDER BY FinishedAt DESC, RunSequence DESC")
+                    CASE WHEN IsOnline=1 OR MACAddress IS NOT NULL OR HostName IS NOT NULL THEN 1 ELSE 0 END AS Known FROM dbo.NetworkScanHistory WHERE {scope}
+                UNION ALL SELECT IPAddress, NULL, 1 FROM dbo.KepwareDeviceHistory WHERE IPAddress IS NOT NULL AND {scope}
+                UNION ALL SELECT IPAddress, NULL, 1 FROM dbo.NetworkDeviceManualHistory WHERE {scope}
+                ) e GROUP BY IPAddress""", *(args * 3))
+            identities = self.query(cursor, f"""WITH ranked AS (
+                SELECT IPAddress, MACAddress, Vendor, DeviceType,
+                    ROW_NUMBER() OVER (PARTITION BY NetworkId, IPAddress ORDER BY ScanTime DESC, ScanHistoryId DESC) AS rn
+                FROM dbo.NetworkScanHistory WHERE {scope} AND
+                    (Vendor IS NOT NULL AND Vendor <> 'Unknown' OR DeviceType IS NOT NULL AND DeviceType <> 'Unknown'))
+                SELECT * FROM ranked WHERE rn=1""", *args)
+            mac_rows = self.query(cursor, f"""WITH ranked AS (
+                SELECT IPAddress, MACAddress,
+                    ROW_NUMBER() OVER (PARTITION BY NetworkId, IPAddress ORDER BY ScanTime DESC, ScanHistoryId DESC) AS rn
+                FROM dbo.NetworkScanHistory WHERE {scope} AND MACAddress IS NOT NULL)
+                SELECT * FROM ranked WHERE rn=1""", *args)
+            runs = self.query(cursor, f"SELECT TOP (1) * FROM dbo.NetworkInventoryRun WHERE {scope} ORDER BY FinishedAt DESC, RunSequence DESC", *args)
             evidence = {r["IPAddress"]: r for r in evidence_rows}
+            latest_macs = {r["IPAddress"]: r["MACAddress"] for r in mac_rows}
+            for identity in identities:
+                current_mac = latest_macs.get(identity["IPAddress"])
+                if not current_mac or current_mac == identity.get("MACAddress"):
+                    evidence.setdefault(identity["IPAddress"], {}).update(
+                        Vendor=identity.get("Vendor"), DeviceType=identity.get("DeviceType"))
             for row in scans:
                 evidence.setdefault(row["IPAddress"], {})["SnapshotComplete"] = bool(runs and runs[0]["KepwareSnapshotComplete"])
             grouped = {}
             for device in devices:
                 grouped.setdefault(device["IPAddress"], []).append(device)
+            if addresses is None:
+                addresses = sorted({r['IPAddress'] for r in scans + manuals + evidence_rows if r['IPAddress']}, key=IPv4Address)
             return {"rows": merge_current(addresses, {r["IPAddress"]: r for r in scans}, grouped,
-                                          {r["IPAddress"]: r for r in manuals}, evidence),
+                                          {r["IPAddress"]: r for r in manuals}, evidence, oui),
                     "last_run": runs[0] if runs else None}
         finally:
             connection.close()
 
-    def history(self, ip):
+    def history(self, ip, network_id=None):
         connection = self.connection_factory()
         try:
             cursor = connection.cursor()
-            return {key: self.query(cursor, f"SELECT * FROM dbo.{table} WHERE IPAddress=? ORDER BY {order} DESC, {identity} DESC", ip)
+            scope = 'NetworkId IS NULL' if network_id is None else 'NetworkId=?'
+            args = (ip,) if network_id is None else (ip, network_id)
+            return {key: self.query(cursor, f"SELECT * FROM dbo.{table} WHERE IPAddress=? AND {scope} ORDER BY {order} DESC, {identity} DESC", *args)
                     for key, table, order, identity in [
                         ("network", "NetworkScanHistory", "ScanTime", "ScanHistoryId"),
                         ("kepware", "KepwareDeviceHistory", "SnapshotTime", "KepwareHistoryId"),
@@ -274,52 +450,152 @@ class InventoryStore:
 
 
 class NetworkInventory:
-    def __init__(self, store, client, start, end, probe=None, oui=None, resolve_hostnames=False):
+    def __init__(self, store, client, start='', end='', probe=None, oui=None, resolve_hostnames=False, ranges=None):
         self.store, self.client = store, client
         self.start, self.end = start, end
         self.probe = probe
-        self.oui = oui
+        self.oui = load_oui_file() if oui is None else oui
         self.resolve_hostnames = resolve_hostnames
         self.lock = Lock()
+        self.ranges = ranges
+        self.profile_lock = Lock()
+        self._profiles = None
+
+    @property
+    def networks(self):
+        # Initialize only the inventory feature; a missing migration must not prevent
+        # unrelated historian/alarm functionality from starting. Never scan here.
+        with self.profile_lock:
+            if self._profiles is None:
+                configured = configured_networks(self.ranges, self.start, self.end)
+                self._profiles = self.store.sync_profiles(configured)
+            return self._profiles
 
     @property
     def addresses(self):
-        return scan_range(self.start, self.end)
+        return tuple(dict.fromkeys(ip for network in self.networks for ip in network.addresses))
 
-    def scan(self, actor):
-        addresses = self.addresses
+    def selected_networks(self, network_id=None):
+        networks = self.networks
+        if network_id is None or network_id == 'all':
+            return networks
+        try:
+            selected = int(network_id)
+        except (TypeError, ValueError) as exc:
+            raise InventoryError('Select a configured NetworkId.') from exc
+        result = tuple(n for n in networks if n.network_id == selected)
+        if not result:
+            raise InventoryError('NetworkId is not an enabled configured network.')
+        return result
+
+    def identity_network(self, ip, network_id=None):
+        networks = self.selected_networks(network_id)
+        if len(networks) != 1:
+            raise InventoryError('Select NetworkId explicitly for history or manual identity with multiple networks.')
+        network = networks[0]
+        if ip not in network.addresses:
+            raise InventoryError('IP is outside the configured OT range.')
+        return network
+
+    def current(self, network_id=None):
+        networks = self.selected_networks(network_id)
+        rows, summaries = [], []
+        all_networks = self.networks
+        for network in networks:
+            result = self.store.current(network.addresses, network.network_id, oui=self.oui)
+            summaries.append({**network.payload(), 'last_run': result['last_run']})
+            for row in result['rows']:
+                overlaps = [n.network_name for n in all_networks if row['IPAddress'] in n.addresses]
+                ambiguity = ('Overlapping configured ranges: ' + ', '.join(overlaps) +
+                             '. Phase 1 uses Windows routing; physical network and Kepware identity are unverified.') if len(overlaps) > 1 else ''
+                # A probe on an unbound interface cannot establish availability on
+                # each overlapping physical network, even though identities stay separate.
+                if ambiguity and row['Status'] == 'Candidate Free':
+                    row['Status'] = 'Not Verified'
+                rows.append({**row, **network.payload(), 'NetworkId': network.network_id,
+                             'NetworkName': network.network_name, 'Ambiguity': ambiguity})
+        runs = [n['last_run'] for n in summaries if n['last_run']]
+        # NULL history is displayed separately, never inferred to belong to a profile.
+        legacy = self.store.current(None, oui=self.oui)
+        legacy_rows = [{**r, 'NetworkId': None, 'NetworkName': 'Legacy / unassigned',
+                        'network_id': None, 'network_name': 'Legacy / unassigned',
+                        'Status': 'Not Verified' if r['Status'] == 'Candidate Free' else r['Status']}
+                       for r in legacy['rows']]
+        if network_id in (None, 'all'):
+            rows.extend(legacy_rows)
+        return {'rows': rows, 'networks': [n.payload() for n in all_networks],
+                'network_summaries': summaries, 'legacy_count': len(legacy_rows),
+                'last_run': max(runs, key=lambda r: (str(r['FinishedAt']), r['RunSequence'])) if runs else None,
+                'scan_start': networks[0].scan_start if len(networks) == 1 else None,
+                'scan_end': networks[0].scan_end if len(networks) == 1 else None,
+                'network_id': networks[0].network_id if len(networks) == 1 else None,
+                'network_name': networks[0].network_name if len(networks) == 1 else 'All Networks'}
+
+    def history(self, ip, network_id=None):
+        if network_id == 'legacy':
+            try:
+                ip = str(IPv4Address(ip))
+            except ValueError as exc:
+                raise InventoryError('Invalid IPv4 address.') from exc
+            return self.store.history(ip)
+        network = self.identity_network(ip, network_id)
+        return self.store.history(ip, network.network_id)
+
+    def scan(self, actor, network_id=None):
+        networks = self.selected_networks(network_id)
         if not self.lock.acquire(blocking=False):
             raise InventoryError("An inventory scan is already running.")
         try:
-            run = dict(RunId=str(uuid.uuid4()), StartedAt=now(), ScanStartIP=self.start,
-                       ScanEndIP=self.end, TriggeredBy=actor, TotalIPs=len(addresses),
-                       KepwareSnapshotComplete=True, KepwareError=None)
-            devices = []
-            try:
-                devices = kepware_snapshot(self.client, run["RunId"])
-            except Exception:
-                run.update(KepwareSnapshotComplete=False, KepwareError="Kepware snapshot failed; candidate-free classification withheld.")
-            probe = self.probe or ReadOnlyProbe(addresses, self.oui, self.resolve_hostnames)
-            scans = []
-            for ip in addresses:
-                result = probe(ip)
-                if result["IPAddress"] != ip:
-                    raise InventoryError("Probe returned an unexpected address.")
-                scans.append(result)
-            run.update(FinishedAt=now(), OnlineCount=sum(bool(r["IsOnline"]) for r in scans))
-            self.store.persist(run, scans, devices)
-            return run
+            runs = [self.scan_network(actor, network) for network in networks]
+            return runs[0] if len(runs) == 1 else {'runs': runs}
         finally:
             self.lock.release()
 
-    def save_manual(self, ip, values, actor):
-        if ip not in self.addresses:
-            raise InventoryError("IP is outside the configured OT range.")
-        record = {key: str(values.get(key) or "").strip() for key in ("MachineName", "Description", "Location", "Remark")}
+    def scan_network(self, actor, network):
+        addresses = network.addresses
+        run = dict(RunId=str(uuid.uuid4()), NetworkId=network.network_id, StartedAt=now(), ScanStartIP=network.scan_start,
+                   ScanEndIP=network.scan_end, TriggeredBy=actor, TotalIPs=len(addresses),
+                   KepwareSnapshotComplete=True, KepwareError=None)
+        devices = []
+        try:
+            devices = kepware_snapshot(self.client, run["RunId"])
+            # Retain unparsed raw identifiers without assigning an IP. Parsed
+            # identifiers belong only to the range currently being scanned.
+            devices = [{**d, 'NetworkId': network.network_id} for d in devices
+                       if d['IPAddress'] is None or d['IPAddress'] in addresses]
+        except Exception:
+            run.update(KepwareSnapshotComplete=False, KepwareError="Kepware snapshot failed; candidate-free classification withheld.")
+        probe = self.probe or ReadOnlyProbe(addresses, self.oui, self.resolve_hostnames, network=network, defer_neighbors=True)
+        scans = []
+        for ip in addresses:
+            result = probe(ip)
+            if result["IPAddress"] != ip:
+                raise InventoryError("Probe returned an unexpected address.")
+            scans.append({**result, 'NetworkId': network.network_id})
+        if isinstance(probe, ReadOnlyProbe):
+            neighbors = probe.collect_neighbors()
+            for result in scans:
+                if probe.neighbor_error:
+                    result["ScanError"] = result.get("ScanError") or probe.neighbor_error
+                mac = neighbors.get(result["IPAddress"])
+                if mac:
+                    result["MACAddress"] = mac
+                    result["Vendor"] = probe.oui.get(mac[:8])
+        for result in scans:
+            result["DetectionSource"] = detection_source(result, [d for d in devices if d["IPAddress"] == result["IPAddress"]])
+        run.update(FinishedAt=now(), OnlineCount=sum(bool(r["IsOnline"]) for r in scans))
+        self.store.persist(run, scans, devices)
+        return {**run, **network.payload()}
+
+    def save_manual(self, ip, values, actor, network_id=None):
+        network = self.identity_network(ip, network_id)
+        record = {key: str(values.get(key) or "").strip() for key in ("MachineName", "Description", "Location", "Remark", "Vendor", "DeviceType")}
         if not any(record.values()):
             raise InventoryError("Enter a machine name or reservation description.")
         if any(len(value) > 2000 for value in record.values()):
             raise InventoryError("Manual fields must be at most 2000 characters.")
-        record.update(IPAddress=ip, UpdatedAt=now(), UpdatedBy=actor, IsActive=True)
+        if any(len(record[key]) > 512 for key in ("Vendor", "DeviceType")):
+            raise InventoryError("Vendor and Device Type must be at most 512 characters.")
+        record.update(NetworkId=network.network_id, IPAddress=ip, UpdatedAt=now(), UpdatedBy=actor, IsActive=True)
         self.store.manual(record)
         return record

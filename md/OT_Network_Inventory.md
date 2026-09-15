@@ -1,5 +1,9 @@
 # OT Network Inventory
 
+For the current multi-network implementation and additive migration, see
+[OT Network Inventory Phase 1](OT_Network_Inventory_Phase1.md). The original
+single-range implementation and deployment evidence below are retained as history.
+
 Deployment: run `sql/network_inventory.sql` against the existing OpcTagMgr database
 after the normal bootstrap (or as an additive migration on an existing deployment).
 Run `sql/verify_network_inventory.sql` afterward. The migration is rerunnable and
