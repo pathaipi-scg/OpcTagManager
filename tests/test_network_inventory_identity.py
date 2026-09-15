@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from services.network_inventory import ReadOnlyProbe, load_oui_file, merge_current
+from services.network_inventory import ReadOnlyProbe, load_oui_file, merge_current, oui_lookup_diagnostics
 from test_network_inventory import inventory, device, scan_result, IP, END
 
 
@@ -15,6 +15,55 @@ def test_local_oui_file_formats_and_invalid_entries(tmp_path, monkeypatch):
                                 'bad': 'Ignored', '22:33:44': None}))
     monkeypatch.setenv('OT_OUI_FILE', str(path))
     assert load_oui_file() == {'00:1B:1B': 'Siemens', '00:11:22': 'Other'}
+
+
+def test_ieee_csv_bom_quoted_fields_and_diagnostics(tmp_path, monkeypatch):
+    path = tmp_path / 'oui.csv'
+    path.write_text('Registry,Assignment,Organization Name,Organization Address\n'
+                    'MA-L,001B1B,"Siemens, Test Organization","Street, City\nCountry"\n'
+                    'MA-L,001122,CIMSYS Inc,Address\n'
+                    'MA-M,0011223,Longer assignment,Address\n'
+                    'MA-S,001122334,Longer assignment,Address\n'
+                    'MA-L,invalid,Bad,Address\n'
+                    'MA-L,112233,,Address\n', encoding='utf-8-sig')
+    monkeypatch.setenv('OT_OUI_FILE', str(path))
+    result = oui_lookup_diagnostics(sample_mac='00-1b-1b-12-34-56')
+    assert result == dict(oui_file_path=str(path), load_success=True, loaded_record_count=2,
+                          file_format='IEEE CSV', error=None,
+                          sample_mac_address='00-1b-1b-12-34-56',
+                          normalized_mac_address='00:1B:1B:12:34:56', normalized_mac_prefix='00:1B:1B',
+                          lookup_matched=True, matched_vendor='Siemens, Test Organization')
+    assert load_oui_file()["00:11:22"] == 'CIMSYS Inc'
+    unknown = oui_lookup_diagnostics(sample_mac='00-ab-cd-12-34-56')
+    assert unknown['load_success'] and not unknown['lookup_matched']
+    assert unknown['matched_vendor'] == 'Unknown'
+    row = merge_current([IP], {IP: scan_result(IP, True, MACAddress='00:1B:1B:12:34:56')},
+                        {}, {}, {}, load_oui_file())[0]
+    assert row['Vendor'] == 'Siemens, Test Organization'
+    assert row['DeviceType'] == 'Unknown'
+
+
+@pytest.mark.parametrize('content', [
+    'Assignment,Vendor\n001122,Vendor\n',
+    'Registry,Assignment,Organization Name,Organization Address\nMA-L,001122,"unterminated',
+])
+def test_ieee_csv_failure_diagnostics(tmp_path, content):
+    path = tmp_path / 'oui.csv'
+    path.write_text(content, encoding='utf-8')
+    result = oui_lookup_diagnostics(path, '00:11:22:33:44:55')
+    assert not result['load_success'] and result['error']
+    assert result['loaded_record_count'] == 0
+    assert result['matched_vendor'] == 'Unknown'
+
+
+def test_missing_file_and_invalid_mac_diagnostics(tmp_path):
+    path = tmp_path / 'missing.csv'
+    result = oui_lookup_diagnostics(path, 'not-a-mac')
+    assert result['oui_file_path'] == str(path)
+    assert not result['load_success'] and result['error']
+    assert result['normalized_mac_prefix'] is None
+    assert result['loaded_record_count'] == 0
+    assert not result['lookup_matched']
 
 
 @pytest.mark.parametrize('content', ['{', '[]', 'null', '42'])
@@ -70,6 +119,7 @@ def test_identity_priority_and_manual_fields_persist(inventory):
 
 def test_stored_identity_survives_missing_evidence_but_not_mac_change(inventory):
     service, _ = inventory
+    service.oui = {}  # Exercise stored evidence independently of local configuration.
     service.probe.side_effect = lambda ip: scan_result(ip, True, MACAddress='00:1B:1B:00:00:01', Vendor='Siemens')
     service.scan('before')
     service.probe.side_effect = lambda ip: scan_result(ip)
@@ -104,6 +154,7 @@ def test_arp_only_does_not_prove_online():
 def test_stored_manufacturer_is_network_scoped():
     from test_network_inventory_phase1 import make_service
     service, _ = make_service(f'A|{IP}|{END};B|{IP}|{END}')
+    service.oui = {}
     a, b = service.networks
     service.probe.side_effect = lambda ip: scan_result(ip, True, MACAddress='00:1B:1B:00:00:01', Vendor='Siemens')
     service.scan('A', a.network_id)

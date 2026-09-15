@@ -5,7 +5,10 @@ from datetime import datetime, timezone
 from dataclasses import dataclass, replace
 from functools import cached_property
 from ipaddress import IPv4Address, IPv4Network
+import csv
+import io
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -91,20 +94,56 @@ def normalize_mac(value):
     return ":".join(compact[i:i + 2] for i in range(0, 12, 2))
 
 
-def load_oui_file(filename=None):
-    """Load local JSON prefix -> manufacturer evidence without network access."""
+def load_oui_file(filename=None, *, diagnostics=None):
+    """Load IEEE MA-L CSV or legacy JSON locally, preserving the prefix-map API."""
+    filename = str(filename or os.environ.get("OT_OUI_FILE", ""))
+    details = dict(oui_file_path=filename, load_success=False, loaded_record_count=0,
+                   file_format=None, error=None)
+    result = {}
     try:
-        data = json.loads(Path(filename or os.environ.get("OT_OUI_FILE", "")).read_text(encoding="utf-8-sig"))
-        if not isinstance(data, dict):
-            return {}
-        result = {}
-        for prefix, vendor in data.items():
-            prefix = re.sub(r"[:-]", "", prefix).upper()
+        if not filename:
+            raise ValueError("OT_OUI_FILE is not configured")
+        content = Path(filename).read_text(encoding="utf-8-sig")
+        if Path(filename).suffix.lower() == '.json' or content.lstrip().startswith('{'):
+            details['file_format'] = 'JSON'
+            data = json.loads(content)
+            if not isinstance(data, dict):
+                raise ValueError("OUI JSON must be a prefix-to-manufacturer object")
+            entries = data.items()
+        else:
+            details['file_format'] = 'IEEE CSV'
+            reader = csv.DictReader(io.StringIO(content), strict=True)
+            required = {'Registry', 'Assignment', 'Organization Name', 'Organization Address'}
+            if not required.issubset(reader.fieldnames or []):
+                raise ValueError("IEEE CSV requires Registry, Assignment, Organization Name, Organization Address headers")
+            # MA-M/MA-S are longer assignments, not 24-bit OUI prefixes.
+            entries = ((row.get('Assignment'), row.get('Organization Name'))
+                       for row in reader if (row.get('Registry') or '').strip() == 'MA-L')
+        for prefix, vendor in entries:
+            prefix = re.sub(r"[:-]", "", str(prefix or '').strip()).upper()
             if re.fullmatch(r"[0-9A-F]{6}", prefix) and isinstance(vendor, str) and vendor.strip():
                 result[":".join(prefix[i:i + 2] for i in range(0, 6, 2))] = vendor.strip()[:512]
-        return result
-    except (OSError, ValueError, TypeError):
-        return {}
+        details.update(load_success=True, loaded_record_count=len(result))
+    except (OSError, ValueError, TypeError, csv.Error) as exc:
+        result = {}
+        details['error'] = str(exc)
+    if diagnostics is not None:
+        diagnostics.update(details)
+    logging.getLogger(__name__).info("Offline OUI load: %s", details)
+    return result
+
+
+def oui_lookup_diagnostics(filename=None, sample_mac=None):
+    """Read-only diagnostic using exactly the inventory loader and prefix format."""
+    details = {}
+    oui = load_oui_file(filename, diagnostics=details)
+    mac = normalize_mac(sample_mac)
+    prefix = mac[:8] if mac else None
+    vendor = oui.get(prefix)
+    details.update(sample_mac_address=sample_mac, normalized_mac_address=mac,
+                   normalized_mac_prefix=prefix, lookup_matched=vendor is not None,
+                   matched_vendor=vendor or 'Unknown')
+    return details
 
 
 def detection_source(scan, devices=()):

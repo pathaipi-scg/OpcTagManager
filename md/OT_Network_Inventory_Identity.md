@@ -5,13 +5,33 @@ phase 1 migrations before deploying this change. This adds nullable manual
 Vendor and DeviceType fields; it does not rewrite history. Fresh installations
 include these columns in `sql/network_inventory.sql`.
 
-Set `OT_OUI_FILE` to a local UTF-8 JSON object mapping 24-bit OUI prefixes to
-manufacturer names from a trusted database. Prefixes may use colons, hyphens,
+Set `OT_OUI_FILE` to a local IEEE UTF-8 CSV (BOM accepted) or legacy JSON object
+mapping 24-bit OUI prefixes to manufacturer names from a trusted database.
+IEEE CSV headers are `Registry`, `Assignment`, `Organization Name`, and
+`Organization Address`. MA-L rows map Assignment to Organization Name; quoted
+commas and multiline addresses are supported. Longer MA-M/MA-S assignments
+are excluded from the 24-bit lookup. JSON prefixes may use colons, hyphens,
 or six hexadecimal digits, case-insensitively. The existing configuration
 example documents the JSON format. The file is read at service initialization;
 restart after replacing it. No database download or runtime internet lookup
 occurs. No manufacturer entries are bundled or guessed. Missing, unreadable,
 or malformed files produce an empty lookup; invalid entries are ignored.
+
+### Offline diagnostics
+
+From the project directory, copy a MAC from Windows `arp -a`, then run:
+
+```powershell
+.\.venv\Scripts\python.exe -m services.oui_diagnostics --file D:\AI\OpcTagManager\data\oui.csv --mac 00-11-22-33-44-55
+```
+
+The JSON report includes file path, load success/failure, format, loaded unique
+prefix count, error, sample MAC, normalized MAC/prefix, and matched vendor.
+Omit `--file` to use the shell's `OT_OUI_FILE` environment variable. The command
+does not start/restart production, scan, or write history. Inventory loading
+also emits the file/load/count/error diagnostics through the module's INFO log.
+An OUI match identifies the registered prefix owner; it does not verify a
+physical device's manufacturer if a MAC has been overridden or proxied.
 
 Each configured scan sends the existing ICMP probes, then reads `arp -a`
 once and retains only configured target addresses. Valid unicast MACs are
