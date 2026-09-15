@@ -14,6 +14,8 @@ from pathlib import Path
 import re
 import subprocess
 from threading import Lock
+from time import monotonic
+from copy import deepcopy
 import uuid
 
 from services.kepware_config_api import _property_value
@@ -156,6 +158,16 @@ def identity_value(value):
     return value if value and str(value).strip().casefold() != "unknown" else None
 
 
+# Exact placeholder observed in two historical verification runs. Do not reject
+# the entire 00:11:22 OUI: real devices may legitimately use that manufacturer.
+SAMPLE_MAC = "00:11:22:33:44:55"
+
+
+def trusted_mac(value):
+    mac = normalize_mac(value)
+    return mac if mac != SAMPLE_MAC else None
+
+
 class ReadOnlyProbe:
     """One ICMP echo and ARP cache lookup; optional Windows reverse-name lookup. No TCP probes."""
     def __init__(self, addresses, oui=None, resolve_hostnames=False, *, network=None, defer_neighbors=False):
@@ -164,6 +176,8 @@ class ReadOnlyProbe:
         self.resolve_hostnames = resolve_hostnames
         self.defer_neighbors = defer_neighbors
         self.neighbor_error = None
+        self.neighbor_diagnostics = {}
+        self.raw_arp = ""
         # Phase 2 can consume network.nic_name / nic_mac / source_ip here.
         # Phase 1 deliberately uses the existing Windows routing behavior.
         self.network = network
@@ -210,27 +224,67 @@ class ReadOnlyProbe:
         """
         windows = os.name == "nt"
         self.neighbor_error = None
+        self.raw_arp = ""
+        self.neighbor_diagnostics = {ip: dict(
+            NetworkId=self.network.network_id if self.network else None,
+            IPAddress=ip, MACAddress=None, ObservedMACAddress=None,
+            ARPObservations=[],
+            ARPInterface=None, ARPSource="Windows arp -a" if windows else "arp -a",
+            MACPrefix=None, OUIVendor="Unknown", MACReason="No ARP entry for this IP")
+            for ip in self.addresses}
         try:
             reply = subprocess.run(["arp", "-a"] + ([target] if target else []),
                                    capture_output=True, text=True, timeout=3, errors="replace",
                                    creationflags=subprocess.CREATE_NO_WINDOW if windows else 0)
             if reply.returncode:
                 self.neighbor_error = "ARP cache unavailable"
+                for row in self.neighbor_diagnostics.values():
+                    row['MACReason'] = self.neighbor_error
                 return {}
         except (OSError, subprocess.TimeoutExpired):
             self.neighbor_error = "ARP cache unavailable or timed out"
+            for row in self.neighbor_diagnostics.values():
+                row['MACReason'] = self.neighbor_error
             return {}
+        self.raw_arp = reply.stdout
         candidates = {}
+        interface = None
         for line in reply.stdout.splitlines():
+            header = re.match(r"\s*Interface:\s*(\S+)\s+---\s+(\S+)", line, re.I)
+            if header:
+                interface = f"{header[1]} ({header[2]})"
+                continue
             ips = re.findall(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])", line)
             macs = re.findall(r"\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b", line, re.I)
             for ip in ips:
                 if ip in self.addresses:
                     for value in macs:
                         mac = normalize_mac(value)
+                        diagnostic = self.neighbor_diagnostics[ip]
+                        diagnostic['ObservedMACAddress'] = value
+                        diagnostic['ARPObservations'].append({'MACAddress': value, 'Interface': interface})
+                        diagnostic['ARPInterface'] = ', '.join(dict.fromkeys(
+                            r['Interface'] for r in diagnostic['ARPObservations'] if r['Interface'])) or None
                         if mac:
                             candidates.setdefault(ip, set()).add(mac)
-        return {ip: next(iter(macs)) for ip, macs in candidates.items() if len(macs) == 1}
+                        else:
+                            diagnostic['MACReason'] = 'Invalid, zero, or multicast MAC'
+        captured = {}
+        for ip, macs in candidates.items():
+            diagnostic = self.neighbor_diagnostics[ip]
+            if len(macs) != 1:
+                diagnostic['MACReason'] = 'Conflicting ARP MACs across interfaces'
+                continue
+            mac = next(iter(macs))
+            diagnostic['MACPrefix'] = mac[:8]
+            if not trusted_mac(mac):
+                diagnostic['MACReason'] = 'Known sample MAC withheld; device identity unverified'
+                continue
+            captured[ip] = mac
+            vendor = self.oui.get(mac[:8])
+            diagnostic.update(MACAddress=mac, MACPrefix=mac[:8], OUIVendor=vendor or 'Unknown',
+                              MACReason='OUI matched' if vendor else 'MAC captured; prefix absent from loaded OUI database')
+        return captured
 
 
 def extract_kepware_ipv4(value):
@@ -276,6 +330,11 @@ def merge_current(addresses, scans, kepware, manuals, evidence, oui=None):
     rows = []
     for ip in addresses:
         scan = scans.get(ip, {})
+        rejected_sample = normalize_mac(scan.get('MACAddress')) == SAMPLE_MAC
+        if rejected_sample:
+            scan = {**scan, 'MACAddress': None, 'Vendor': None,
+                    'MACReason': 'Stored sample MAC withheld; raw history retained',
+                    'ObservedMACAddress': SAMPLE_MAC}
         devices = kepware.get(ip, [])
         # Prefer enabled configuration for display, retaining every identity as evidence.
         display_devices = [d for d in devices if d.get("Enabled") not in (False, 0)] or devices
@@ -287,7 +346,7 @@ def merge_current(addresses, scans, kepware, manuals, evidence, oui=None):
         mac = normalize_mac(scan.get("MACAddress"))
         vendor = next((value for value in map(identity_value, (
             manual.get("Vendor"), (oui or {}).get(mac[:8] if mac else ""),
-            scan.get("Vendor"), past.get("Vendor"))) if value), "Unknown")
+            scan.get("Vendor"), past.get("Vendor") if not rejected_sample else None)) if value), "Unknown")
         device_type = next((value for value in map(identity_value, (
             manual.get("DeviceType"), scan.get("DeviceType"), past.get("DeviceType"))) if value), "Unknown")
         known = bool(devices or manual or past.get("Known") or scan.get("HostName"))
@@ -392,6 +451,8 @@ class InventoryStore:
             cursor = connection.cursor()
             self.insert(cursor, "NetworkInventoryRun", run)
             for record in scans:
+                if normalize_mac(record.get('MACAddress')) == SAMPLE_MAC:
+                    record = {**record, 'MACAddress': None, 'Vendor': None}
                 self.insert(cursor, "NetworkScanHistory", {**record, "RunId": run["RunId"], 'NetworkId': run['NetworkId']})
             for record in devices:
                 self.insert(cursor, "KepwareDeviceHistory", {**record, "RunId": run["RunId"], 'NetworkId': run['NetworkId']})
@@ -456,6 +517,8 @@ class InventoryStore:
             evidence = {r["IPAddress"]: r for r in evidence_rows}
             latest_macs = {r["IPAddress"]: r["MACAddress"] for r in mac_rows}
             for identity in identities:
+                if normalize_mac(identity.get('MACAddress')) == SAMPLE_MAC:
+                    continue
                 current_mac = latest_macs.get(identity["IPAddress"])
                 if not current_mac or current_mac == identity.get("MACAddress"):
                     evidence.setdefault(identity["IPAddress"], {}).update(
@@ -499,6 +562,26 @@ class NetworkInventory:
         self.ranges = ranges
         self.profile_lock = Lock()
         self._profiles = None
+        self.progress_lock = Lock()
+        self._progress = {'status': 'idle'}
+        self._progress_started = None
+        self._diagnostics = {}
+
+    def progress(self):
+        """Runtime-only snapshot; no profile lookup, SQL, or network calls."""
+        with self.progress_lock:
+            result = dict(self._progress)
+            if result['status'] == 'running':
+                result['elapsed_seconds'] = round(monotonic() - self._progress_started, 1)
+            return result
+
+    def _update_progress(self, **values):
+        with self.progress_lock:
+            self._progress.update(values)
+
+    def diagnostics(self):
+        with self.progress_lock:
+            return {'rows': deepcopy(list(self._diagnostics.values()))}
 
     @property
     def networks(self):
@@ -540,10 +623,17 @@ class NetworkInventory:
         networks = self.selected_networks(network_id)
         rows, summaries = [], []
         all_networks = self.networks
+        diagnostics = {(r['NetworkId'], r['IPAddress']): r for r in self.diagnostics()['rows']}
         for network in networks:
             result = self.store.current(network.addresses, network.network_id, oui=self.oui)
             summaries.append({**network.payload(), 'last_run': result['last_run']})
             for row in result['rows']:
+                diagnostic = diagnostics.get((network.network_id, row['IPAddress']), {})
+                if str(diagnostic.get('RunId')).casefold() != str(row.get('RunId')).casefold():
+                    diagnostic = {}
+                # Do not replace persisted identity/result fields with runtime diagnostics.
+                row.update({k: v for k, v in diagnostic.items() if k in (
+                    'ARPInterface', 'ARPSource', 'MACPrefix', 'OUIVendor', 'MACReason', 'ObservedMACAddress')})
                 overlaps = [n.network_name for n in all_networks if row['IPAddress'] in n.addresses]
                 ambiguity = ('Overlapping configured ranges: ' + ', '.join(overlaps) +
                              '. Phase 1 uses Windows routing; physical network and Kepware identity are unverified.') if len(overlaps) > 1 else ''
@@ -585,8 +675,28 @@ class NetworkInventory:
         if not self.lock.acquire(blocking=False):
             raise InventoryError("An inventory scan is already running.")
         try:
-            runs = [self.scan_network(actor, network) for network in networks]
-            return runs[0] if len(runs) == 1 else {'runs': runs}
+            with self.progress_lock:
+                self._progress_started = monotonic()
+                self._progress = dict(status='running', scan_id=str(uuid.uuid4()),
+                    network_name=None, network_id=None, network_number=0, total_networks=len(networks),
+                    scanned_ips=0, total_ips=sum(len(n.addresses) for n in networks),
+                    network_scanned_ips=0, network_total_ips=0, current_ip=None,
+                    online_count=0, mac_count=0, elapsed_seconds=0, phase='starting', error=None)
+                self._diagnostics = {}
+            runs = []
+            for index, network in enumerate(networks, 1):
+                self._update_progress(network_name=network.network_name, network_id=network.network_id,
+                    network_number=index, network_scanned_ips=0, network_total_ips=len(network.addresses),
+                    current_ip=None, phase='Kepware snapshot')
+                runs.append(self.scan_network(actor, network))
+            self._update_progress(status='completed', phase='completed',
+                                  elapsed_seconds=round(monotonic() - self._progress_started, 1))
+            result = runs[0] if len(runs) == 1 else {'runs': runs}
+            return {**result, 'progress': self.progress()}
+        except Exception:
+            self._update_progress(status='error', phase='error', error='Scan failed; completed network history is retained.',
+                                  elapsed_seconds=round(monotonic() - self._progress_started, 1))
+            raise
         finally:
             self.lock.release()
 
@@ -606,13 +716,24 @@ class NetworkInventory:
             run.update(KepwareSnapshotComplete=False, KepwareError="Kepware snapshot failed; candidate-free classification withheld.")
         probe = self.probe or ReadOnlyProbe(addresses, self.oui, self.resolve_hostnames, network=network, defer_neighbors=True)
         scans = []
+        baseline = self.progress()
         for ip in addresses:
+            self._update_progress(current_ip=ip, phase='ICMP')
             result = probe(ip)
             if result["IPAddress"] != ip:
                 raise InventoryError("Probe returned an unexpected address.")
             scans.append({**result, 'NetworkId': network.network_id})
+            self._update_progress(scanned_ips=baseline.get('scanned_ips', 0) + len(scans),
+                network_scanned_ips=len(scans),
+                online_count=baseline.get('online_count', 0) + sum(bool(r['IsOnline']) for r in scans),
+                mac_count=baseline.get('mac_count', 0) + sum(bool(trusted_mac(r.get('MACAddress'))) for r in scans))
         if isinstance(probe, ReadOnlyProbe):
+            self._update_progress(phase='ARP collection')
             neighbors = probe.collect_neighbors()
+            with self.progress_lock:
+                for ip, diagnostic in probe.neighbor_diagnostics.items():
+                    self._diagnostics[(network.network_id, ip)] = {**diagnostic, 'NetworkId': network.network_id,
+                        'NetworkName': network.network_name, 'RunId': run['RunId']}
             for result in scans:
                 if probe.neighbor_error:
                     result["ScanError"] = result.get("ScanError") or probe.neighbor_error
@@ -621,7 +742,11 @@ class NetworkInventory:
                     result["MACAddress"] = mac
                     result["Vendor"] = probe.oui.get(mac[:8])
         for result in scans:
+            if normalize_mac(result.get('MACAddress')) == SAMPLE_MAC:
+                result.update(MACAddress=None, Vendor=None)
             result["DetectionSource"] = detection_source(result, [d for d in devices if d["IPAddress"] == result["IPAddress"]])
+        self._update_progress(mac_count=baseline.get('mac_count', 0) + sum(bool(r.get('MACAddress')) for r in scans),
+                              phase='Saving network history')
         run.update(FinishedAt=now(), OnlineCount=sum(bool(r["IsOnline"]) for r in scans))
         self.store.persist(run, scans, devices)
         return {**run, **network.payload()}

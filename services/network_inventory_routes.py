@@ -33,6 +33,7 @@ def inventory_router(service):
         def operation():
             result = service.current(network_id)
             result["rows"] = filter_rows(result["rows"], q, category, sort, descending)
+            result['progress'] = service.progress()
             return result
         return call(operation)
 
@@ -41,8 +42,16 @@ def inventory_router(service):
         def operation():
             result = service.scan(actor(request), network_id)
             runs = result.get('runs', [result])
-            return {'run': runs[0] if len(runs) == 1 else None, 'runs': runs}
+            return {'run': runs[0] if len(runs) == 1 else None, 'runs': runs, 'progress': result['progress']}
         return call(operation)
+
+    @router.get('/progress')
+    async def progress():
+        return JSONResponse(service.progress(), headers={'Cache-Control': 'no-store'})
+
+    @router.get('/diagnostics')
+    async def diagnostics():
+        return JSONResponse(service.diagnostics(), headers={'Cache-Control': 'no-store'})
 
     @router.get("/{ip}/history")
     def history(ip: str, network_id: str | None = None):

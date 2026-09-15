@@ -5,6 +5,68 @@
     if (!root) return;
     let rows = [], selected = null, generation = 0, detailGeneration = 0;
     let saving = false;
+    let scanPending = false, progressTimer = null, progressEpoch = 0;
+    const duration = seconds => {
+        const total = Math.max(0, Math.floor(seconds || 0));
+        return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+    };
+    function renderProgress(progress) {
+        if (!progress?.status) return;
+        if (scanPending && progress.status !== 'running') return;
+        if (progress.status === 'idle') {
+            el('scan').disabled = false;
+            el('scan').textContent = 'Scan Now';
+            return;
+        }
+        const running = progress.status === 'running';
+        el('scan').disabled = running || scanPending;
+        el('scan').textContent = running || scanPending ? 'Scanning...' : 'Scan Now';
+        el('progress').hidden = false;
+        if (running) {
+            el('progress').textContent = `Scanning ${progress.network_name || 'configured networks'}\n` +
+                `Network ${progress.network_number}/${progress.total_networks}\n` +
+                `Progress: ${progress.scanned_ips} / ${progress.total_ips}\n` +
+                `Current IP: ${progress.current_ip || 'Preparing'}\n` +
+                `Online: ${progress.online_count}\nMAC Found: ${progress.mac_count}\n` +
+                `Elapsed: ${duration(progress.elapsed_seconds)}\n${progress.phase || ''}` +
+                '\nMAC count updates after each network\'s ARP collection.';
+        } else {
+            el('progress').textContent = `${progress.status === 'completed' ? 'Scan completed' : 'Scan failed'}\n` +
+                `${progress.scanned_ips} IPs scanned\n${progress.online_count} online\n` +
+                `${progress.mac_count} MAC addresses found\nDuration: ${duration(progress.elapsed_seconds)}` +
+                (progress.error ? `\n${progress.error}` : '');
+        }
+    }
+    function stopProgressPolling() {
+        ++progressEpoch;
+        clearTimeout(progressTimer);
+        progressTimer = null;
+    }
+    function scheduleProgressPolling() {
+        if (progressTimer !== null) return;
+        const epoch = progressEpoch;
+        progressTimer = setTimeout(async () => {
+            // Keep the timer occupied until the request finishes: no overlapping polls.
+            let running = scanPending;
+            try {
+                const progress = await api('/progress');
+                if (epoch !== progressEpoch) return;
+                renderProgress(progress);
+                running = scanPending || progress.status === 'running';
+                if (!running && progress.status === 'completed') await refresh();
+            } catch (error) {
+                if (epoch !== progressEpoch) return;
+                if (!el('progress').textContent.includes('Progress unavailable'))
+                    el('progress').textContent += '\nProgress unavailable; checking again...';
+                running = true;
+            } finally {
+                if (epoch === progressEpoch) {
+                    progressTimer = null;
+                    if (running) scheduleProgressPolling();
+                }
+            }
+        }, 1000);
+    }
     const editable = () => selected && selected.network_id !== null;
     const identity = row => `${row.network_id ?? row.NetworkId ?? 'legacy'}|${row.IPAddress}`;
     const networkQuery = value => value == null || value === 'all' || value === '' ? '' : `?network_id=${encodeURIComponent(value)}`;
@@ -44,6 +106,10 @@
             const data = await api(`?${params}`);
             if (request !== generation) return;
             rows = data.rows;
+            if (!scanPending && data.progress) {
+                renderProgress(data.progress);
+                if (data.progress.status === 'running') scheduleProgressPolling();
+            }
             if (data.networks) {
                 el('network').replaceChildren();
                 text(el('network'), 'option', 'All Networks').value = 'all';
@@ -105,7 +171,7 @@
         el("detail").classList.remove("hidden");
         el("detail-title").textContent = `${rowLabel(row)} — ${row.MachineName}`;
         el("current").replaceChildren();
-        for (const key of ["NetworkId", "NetworkName", "Ambiguity", "IPAddress", "MachineName", "Status", "Vendor", "DeviceType", "DeviceModel", "MACAddress", "HostName", "KepwareChannel", "KepwareDevice", "Description", "Location", "Remark", "LastScan", "LastSeen", "Source", "ResponseMs", "DetectionSource", "ScanError"]) {
+        for (const key of ["NetworkId", "NetworkName", "Ambiguity", "IPAddress", "MachineName", "Status", "Vendor", "DeviceType", "DeviceModel", "MACAddress", "ObservedMACAddress", "ARPInterface", "ARPSource", "MACPrefix", "OUIVendor", "MACReason", "HostName", "KepwareChannel", "KepwareDevice", "Description", "Location", "Remark", "LastScan", "LastSeen", "Source", "ResponseMs", "DetectionSource", "ScanError"]) {
             const label = key === "MachineName" ? "Effective Machine Name" : key
                 .replace(/([A-Z])([A-Z][a-z])/g, "$1 $2").replace(/([a-z])([A-Z])/g, "$1 $2");
             text(el("current"), "dt", label);
@@ -137,13 +203,40 @@
         } catch (error) { if (request === detailGeneration) el("detail-message").textContent = error.message; }
     }
     el("scan").addEventListener("click", async () => {
+        if (scanPending || el('scan').disabled) return;
+        scanPending = true;
+        stopProgressPolling();
         el("scan").disabled = true;
-        el("message").textContent = "Scanning selected configured networks sequentially and capturing Kepware. This can take several minutes…";
+        el('scan').textContent = 'Scanning...';
+        el('progress').hidden = false;
+        el('progress').textContent = 'Starting scan...';
+        scheduleProgressPolling();
         try {
-            await api(`/scan${networkQuery(el('network').value)}`, {method: "POST"});
+            const result = await api(`/scan${networkQuery(el('network').value)}`, {method: "POST"});
+            scanPending = false;
+            stopProgressPolling();
+            renderProgress(result.progress);
             await refresh();
-        } catch (error) { el("message").textContent = error.message; }
-        finally { el("scan").disabled = false; }
+        } catch (error) {
+            scanPending = false;
+            stopProgressPolling();
+            el('progress').textContent = `Scan request failed: ${error.message}`;
+            el('message').textContent = error.message;
+            // A disconnected POST does not cancel the server's scan.
+            try {
+                const progress = await api('/progress');
+                renderProgress(progress);
+                if (progress.status === 'running') scheduleProgressPolling();
+            } catch (_) {
+                el('progress').textContent += '\nScan status unavailable; checking again...';
+                scheduleProgressPolling();
+            }
+        } finally {
+            if (progressTimer === null) {
+                el('scan').disabled = false;
+                el('scan').textContent = 'Scan Now';
+            }
+        }
     });
     el("manual").addEventListener("submit", async event => {
         event.preventDefault();

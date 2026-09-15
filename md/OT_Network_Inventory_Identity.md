@@ -62,3 +62,40 @@ All queries and new history remain scoped by NetworkId and IPAddress.
 Overlapping networks retain the existing ambiguity warning because phase 1
 uses OS routing. Historian, OPC subscriptions, alarm sound, Influx writes,
 and production network configuration are outside this change.
+
+## Live progress and ARP provenance
+
+`GET /api/network-inventory/progress` returns a read-only in-memory snapshot:
+status (`idle`, `running`, `completed`, `error`), scan ID, current network name/ID,
+network number/total, current IP, scanned/total IPs across all selected networks,
+per-network counts, online count, MAC count, phase, elapsed seconds and error.
+The UI polls once per second while scanning, with at most one progress request
+in flight. It stops after completion/error, retains a summary and restores
+Scan Now. Refreshing inventory discovers an active scan in the same process.
+The existing POST `/scan` still returns completed runs and now also includes
+that scan's progress summary. The current-inventory GET includes runtime progress.
+
+Updates happen before/after each IP probe, at network transitions, after the
+existing ARP pass, and after persistence or failure. MAC counts update after
+each network's ARP pass; no additional probing is performed for progress.
+Polling and progress updates do not access SQL. State resets at a new scan or
+process restart. It is process-local, like the existing scan lock; deployments
+with multiple independent workers cannot share it without external coordination.
+No worker configuration has been changed.
+
+`GET /api/network-inventory/diagnostics` returns the latest scan's per-IP cache
+evidence: NetworkId, IPAddress, RunId, observed MAC, accepted MAC or none,
+ARP interface/source, all matching interface observations, normalized prefix,
+OUI result and reason. These runtime diagnostics do not write SQL. Current IP
+details display them only when the NetworkId/IP/RunId match the stored scan.
+Older history has no recorded interface provenance, which is not reconstructed.
+The endpoint reads already-captured evidence; it does not refresh the ARP cache.
+
+The exact placeholder `00:11:22:33:44:55`, found in two old verification runs,
+is withheld at capture, persistence and current-view resolution. The rest of
+the `00:11:22` manufacturer prefix is unchanged. Original legacy history is
+preserved for audit, including its MAC and Candidate Free history evidence.
+The pure offline OUI diagnostic cannot inject its sample MAC into runtime scans.
+
+See [the 2026-09-15 read-only audit](OT_Network_Inventory_Live_Audit_20260915.md)
+for raw workstation ARP output, historical sample provenance and all 254 IPs.
