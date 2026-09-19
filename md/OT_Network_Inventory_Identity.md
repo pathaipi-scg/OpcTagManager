@@ -5,33 +5,56 @@ phase 1 migrations before deploying this change. This adds nullable manual
 Vendor and DeviceType fields; it does not rewrite history. Fresh installations
 include these columns in `sql/network_inventory.sql`.
 
-Set `OT_OUI_FILE` to a local IEEE UTF-8 CSV (BOM accepted) or legacy JSON object
-mapping 24-bit OUI prefixes to manufacturer names from a trusted database.
-IEEE CSV headers are `Registry`, `Assignment`, `Organization Name`, and
-`Organization Address`. MA-L rows map Assignment to Organization Name; quoted
-commas and multiline addresses are supported. Longer MA-M/MA-S assignments
-are excluded from the 24-bit lookup. JSON prefixes may use colons, hyphens,
-or six hexadecimal digits, case-insensitively. The existing configuration
-example documents the JSON format. The file is read at service initialization;
-restart after replacing it. No database download or runtime internet lookup
-occurs. No manufacturer entries are bundled or guessed. Missing, unreadable,
-or malformed files produce an empty lookup; invalid entries are ignored.
+Offline IEEE lookup supports MA-L (6 hex digits / 24 bits), MA-M (7 / 28),
+and MA-S (9 / 36). The full normalized MAC is matched in order MA-S, MA-M,
+then MA-L. Organization Name is used verbatim apart from surrounding whitespace;
+Organization Address is never treated as a vendor. No match remains Unknown.
+
+Optional configuration (use locally provisioned files; no downloads):
+
+```dotenv
+OT_OUI_MAL_FILE=D:\AI\OpcTagManager\data\oui.csv
+OT_OUI_MAM_FILE=D:\AI\OpcTagManager\data\mam.csv
+OT_OUI_MAS_FILE=D:\AI\OpcTagManager\data\oui36.csv
+```
+
+`OT_OUI_FILE` remains supported as the MA-L fallback when `OT_OUI_MAL_FILE`
+is unset. Existing MA-L-only configurations require no changes. Legacy JSON
+prefix/vendor maps remain supported for MA-L. Files are read at service
+initialization; applying new configuration requires a separately scheduled restart.
+This change does not restart production or modify existing `.env` files.
+
+IEEE UTF-8 CSV (optional BOM) is read by header, with quoted commas and multiline
+fields supported. Assignments accept case-insensitive hexadecimal and optional
+colon/hyphen separators, validated against each registry's exact length.
+Invalid rows are ignored. Missing or malformed files are reported individually;
+valid sibling registries still work, allowing fallback to a less specific match.
+No lookup uses the internet, guesses vendors, or changes SQL history.
 
 ### Offline diagnostics
 
-From the project directory, copy a MAC from Windows `arp -a`, then run:
+From the project directory:
 
 ```powershell
-.\.venv\Scripts\python.exe -m services.oui_diagnostics --file D:\AI\OpcTagManager\data\oui.csv --mac 00-11-22-33-44-55
+.\.venv\Scripts\python.exe -m services.oui_diagnostics --mal-file data/oui.csv --mam-file data/mam.csv --mas-file data/oui36.csv --mac 00:50:C2:CE:AE:47
 ```
 
-The JSON report includes file path, load success/failure, format, loaded unique
-prefix count, error, sample MAC, normalized MAC/prefix, and matched vendor.
-Omit `--file` to use the shell's `OT_OUI_FILE` environment variable. The command
-does not start/restart production, scan, or write history. Inventory loading
-also emits the file/load/count/error diagnostics through the module's INFO log.
-An OUI match identifies the registered prefix owner; it does not verify a
-physical device's manufacturer if a MAC has been overridden or proxied.
+Omit file arguments to use the shell's configuration variables. `--file PATH`
+inspects a single local CSV/JSON in isolation. The command does not load production
+`.env` automatically, start the application, scan, or write history. Its JSON
+contains per-file load status/count/error, input and normalized MAC, matched
+registry, assignment, prefix length in bits, vendor, and source file. A failed
+configured file gives a nonzero exit code even when another registry matches.
+Runtime/current-row `OUIMatch` diagnostics retain the match provenance without
+adding SQL columns. Manual Vendor retains its existing display priority.
+
+Verification against the local files on 2026-09-19 loaded 40,133 MA-L, 6,587 MA-M,
+and 7,190 MA-S assignments. `00:50:C2:CE:AE:47` has no matching MA-M/MA-S entry
+in these files: its valid result remains IEEE Registration Authority, MA-L
+`0050C2`, 24 bits. WAGO `00:30:DE:5A:EC:19`, Siemens `30:B8:51:35:C5:7C`, and
+Realtek `00:E0:4C:50:CB:38` retain their existing MA-L organizations.
+An assignment identifies the registered owner; it does not verify a physical
+device's manufacturer if its MAC was overridden or proxied.
 
 Each configured scan sends the existing ICMP probes, then reads `arp -a`
 once and retains only configured target addresses. Valid unicast MACs are

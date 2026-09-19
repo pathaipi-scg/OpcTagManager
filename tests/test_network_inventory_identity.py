@@ -28,11 +28,14 @@ def test_ieee_csv_bom_quoted_fields_and_diagnostics(tmp_path, monkeypatch):
                     'MA-L,112233,,Address\n', encoding='utf-8-sig')
     monkeypatch.setenv('OT_OUI_FILE', str(path))
     result = oui_lookup_diagnostics(sample_mac='00-1b-1b-12-34-56')
-    assert result == dict(oui_file_path=str(path), load_success=True, loaded_record_count=2,
+    expected = dict(oui_file_path=str(path), load_success=True, loaded_record_count=2,
                           file_format='IEEE CSV', error=None,
                           sample_mac_address='00-1b-1b-12-34-56',
                           normalized_mac_address='00:1B:1B:12:34:56', normalized_mac_prefix='00:1B:1B',
                           lookup_matched=True, matched_vendor='Siemens, Test Organization')
+    assert {key: result[key] for key in expected} == expected
+    assert result['matched_registry'] == 'MA-L'
+    assert result['matched_prefix_length'] == 24
     assert load_oui_file()["00:11:22"] == 'CIMSYS Inc'
     unknown = oui_lookup_diagnostics(sample_mac='00-ab-cd-12-34-56')
     assert unknown['load_success'] and not unknown['lookup_matched']

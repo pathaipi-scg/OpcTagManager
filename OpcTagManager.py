@@ -356,11 +356,12 @@ def get_conn():
     )
 
 
-from config.config import OT_SCAN_START, OT_SCAN_END, OT_SCAN_RANGES, OT_OUI_FILE, OT_RESOLVE_HOSTNAMES
+from config.config import OT_SCAN_START, OT_SCAN_END, OT_SCAN_RANGES, OT_OUI_FILE, OT_OUI_MAL_FILE, OT_OUI_MAM_FILE, OT_OUI_MAS_FILE, OT_RESOLVE_HOSTNAMES
 from services.network_inventory import InventoryStore, NetworkInventory, load_oui_file
 from services.network_inventory_routes import inventory_router
 
-inventory_oui = load_oui_file(OT_OUI_FILE)
+inventory_oui = load_oui_file(mal_file=OT_OUI_MAL_FILE or OT_OUI_FILE,
+                              mam_file=OT_OUI_MAM_FILE, mas_file=OT_OUI_MAS_FILE)
 network_inventory = NetworkInventory(InventoryStore(get_conn), kepware_config_api,
                                      OT_SCAN_START, OT_SCAN_END, oui=inventory_oui,
                                      resolve_hostnames=OT_RESOLVE_HOSTNAMES, ranges=OT_SCAN_RANGES)

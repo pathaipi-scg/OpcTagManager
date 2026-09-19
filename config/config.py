@@ -88,8 +88,11 @@ def get_choice_default(name: str, allowed: set[str], default: str) -> str:
 OT_SCAN_START = get_optional("OT_SCAN_START")
 OT_SCAN_END = get_optional("OT_SCAN_END")
 OT_SCAN_RANGES = os.getenv("OT_SCAN_RANGES")
-# Optional local JSON object mapping AA:BB:CC prefixes to verified vendor names.
+# Optional offline IEEE registries; legacy OT_OUI_FILE remains the MA-L fallback.
 OT_OUI_FILE = get_optional("OT_OUI_FILE")
+OT_OUI_MAL_FILE = get_optional("OT_OUI_MAL_FILE")
+OT_OUI_MAM_FILE = get_optional("OT_OUI_MAM_FILE")
+OT_OUI_MAS_FILE = get_optional("OT_OUI_MAS_FILE")
 OT_RESOLVE_HOSTNAMES = get_bool_default("OT_RESOLVE_HOSTNAMES", False)
 
 APP_HOST = get_required("APP_HOST")

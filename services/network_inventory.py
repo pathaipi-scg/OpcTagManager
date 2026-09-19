@@ -96,55 +96,121 @@ def normalize_mac(value):
     return ":".join(compact[i:i + 2] for i in range(0, 12, 2))
 
 
-def load_oui_file(filename=None, *, diagnostics=None):
-    """Load IEEE MA-L CSV or legacy JSON locally, preserving the prefix-map API."""
-    filename = str(filename or os.environ.get("OT_OUI_FILE", ""))
-    details = dict(oui_file_path=filename, load_success=False, loaded_record_count=0,
-                   file_format=None, error=None)
-    result = {}
+REGISTRY_LENGTHS = {'MA-L': 6, 'MA-M': 7, 'MA-S': 9}
+
+
+class OfflineOUI(dict):
+    """Compatible prefix/vendor map with source metadata kept outside its keys."""
+
+    def __init__(self):
+        super().__init__()
+        self.sources = {}
+
+
+def _prefix_key(assignment):
+    return ':'.join(assignment[i:i + 2] for i in range(0, len(assignment), 2))
+
+
+def _load_oui_source(filename, registry=None):
+    filename = str(filename or '')
+    details = dict(oui_file_path=filename, registry=registry, load_success=False,
+                   loaded_record_count=0, file_format=None, error=None)
+    result = OfflineOUI()
     try:
         if not filename:
-            raise ValueError("OT_OUI_FILE is not configured")
-        content = Path(filename).read_text(encoding="utf-8-sig")
+            raise ValueError("OT_OUI_FILE or OT_OUI_MAL_FILE is not configured")
+        content = Path(filename).read_text(encoding='utf-8-sig')
         if Path(filename).suffix.lower() == '.json' or content.lstrip().startswith('{'):
             details['file_format'] = 'JSON'
             data = json.loads(content)
             if not isinstance(data, dict):
-                raise ValueError("OUI JSON must be a prefix-to-manufacturer object")
-            entries = data.items()
+                raise ValueError('OUI JSON must be a prefix-to-manufacturer object')
+            entries = (('MA-L', prefix, vendor) for prefix, vendor in data.items())
         else:
             details['file_format'] = 'IEEE CSV'
             reader = csv.DictReader(io.StringIO(content), strict=True)
             required = {'Registry', 'Assignment', 'Organization Name', 'Organization Address'}
             if not required.issubset(reader.fieldnames or []):
-                raise ValueError("IEEE CSV requires Registry, Assignment, Organization Name, Organization Address headers")
-            # MA-M/MA-S are longer assignments, not 24-bit OUI prefixes.
-            entries = ((row.get('Assignment'), row.get('Organization Name'))
-                       for row in reader if (row.get('Registry') or '').strip() == 'MA-L')
-        for prefix, vendor in entries:
-            prefix = re.sub(r"[:-]", "", str(prefix or '').strip()).upper()
-            if re.fullmatch(r"[0-9A-F]{6}", prefix) and isinstance(vendor, str) and vendor.strip():
-                result[":".join(prefix[i:i + 2] for i in range(0, 6, 2))] = vendor.strip()[:512]
+                raise ValueError('IEEE CSV requires Registry, Assignment, Organization Name, Organization Address headers')
+            entries = (((row.get('Registry') or '').strip(), row.get('Assignment'),
+                        row.get('Organization Name')) for row in reader)
+        for kind, assignment, vendor in entries:
+            length = REGISTRY_LENGTHS.get(kind)
+            if length is None or (registry and kind != registry):
+                continue
+            assignment = re.sub(r'[:-]', '', str(assignment or '').strip()).upper()
+            if not re.fullmatch(r'[0-9A-F]{%d}' % length, assignment) or not isinstance(vendor, str) or not vendor.strip():
+                continue
+            key = _prefix_key(assignment)
+            result[key] = vendor.strip()
+            result.sources[key] = dict(matched_registry=kind, matched_assignment=assignment,
+                                       matched_prefix_length=length * 4, source_file=filename)
         details.update(load_success=True, loaded_record_count=len(result))
     except (OSError, ValueError, TypeError, csv.Error) as exc:
-        result = {}
+        result = OfflineOUI()
         details['error'] = str(exc)
+    logging.getLogger(__name__).info('Offline OUI load: %s', details)
+    return result, details
+
+
+def load_oui_file(filename=None, *, diagnostics=None, mal_file=None, mam_file=None, mas_file=None):
+    """Load local registries; an explicit filename remains an isolated file lookup.
+
+    Otherwise MA-L prefers OT_OUI_MAL_FILE over the legacy OT_OUI_FILE.
+    Missing/bad registries do not discard successfully loaded sibling registries.
+    """
+    if filename is not None and not any((mal_file, mam_file, mas_file)):
+        sources = [(filename, None)]
+    else:
+        mal = mal_file or os.environ.get('OT_OUI_MAL_FILE') or filename or os.environ.get('OT_OUI_FILE', '')
+        mam = mam_file or os.environ.get('OT_OUI_MAM_FILE')
+        mas = mas_file or os.environ.get('OT_OUI_MAS_FILE')
+        sources = [(mal, 'MA-L')]
+        sources += [(path, kind) for path, kind in [(mam, 'MA-M'), (mas, 'MA-S')] if path]
+    result, reports = OfflineOUI(), []
+    for path, kind in sources:
+        loaded, report = _load_oui_source(path, kind)
+        result.update(loaded)
+        result.sources.update(loaded.sources)
+        reports.append(report)
     if diagnostics is not None:
-        diagnostics.update(details)
-    logging.getLogger(__name__).info("Offline OUI load: %s", details)
+        diagnostics.update(reports[0])
+        diagnostics.update(load_success=all(r['load_success'] for r in reports),
+                           loaded_record_count=len(result), sources=reports,
+                           error='; '.join(r['error'] for r in reports if r['error']) or None)
     return result
 
 
-def oui_lookup_diagnostics(filename=None, sample_mac=None):
-    """Read-only diagnostic using exactly the inventory loader and prefix format."""
+def lookup_oui(oui, value):
+    """Match the full MAC at 36, 28, then 24 bits, including legacy dicts."""
+    mac = normalize_mac(value)
+    if not mac:
+        return {}
+    compact = mac.replace(':', '')
+    for registry in ('MA-S', 'MA-M', 'MA-L'):
+        length = REGISTRY_LENGTHS[registry]
+        assignment = compact[:length]
+        key = _prefix_key(assignment)
+        vendor = (oui or {}).get(key)
+        if vendor:
+            return dict(matched_vendor=vendor, matched_registry=registry,
+                        matched_assignment=assignment, matched_prefix_length=length * 4,
+                        source_file=getattr(oui, 'sources', {}).get(key, {}).get('source_file'))
+    return {}
+
+
+def oui_lookup_diagnostics(filename=None, sample_mac=None, **files):
+    """Pure offline lookup: sample values never enter inventory or scan state."""
     details = {}
-    oui = load_oui_file(filename, diagnostics=details)
+    oui = load_oui_file(filename, diagnostics=details, **files)
     mac = normalize_mac(sample_mac)
-    prefix = mac[:8] if mac else None
-    vendor = oui.get(prefix)
+    match = lookup_oui(oui, mac)
     details.update(sample_mac_address=sample_mac, normalized_mac_address=mac,
-                   normalized_mac_prefix=prefix, lookup_matched=vendor is not None,
-                   matched_vendor=vendor or 'Unknown')
+                   normalized_mac_prefix=mac[:8] if mac else None,
+                   lookup_matched=bool(match), matched_vendor='Unknown',
+                   matched_registry=None, matched_assignment=None,
+                   matched_prefix_length=None, source_file=None)
+    details.update(match)
     return details
 
 
@@ -209,7 +275,7 @@ class ReadOnlyProbe:
             neighbors = {} if self.defer_neighbors else self.collect_neighbors(ip)
             if ip in neighbors:
                 result["MACAddress"] = neighbors[ip]
-                result["Vendor"] = self.oui.get(neighbors[ip][:8])
+                result["Vendor"] = lookup_oui(self.oui, neighbors[ip]).get('matched_vendor')
                 result["DetectionSource"] = detection_source(result)
         except (OSError, subprocess.TimeoutExpired):
             # Tool failure must never produce a candidate-free address.
@@ -281,7 +347,9 @@ class ReadOnlyProbe:
                 diagnostic['MACReason'] = 'Known sample MAC withheld; device identity unverified'
                 continue
             captured[ip] = mac
-            vendor = self.oui.get(mac[:8])
+            match = lookup_oui(self.oui, mac)
+            diagnostic['OUIMatch'] = match
+            vendor = match.get('matched_vendor')
             diagnostic.update(MACAddress=mac, MACPrefix=mac[:8], OUIVendor=vendor or 'Unknown',
                               MACReason='OUI matched' if vendor else 'MAC captured; prefix absent from loaded OUI database')
         return captured
@@ -345,7 +413,7 @@ def merge_current(addresses, scans, kepware, manuals, evidence, oui=None):
         name = manual.get("MachineName") or device_names or scan.get("HostName") or "Unknown"
         mac = normalize_mac(scan.get("MACAddress"))
         vendor = next((value for value in map(identity_value, (
-            manual.get("Vendor"), (oui or {}).get(mac[:8] if mac else ""),
+            manual.get("Vendor"), lookup_oui(oui, mac).get('matched_vendor'),
             scan.get("Vendor"), past.get("Vendor") if not rejected_sample else None)) if value), "Unknown")
         device_type = next((value for value in map(identity_value, (
             manual.get("DeviceType"), scan.get("DeviceType"), past.get("DeviceType"))) if value), "Unknown")
@@ -361,7 +429,7 @@ def merge_current(addresses, scans, kepware, manuals, evidence, oui=None):
         else:
             status = "Candidate Free"
         rows.append({**scan, "IPAddress": ip, "MachineName": name, "Status": status,
-                     "Vendor": vendor, "DeviceType": device_type,
+                     "Vendor": vendor, "DeviceType": device_type, "OUIMatch": lookup_oui(oui, mac),
                      "DetectionSource": detection_source(scan, devices),
                      "KepwareChannel": channel_names,
                      "KepwareDevice": device_names,
@@ -633,7 +701,7 @@ class NetworkInventory:
                     diagnostic = {}
                 # Do not replace persisted identity/result fields with runtime diagnostics.
                 row.update({k: v for k, v in diagnostic.items() if k in (
-                    'ARPInterface', 'ARPSource', 'MACPrefix', 'OUIVendor', 'MACReason', 'ObservedMACAddress')})
+                    'ARPInterface', 'ARPSource', 'MACPrefix', 'OUIVendor', 'MACReason', 'ObservedMACAddress', 'OUIMatch')})
                 overlaps = [n.network_name for n in all_networks if row['IPAddress'] in n.addresses]
                 ambiguity = ('Overlapping configured ranges: ' + ', '.join(overlaps) +
                              '. Phase 1 uses Windows routing; physical network and Kepware identity are unverified.') if len(overlaps) > 1 else ''
@@ -742,7 +810,7 @@ class NetworkInventory:
                 mac = neighbors.get(result["IPAddress"])
                 if mac:
                     result["MACAddress"] = mac
-                    result["Vendor"] = probe.oui.get(mac[:8])
+                    result["Vendor"] = lookup_oui(probe.oui, mac).get('matched_vendor')
         for result in scans:
             if normalize_mac(result.get('MACAddress')) == SAMPLE_MAC:
                 result.update(MACAddress=None, Vendor=None)
