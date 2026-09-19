@@ -408,14 +408,12 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 #inventory-detail { margin-top: 12px; border-top: 1px solid #78859155; padding-top: 12px; }
 #inventory-histories details { margin: 12px 0; }
 [data-theme="light"] .inventory-table th { background: #eef2f6; }
-.inventory-main-table { table-layout: fixed; min-width: 1050px; }
+.inventory-main-table { table-layout: fixed; min-width: 1150px; }
 .inventory-main-table th, .inventory-main-table td { overflow: hidden; text-overflow: ellipsis; padding: 4px 8px; }
 .inventory-main-table .inventory-col-ip { width: 140px; }
 .inventory-main-table .inventory-col-name { width: 17%; }
 .inventory-main-table .inventory-col-status { width: 155px; }
-.inventory-main-table .inventory-col-vendor { width: 10%; }
-.inventory-main-table .inventory-col-type { width: 9%; }
-.inventory-main-table .inventory-col-device { width: 13%; }
+.inventory-main-table .inventory-col-vendor { width: 14%; }
 .inventory-main-table .inventory-col-seen { width: 200px; }
 .inventory-main-table td:first-child button { padding: 3px 5px; font-weight: 700; }
 
@@ -510,3 +508,9 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
     .inventory-table td:nth-child(1), .inventory-table td:nth-child(2) { font-size: 12px; }
     .inventory-table th, .inventory-table td { padding: 3px 6px; }
 }
+
+/* Keep inventory resizing inside its existing scroll container. */
+.inventory-table-scroll { max-width: 100%; }
+.inventory-main-table th { padding-right: 12px; }
+.inventory-resize-handle { position: absolute; right: 0; top: 0; bottom: 0; width: 8px; cursor: col-resize; touch-action: none; user-select: none; border-right: 1px solid #78859188; }
+.inventory-resize-handle:hover { background: #78859166; }

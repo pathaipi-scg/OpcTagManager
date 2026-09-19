@@ -6,14 +6,18 @@ const vm = require('node:vm');
 class Element {
     constructor() {
         this.children = []; this.events = {}; this.textContent = ''; this.value = '';
-        this.checked = false; this.disabled = false;
+        this.checked = false; this.disabled = false; this.style = {};
         this.classList = {remove() {}, add() {}};
     }
+    getBoundingClientRect() { return {width: 180}; }
+    setPointerCapture() {}
+    click() { this.clicked = true; }
+    remove() {}
     appendChild(child) { this.children.push(child); return child; }
     replaceChildren() { this.children = []; }
     addEventListener(event, handler) { this.events[event] = handler; }
 }
-function setup(handler, timerApi = {setTimeout, clearTimeout}) {
+function setup(handler, timerApi = {setTimeout, clearTimeout}, storage = new Map()) {
     const elements = new Map();
     const get = id => {
         if (!elements.has(id)) elements.set(id, new Element());
@@ -22,14 +26,19 @@ function setup(handler, timerApi = {setTimeout, clearTimeout}) {
     get('inventory-filter').value = 'All'; get('inventory-sort').value = 'IPAddress';
     get('inventory-manual').elements = {namedItem: key => get(`field-${key}`)};
     const calls = [];
-    const context = vm.createContext({document: {getElementById: get,
+    const downloads = [];
+    const context = vm.createContext({localStorage: {
+        getItem: key => storage.get(key) ?? null,
+        setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key)},
+        Blob, URL: {createObjectURL: blob => { downloads.push(blob); return 'blob:test'; }, revokeObjectURL() {}},
+        document: {body: get('body'), getElementById: get,
         querySelector: () => get('tab'), createElement: () => new Element()},
         URLSearchParams, Date, ...timerApi,
         encodeURIComponent,
         FormData: class { constructor() { return ['MachineName', 'Description', 'Location', 'Remark', 'Vendor', 'DeviceType'].map(key => [key, get(`field-${key}`).value]); } },
         fetch: async (url, options) => { calls.push({url, options}); return handler(url, options); }});
     vm.runInContext(fs.readFileSync('static/network_inventory.js', 'utf8'), context);
-    return {get, calls};
+    return {get, calls, storage, downloads};
 }
 const row = {IPAddress: '172.28.231.1', MachineName: '<img src=x onerror=alert(1)>', Status: 'Offline - Known',
     KepwareDevice: 'MIX', Description: 'Mixer', Location: 'Packing', Vendor: 'Example Vendor', DeviceType: 'PLC',
@@ -184,11 +193,11 @@ test('tab loads inventory without scanning; displays names as text and UTC times
     const cells = ui.get('inventory-rows').children[0].children;
     assert.equal(cells[1].textContent, row.MachineName);
     assert.equal(cells[1].children.length, 0);
-    assert.equal(cells.length, 8);
+    assert.equal(cells.length, 7);
     assert.equal(cells[1].title, row.MachineName);
     assert.equal(cells[0].children[0].textContent, row.IPAddress);
     assert.deepEqual(cells.slice(1).map(cell => cell.textContent), [row.MachineName, row.Status,
-        row.KepwareDevice, new Date(`${row.LastSeen}Z`).toLocaleString(), 'Mixer / Packing', row.Vendor, row.DeviceType]);
+        row.Vendor, 'Legacy / unassigned', new Date(`${row.LastSeen}Z`).toLocaleString(), 'Mixer / Packing']);
     assert.equal(cells[4].title, cells[4].textContent);
     assert.equal(ui.get('inventory-freshness').textContent, `Scanned: ${new Date(`${row.LastScan}Z`).toLocaleString()}`);
     assert.equal(ui.get('inventory-range').textContent, `IP range: ${current.scan_start}-${current.scan_end}`);
@@ -297,12 +306,11 @@ test('All Networks shows separate same-IP rows and network column; scan has no t
     const ui = setup(async () => ok(multi));
     await ui.get('tab').events.click();
     assert.equal(ui.get('inventory-network').children.length, 3);
-    assert.equal(ui.get('inventory-network-heading').hidden, false);
-    assert.equal(ui.get('inventory-network-col').hidden, false);
+    assert.equal(ui.get('inventory-rows').children[0].children.length, 7);
     assert.equal(ui.get('inventory-range').textContent, 'All Networks: 2 configured');
     assert.equal(ui.get('inventory-freshness').textContent, 'Scanned: 2/2 networks');
     assert.equal(ui.get('inventory-rows').children.length, 2);
-    assert.deepEqual(ui.get('inventory-rows').children.map(tr => tr.children[8].textContent), ['MC1', 'MC2']);
+    assert.deepEqual(ui.get('inventory-rows').children.map(tr => tr.children[4].textContent), ['MC1', 'MC2']);
     await ui.get('inventory-scan').events.click();
     assert(ui.calls.some(c => c.url === '/api/network-inventory/scan' && c.options.method === 'POST'));
 });
@@ -315,7 +323,7 @@ test('selector scopes refresh, scan, candidate filter and clears stale manual ta
     ui.get('inventory-network').value = '9';
     await ui.get('inventory-network').events.change();
     assert.equal(ui.get('inventory-manual-save').disabled, true);
-    assert.equal(ui.get('inventory-network-heading').hidden, true);
+    assert.equal(ui.get('inventory-rows').children[0].children[4].textContent, 'MC2');
     assert.equal(ui.get('inventory-rows').children.length, 1);
     await ui.get('inventory-scan').events.click();
     assert(ui.calls.some(c => c.url === '/api/network-inventory/scan?network_id=9'));
@@ -359,4 +367,82 @@ test('late network response cannot replace selection or rows after a network swi
     pending[0](ok(multi)); await all;
     assert.equal(ui.get('inventory-network').value, '9');
     assert.equal(ui.get('inventory-rows').children.length, 1);
+});
+
+const widthKey = 'opctagmanager.ot_inventory.column_widths';
+const columnIds = ['ip_address', 'machine_name', 'status', 'vendor', 'network', 'last_seen', 'description_location'];
+test('all header boundaries resize, enforce minima, persist stable IDs, restore on init and reset', async () => {
+    const ui = setup(() => ok(current));
+    const minimums = [95, 100, 100, 120, 80, 130, 140];
+    for (const [index, id] of columnIds.entries()) {
+        const handle = ui.get(`inventory-heading-${id}`).children[0];
+        handle.events.pointerdown({button: 0, pointerId: 1, clientX: 100, preventDefault() {}, stopPropagation() {}});
+        handle.events.pointermove({pointerId: 1, clientX: 160});
+        assert.equal(ui.get(`inventory-col-${id}`).style.width, '240px');
+        handle.events.pointermove({pointerId: 1, clientX: -1000});
+        assert.equal(ui.get(`inventory-col-${id}`).style.width, `${minimums[index]}px`);
+        handle.events.pointerup();
+        assert.equal(JSON.parse(ui.storage.get(widthKey))[id], minimums[index]);
+    }
+    const saved = JSON.parse(ui.storage.get(widthKey));
+    assert.deepEqual(Object.keys(saved), columnIds);
+    const reopened = setup(() => ok(current), fakeTimers(), ui.storage);
+    assert.equal(reopened.get('inventory-col-description_location').style.width, '140px');
+    await reopened.get('tab').events.click();
+    assert.equal(reopened.get('inventory-col-description_location').style.width, '140px');
+    reopened.get('inventory-reset-widths').events.click();
+    assert.equal(ui.storage.has(widthKey), false);
+    assert.equal(reopened.get('inventory-table').style.width, '');
+    for (const id of columnIds) assert.equal(reopened.get(`inventory-col-${id}`).style.width, '');
+});
+test('invalid storage is ignored and widths are clamped by stable ID', () => {
+    for (const stored of ['bad JSON', 'null', '[]']) {
+        const ui = setup(() => ok(current), fakeTimers(), new Map([[widthKey, stored]]));
+        assert.equal(ui.get('inventory-table').style.width, '');
+    }
+    const ui = setup(() => ok(current), fakeTimers(), new Map([[widthKey, '{"vendor":1,"0":900,"status":"400"}']]));
+    assert.equal(ui.get('inventory-col-vendor').style.width, '120px');
+    assert.equal(ui.get('inventory-col-status').style.width, '');
+    assert.equal(ui.get('inventory-col-ip_address').style.width, '');
+});
+test('CSV uses the current network/filter/search/sort result, BOM, escaping and operator columns only', async () => {
+    const clock = fakeTimers();
+    const exported = [{...multiRows[1], MachineName: 'Thai ???, "Mixer"\nLine 2'}, {...multiRows[1], IPAddress: '172.28.231.2'}];
+    const ui = setup(url => {
+        const query = new URL(url, 'http://localhost').searchParams;
+        const active = query.get('network_id') === '9' && query.get('category') === 'Online' &&
+            query.get('q') === 'Thai' && query.get('sort') === 'MachineName' && query.get('descending') === 'true';
+        return ok({...multi, rows: active ? exported : multiRows});
+    }, clock);
+    await ui.get('tab').events.click();
+    ui.get('inventory-network').value = '9';
+    ui.get('inventory-filter').value = 'Online';
+    ui.get('inventory-search').value = 'Thai';
+    ui.get('inventory-sort').value = 'MachineName';
+    ui.get('inventory-descending').checked = true;
+    ui.get('inventory-search').events.input();
+    await ui.get('inventory-download').events.click();
+    const bytes = new Uint8Array(await ui.downloads[0].arrayBuffer());
+    assert.deepEqual(Array.from(bytes.slice(0, 3)), [239, 187, 191]);
+    const csv = await ui.downloads[0].text();
+    assert(csv.startsWith('"IP Address","Machine Name","Status","Vendor","Network","Last Seen","Description / Location"\r\n'));
+    assert(csv.includes('"Thai ???, ""Mixer""\nLine 2"'));
+    assert(csv.includes('"MC2"')); assert(!csv.includes('"MC1"'));
+    assert(csv.indexOf(exported[0].IPAddress) < csv.indexOf(exported[1].IPAddress));
+    for (const hidden of ['NetworkId', 'Kepware Device', 'Device Type', 'KepwareDevice']) assert(!csv.includes(hidden));
+    const link = ui.get('body').children[0];
+    assert.match(link.download, /^OT_Network_Inventory_\d{8}_\d{6}\.csv$/);
+    assert(link.clicked);
+    assert(ui.calls.every(call => !call.options?.method));
+});
+test('Candidate Free export uses filtered rows and controls exist in template', async () => {
+    const ui = setup(url => ok({...multi, rows: url.includes('Candidate+Free') ? [] : multiRows}), fakeTimers());
+    await ui.get('tab').events.click();
+    ui.get('inventory-free').events.click();
+    await ui.get('inventory-download').events.click();
+    assert.equal((await ui.downloads[0].text()).split('\r\n').length, 2);
+    const html = fs.readFileSync('templates/network_inventory.html', 'utf8');
+    assert.match(html, /id="inventory-download"[^>]*>Download CSV/);
+    assert.match(html, /id="inventory-reset-widths"[^>]*>Reset Column Widths/);
+    assert(!html.includes('<th>Kepware Device</th>'));
 });

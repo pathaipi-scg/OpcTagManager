@@ -20,6 +20,8 @@
             <option value="Status">Status</option><option value="LastSeen">Last Seen</option>
         </select></label>
         <label><input id="inventory-descending" type="checkbox"> Descending</label>
+        <button type="button" id="inventory-reset-widths">Reset Column Widths</button>
+        <button type="button" id="inventory-download" disabled>Download CSV</button>
     </div>
     <p id="inventory-message" role="status" aria-live="polite"></p>
     <div id="inventory-progress" role="status" aria-live="polite" style="white-space: pre-line" hidden></div>
@@ -37,15 +39,22 @@
         <p id="inventory-manual-message" role="status"></p>
     </form>
     <div class="inventory-table-scroll">
-        <table class="inventory-table inventory-main-table"><colgroup>
-            <col class="inventory-col-ip"><col class="inventory-col-name"><col class="inventory-col-status">
-            <col class="inventory-col-device"><col class="inventory-col-seen"><col class="inventory-col-description">
-            <col class="inventory-col-vendor"><col class="inventory-col-type">
-            <col id="inventory-network-col" class="inventory-col-network" hidden>
+        <table id="inventory-table" class="inventory-table inventory-main-table"><colgroup>
+            <col id="inventory-col-ip_address" class="inventory-col-ip">
+            <col id="inventory-col-machine_name" class="inventory-col-name">
+            <col id="inventory-col-status" class="inventory-col-status">
+            <col id="inventory-col-vendor" class="inventory-col-vendor">
+            <col id="inventory-col-network" class="inventory-col-network">
+            <col id="inventory-col-last_seen" class="inventory-col-seen">
+            <col id="inventory-col-description_location" class="inventory-col-description">
         </colgroup><thead><tr>
-            <th>IP Address</th><th>Machine Name</th><th>Status</th><th>Kepware Device</th>
-            <th>Last Seen</th><th>Description / Location</th><th>Vendor</th><th>Device Type</th>
-            <th id="inventory-network-heading" hidden>Network</th>
+            <th id="inventory-heading-ip_address">IP Address</th>
+            <th id="inventory-heading-machine_name">Machine Name</th>
+            <th id="inventory-heading-status">Status</th>
+            <th id="inventory-heading-vendor">Vendor</th>
+            <th id="inventory-heading-network">Network</th>
+            <th id="inventory-heading-last_seen">Last Seen</th>
+            <th id="inventory-heading-description_location">Description / Location</th>
         </tr></thead><tbody id="inventory-rows"></tbody></table>
     </div>
     <section id="inventory-detail" class="hidden" aria-label="IP details">

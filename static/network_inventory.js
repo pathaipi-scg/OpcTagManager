@@ -103,6 +103,93 @@
     updateManualState();
     const timestamp = value => value ? new Date(/[zZ]$|[+-]\d\d:\d\d$/.test(value) ? value : `${value}Z`).toLocaleString() : "Never";
     const cellText = (key, value) => /Time$|At$|^Last(Scan|Seen)$/.test(key) ? timestamp(value) : (value ?? "Unknown");
+    const widthKey = 'opctagmanager.ot_inventory.column_widths';
+    const columns = [
+        ['ip_address', 'IP Address', 95, row => row.IPAddress],
+        ['machine_name', 'Machine Name', 100, row => cellText('MachineName', row.MachineName)],
+        ['status', 'Status', 100, row => cellText('Status', row.Status) + (row.Ambiguity ? ' (ambiguous)' : '')],
+        ['vendor', 'Vendor', 120, row => cellText('Vendor', row.Vendor)],
+        ['network', 'Network', 80, row => row.network_name || row.NetworkName || 'Legacy / unassigned'],
+        ['last_seen', 'Last Seen', 130, row => timestamp(row.LastSeen)],
+        ['description_location', 'Description / Location', 140, row => [row.Description, row.Location].filter(Boolean).join(' / ')],
+    ];
+    let widths = {};
+    try {
+        const saved = JSON.parse(localStorage.getItem(widthKey));
+        for (const [id, , min] of columns) {
+            if (typeof saved?.[id] === 'number' && Number.isFinite(saved[id]))
+                widths[id] = Math.max(min, Math.min(10000, saved[id]));
+        }
+    } catch (_) { /* Storage can be unavailable or contain invalid JSON. */ }
+    function applyWidths() {
+        let total = 0;
+        for (const [id] of columns) {
+            el(`col-${id}`).style.width = widths[id] ? `${widths[id]}px` : '';
+            total += widths[id] || 0;
+        }
+        // Freeze all measured widths during a drag so the table cannot redistribute them.
+        el('table').style.width = columns.every(([id]) => widths[id]) ? `${total}px` : '';
+        el('table').style.minWidth = columns.every(([id]) => widths[id]) ? `${total}px` : '';
+    }
+    applyWidths();
+    for (const [id, label, min] of columns) {
+        const header = el(`heading-${id}`);
+        const handle = document.createElement('span');
+        handle.className = 'inventory-resize-handle';
+        handle.title = `Drag to resize ${label}`;
+        header.appendChild(handle);
+        let drag = null;
+        handle.addEventListener('pointerdown', event => {
+            if (event.button !== 0) return;
+            event.preventDefault(); event.stopPropagation();
+            for (const [key, , minimum] of columns)
+                widths[key] = Math.max(minimum, el(`heading-${key}`).getBoundingClientRect().width);
+            drag = {x: event.clientX, width: widths[id], pointerId: event.pointerId};
+            handle.setPointerCapture(event.pointerId);
+            applyWidths();
+        });
+        handle.addEventListener('pointermove', event => {
+            if (!drag || event.pointerId !== drag.pointerId) return;
+            widths[id] = Math.max(min, Math.min(10000, Math.round(drag.width + event.clientX - drag.x)));
+            applyWidths();
+        });
+        const finish = () => {
+            if (!drag) return;
+            drag = null;
+            try { localStorage.setItem(widthKey, JSON.stringify(widths)); } catch (_) { /* Keep resizing usable. */ }
+        };
+        handle.addEventListener('pointerup', finish);
+        handle.addEventListener('pointercancel', finish);
+        handle.addEventListener('lostpointercapture', finish);
+        handle.addEventListener('click', event => event.stopPropagation());
+    }
+    el('reset-widths').addEventListener('click', () => {
+        widths = {};
+        try { localStorage.removeItem(widthKey); } catch (_) { /* Keep reset usable. */ }
+        applyWidths();
+    });
+    const viewState = () => JSON.stringify(['network', 'filter', 'search', 'sort'].map(id => el(id).value).concat(el('descending').checked));
+    let loadedState = null;
+    el('download').addEventListener('click', async () => {
+        if (loadedState !== viewState()) {
+            clearTimeout(debounce);
+            await refresh();
+            if (loadedState !== viewState()) return;
+        }
+        const escape = value => '"' + String(value ?? '').replace(/"/g, '""') + '"';
+        const csv = '\uFEFF' + [columns.map(([, label]) => label), ...rows.map(row => columns.map(([, , , value]) => value(row)))]
+            .map(record => record.map(escape).join(',')).join('\r\n') + '\r\n';
+        const now = new Date();
+        const pad = n => String(n).padStart(2, '0');
+        const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+        const url = URL.createObjectURL(new Blob([csv], {type: 'text/csv;charset=utf-8'}));
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `OT_Network_Inventory_${stamp}.csv`;
+        document.body.appendChild(link);
+        link.click(); link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
     async function api(path = "", options = {}) {
         const response = await fetch(`/api/network-inventory${path}`, options);
         const data = await response.json();
@@ -117,6 +204,8 @@
     }
     async function refresh() {
         const request = ++generation;
+        const requestedState = viewState();
+        el("download").disabled = true;
         const params = new URLSearchParams({q: el("search").value, category: el("filter").value,
             sort: el("sort").value, descending: el("descending").checked});
         const network = el('network').value || 'all';
@@ -125,6 +214,8 @@
             const data = await api(`?${params}`);
             if (request !== generation) return;
             rows = data.rows;
+            loadedState = requestedState;
+            el("download").disabled = false;
             if (!scanPending && data.progress) {
                 const finishedAt = (data.network_summaries || []).find(
                     n => n.network_id === data.progress.network_id)?.last_run?.FinishedAt ||
@@ -139,9 +230,6 @@
                 el('network').value = network;
             }
             const allMultiple = network === 'all' && data.networks?.length > 1;
-            const showNetwork = network === 'all' && (data.networks?.length > 1 || data.legacy_count > 0);
-            el('network-heading').hidden = !showNetwork;
-            el('network-col').hidden = !showNetwork;
             el("range").textContent = allMultiple ? `All Networks: ${data.networks.length} configured` : `IP range: ${data.scan_start}-${data.scan_end}`;
             el("freshness").textContent = allMultiple ? `Scanned: ${(data.network_summaries || []).filter(n => n.last_run).length}/${data.networks.length} networks` : `Scanned: ${timestamp(data.last_run?.FinishedAt)}`;
             el('freshness').title = (data.network_summaries || []).map(n => `${n.network_name}: ${timestamp(n.last_run?.FinishedAt)}`).join('\n');
@@ -157,17 +245,10 @@
                 const button = text(ipCell, "button", row.IPAddress);
                 button.type = "button";
                 button.addEventListener("click", () => showDetails(row));
-                for (const key of ["MachineName", "Status", "KepwareDevice", "LastSeen"]) {
-                    const value = cellText(key, row[key]) + (key === 'Status' && row.Ambiguity ? ' (ambiguous)' : '');
-                    text(tr, "td", value).title = value;
+                for (const [, , , value] of columns.slice(1)) {
+                    const display = value(row);
+                    text(tr, 'td', display).title = display;
                 }
-                const description = [row.Description, row.Location].filter(Boolean).join(" / ");
-                text(tr, "td", description).title = description;
-                for (const key of ["Vendor", "DeviceType"]) {
-                    const value = cellText(key, row[key]);
-                    text(tr, "td", value).title = value;
-                }
-                if (showNetwork) text(tr, 'td', row.network_name || row.NetworkName || 'Legacy / unassigned').title = row.Ambiguity || rowLabel(row);
                 tr.addEventListener("click", event => { if (event.target !== button) showDetails(row); });
                 el("rows").appendChild(tr);
             }
