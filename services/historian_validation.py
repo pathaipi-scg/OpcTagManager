@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 
 from workers.historian_worker import get_database_name, normalize_value
+from services.line_scope import LineScope
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,20 +17,20 @@ class CapturedHistorianPoint:
         return asdict(self)
 
 
-def capture_no_write(base_database: str, path: str, value) -> CapturedHistorianPoint:
+def capture_no_write(base_database: str, path: str, value, scope: LineScope = LineScope()) -> CapturedHistorianPoint:
     """Transform one event using the canonical contract without creating an Influx client."""
     normalized = normalize_value(value)
-    if normalized is None:
+    if normalized is None or not scope.allows_path(path):
         return CapturedHistorianPoint("NO-WRITE", None, None, True)
     return CapturedHistorianPoint(
         mode="NO-WRITE",
-        database=get_database_name(base_database, path),
+        database=base_database if scope.enabled else get_database_name(base_database, path),
         point={"measurement": path, "fields": {"value": normalized}},
         discarded=False,
     )
 
 
-def run_contract_self_check(base_database: str) -> dict:
+def run_contract_self_check(base_database: str, scope: LineScope = LineScope()) -> dict:
     cases = (
         ("SB11_1/Device/Bool", True, f"{base_database}SB11", 1),
         ("SB11S7/Device/Number", 2.5, f"{base_database}SB11S7", 2.5),
@@ -39,7 +40,9 @@ def run_contract_self_check(base_database: str) -> dict:
     results = []
     valid = True
     for path, value, expected_database, expected_value in cases:
-        captured = capture_no_write(base_database, path, value)
+        if scope.enabled:
+            expected_database = base_database if value is not None and scope.allows_path(path) else None
+        captured = capture_no_write(base_database, path, value, scope)
         case_valid = (
             captured.mode == "NO-WRITE"
             and captured.database == expected_database

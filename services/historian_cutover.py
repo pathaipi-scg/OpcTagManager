@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Callable
 
 from services.historian_validation import run_contract_self_check
+from services.line_scope import LineScope
 
 
 class HistorianCutoverPreflight:
@@ -17,12 +18,14 @@ class HistorianCutoverPreflight:
         contract_config: dict,
         legacy_poller_launcher: str,
         production_historian_owner: str = "legacy_opc_service",
+        scope: LineScope = LineScope(),
     ) -> None:
         self.connection_factory = connection_factory
         self.supervisor_status = supervisor_status
         self.contract_config = contract_config
         self.legacy_poller_launcher = legacy_poller_launcher
         self.production_historian_owner = production_historian_owner
+        self.scope = scope
 
     @staticmethod
     def _check(ok: bool, message: str, severity: str = "required") -> dict:
@@ -53,7 +56,9 @@ class HistorianCutoverPreflight:
             connection = self.connection_factory()
             try:
                 cursor = connection.cursor()
-                cursor.execute("SELECT COUNT(*) FROM TagMaster WHERE IsActive = 1")
+                cursor.execute("SELECT COUNT(*) FROM TagMaster WHERE IsActive = 1" +
+                               (" AND LineName = ?" if self.scope.enabled else ""),
+                               *((self.scope.line_name,) if self.scope.enabled else ()))
                 row = cursor.fetchone()
                 active_count = int(row[0]) if row else None
             finally:
@@ -78,7 +83,7 @@ class HistorianCutoverPreflight:
             if launcher_exists else "LEGACY_POLLER_LAUNCHER is missing or does not resolve to a file.",
         )
 
-        parity = run_contract_self_check(self.contract_config.get("influx_db", ""))
+        parity = run_contract_self_check(self.contract_config.get("influx_db", ""), self.scope)
         checks["no_write_contract_validation"] = self._check(
             parity["valid"],
             "Canonical historian contract passed NO-WRITE validation."

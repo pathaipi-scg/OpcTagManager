@@ -15,6 +15,7 @@ from asyncua import Client, ua
 from influxdb import InfluxDBClient
 
 from services.sql_connection import connect_sql
+from services.line_scope import LineScope
 
 
 try:
@@ -59,6 +60,7 @@ class HistorianSettings:
     reconnect_delay: float = 10.0
     healthcheck_interval: float = 60.0
     subscription_batch_size: int = 100
+    scope: LineScope = LineScope()
 
 
 def utc_now() -> str:
@@ -143,12 +145,14 @@ def make_sql_connection(settings: HistorianSettings):
     )
 
 
-def _load_active_tags_from_connection(connection) -> list[dict]:
+def _load_active_tags_from_connection(connection, scope: LineScope = LineScope()) -> list[dict]:
     cursor = connection.cursor()
-    cursor.execute(ACTIVE_TAG_QUERY)
+    cursor.execute(ACTIVE_TAG_QUERY + (" AND LineName = ?" if scope.enabled else ""),
+                   *((scope.line_name,) if scope.enabled else ()))
     return [
         {"TagId": row[0], "Path": row[1], "NodeId": row[2], "DataType": row[3]}
         for row in cursor.fetchall()
+        if scope.allows_tag(str(row[1]), str(row[2]))
     ]
 
 
@@ -160,9 +164,11 @@ def load_active_tags(connection_factory: Callable[[], object]) -> list[dict]:
         connection.close()
 
 
-def _load_alarm_diagnostic_mappings_from_connection(connection) -> list[dict]:
+def _load_alarm_diagnostic_mappings_from_connection(connection, scope: LineScope = LineScope()) -> list[dict]:
     cursor = connection.cursor()
-    cursor.execute(ALARM_DIAGNOSTIC_QUERY)
+    cursor.execute(ALARM_DIAGNOSTIC_QUERY + (
+        " AND a.LineName = ? AND t.LineName = ? AND (a.TagPath = t.Path OR a.TagPath = REPLACE(t.Path, '/', '.'))" if scope.enabled else ""),
+        *((scope.line_name, scope.line_name) if scope.enabled else ()))
     return [
         {
             "alarm_id": int(row[0]), "tag_id": int(row[1]), "tag_path": str(row[2]),
@@ -171,6 +177,7 @@ def _load_alarm_diagnostic_mappings_from_connection(connection) -> list[dict]:
             "mp3_file": row[8], "enable_alarm": bool(row[9]),
         }
         for row in cursor.fetchall()
+        if scope.allows_tag(str(row[2]), str(row[3]))
     ]
 
 
@@ -191,8 +198,13 @@ class InfluxWriter:
         self.retry_after: dict[str, float] = {}
         self.retry_cooldown = 10.0
 
+    def database_for(self, path: str):
+        self.settings.scope.require_path(path)
+        return (self.settings.influx_db if self.settings.scope.enabled
+                else get_database_name(self.settings.influx_db, path))
+
     def get_client(self, path: str):
-        database = get_database_name(self.settings.influx_db, path)
+        database = self.database_for(path)
         if database in self.clients:
             return self.clients[database]
         client = self.client_factory(
@@ -209,10 +221,12 @@ class InfluxWriter:
         return client
 
     def write(self, path: str, value) -> bool:
+        if not self.settings.scope.allows_path(path):
+            return False
         normalized = normalize_value(value)
         if normalized is None:
             return False
-        database = get_database_name(self.settings.influx_db, path)
+        database = self.database_for(path)
         if time.monotonic() < self.retry_after.get(database, 0):
             return False
         try:
@@ -229,7 +243,7 @@ class InfluxWriter:
             self.retry_after[database] = time.monotonic() + self.retry_cooldown
             self.reporter.send(
                 "influx_write", success=False,
-                database=get_database_name(self.settings.influx_db, path), path=path,
+                database=self.database_for(path), path=path,
                 value=normalized, result="WRITE FAILED",
                 error=safe_error("Influx write failed", exc),
             )
@@ -363,7 +377,7 @@ class HistorianWorker:
         try:
             if owns_connection:
                 connection = self.connection_factory()
-            alarms = _load_alarm_diagnostic_mappings_from_connection(connection)
+            alarms = _load_alarm_diagnostic_mappings_from_connection(connection, self.settings.scope)
             self.alarm_diagnostics.replace_mappings(alarms)
         except Exception as exc:
             self.reporter.send(
@@ -477,7 +491,7 @@ class HistorianWorker:
     async def run_session(self) -> str:
         connection = self.connection_factory()
         try:
-            tags = _load_active_tags_from_connection(connection)
+            tags = _load_active_tags_from_connection(connection, self.settings.scope)
             self._reload_alarm_diagnostics(connection)
         finally:
             connection.close()
@@ -563,6 +577,7 @@ def read_commands(command_queue: queue.Queue, stream=None) -> None:
 
 def settings_from_config() -> HistorianSettings:
     from config.config import (
+        LINE_SCOPE,
         INFLUX_DB,
         INFLUX_HOST,
         INFLUX_PASS,
@@ -579,6 +594,7 @@ def settings_from_config() -> HistorianSettings:
         SQL_USER,
     )
     return HistorianSettings(
+        scope=LINE_SCOPE,
         opc_url=OPC_URL,
         sql_driver=SQL_DRIVER,
         sql_server=SQL_SERVER,

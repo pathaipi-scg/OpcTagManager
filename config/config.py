@@ -4,8 +4,17 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 
-ENV_PATH = Path(__file__).parent / ".env"
-load_dotenv(ENV_PATH)
+_profile = os.environ.get("OPCTAGMANAGER_ENV_FILE")
+ENV_PATH = Path(__file__).resolve().parent / ".env"
+if _profile is not None:
+    if not _profile.strip():
+        raise RuntimeError("OPCTAGMANAGER_ENV_FILE must not be blank")
+    ENV_PATH = Path(_profile)
+    if not ENV_PATH.is_absolute():
+        ENV_PATH = Path(__file__).resolve().parents[1] / ENV_PATH
+    if not ENV_PATH.is_file():
+        raise RuntimeError(f"Environment profile does not exist: {ENV_PATH}")
+load_dotenv(ENV_PATH, override=_profile is not None)
 
 
 def get_required(name: str) -> str:
@@ -111,7 +120,14 @@ if OPC_FAST_SYNC_ATTEMPTS < 1 or OPC_FAST_SYNC_ATTEMPTS > 100:
     raise RuntimeError("Configuration OPC_FAST_SYNC_ATTEMPTS must be between 1 and 100")
 if OPC_FAST_SYNC_RETRY_DELAY_SEC < 0 or OPC_FAST_SYNC_RETRY_DELAY_SEC > 60:
     raise RuntimeError("Configuration OPC_FAST_SYNC_RETRY_DELAY_SEC must be between 0 and 60")
-PRODUCTION_LINE = get_required("PRODUCTION_LINE")
+from services.line_scope import LineScope, normalized_line_name, influx_database
+LINE_NAME = normalized_line_name(os.environ)
+# Retained only for old integrations; it is not a second ownership identity.
+PRODUCTION_LINE = LINE_NAME or get_required("PRODUCTION_LINE")
+KEPWARE_CHANNEL_PATTERNS = tuple(
+    part.strip() for part in get_optional("KEPWARE_CHANNEL_PATTERNS").split(",") if part.strip()
+)
+LINE_SCOPE = LineScope(LINE_NAME, KEPWARE_CHANNEL_PATTERNS)
 
 # SQL
 SQL_DRIVER = get_optional("SQL_DRIVER") or "AUTO"
@@ -179,7 +195,7 @@ if KM_RESOURCE_MAX_UPLOAD_MB < 1:
 # InfluxDB
 INFLUX_HOST = get_configured("INFLUX_HOST")
 INFLUX_PORT = get_int("INFLUX_PORT")
-INFLUX_DB = get_configured("INFLUX_DB")
+INFLUX_DB = influx_database(os.getenv("INFLUX_DB"), LINE_NAME)
 INFLUX_USER = get_configured("INFLUX_USER")
 INFLUX_PASS = get_configured("INFLUX_PASS")
 

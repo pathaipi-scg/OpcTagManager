@@ -7,7 +7,8 @@ import logging
 from threading import Lock
 from time import monotonic
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, unquote
+from services.line_scope import LineScope
 
 import requests
 from requests.auth import HTTPBasicAuth
@@ -79,8 +80,10 @@ class KepwareConfigApi:
         self,
         settings: KepwareConfigSettings,
         session: requests.Session | None = None,
+        scope: LineScope = LineScope(),
     ) -> None:
         self.settings = settings
+        self.scope = scope
         self.session = session or requests.Session()
         self.session.auth = HTTPBasicAuth(settings.username, settings.password)
         self.session.verify = settings.verify_ssl
@@ -107,6 +110,7 @@ class KepwareConfigApi:
         allow_not_found: bool = False,
         use_cache: bool = True,
     ) -> Any:
+        self._check_scope(path)
         now = monotonic()
         with self._cache_lock:
             cached = self._cache.get(path)
@@ -174,7 +178,15 @@ class KepwareConfigApi:
         except ValueError:
             return "No structured validation details were returned."
 
+    def _check_scope(self, path: str):
+        prefix = '/project/channels/'
+        if path.startswith(prefix):
+            channel = unquote(path[len(prefix):].split('/', 1)[0].split('?', 1)[0])
+            if not self.scope.allows_channel(channel):
+                raise KepwareConfigError("Channel is outside the configured line scope.")
+
     def _post_tag(self, path: str, payload: dict[str, Any]) -> None:
+        self._check_scope(path)
         try:
             self._request_count += 1
             response = self.session.post(
@@ -217,6 +229,9 @@ class KepwareConfigApi:
             )
 
     def _post_object(self, path: str, payload: dict[str, Any], object_type: str) -> None:
+        self._check_scope(path)
+        if path == '/project/channels' and not self.scope.allows_channel(payload.get(NAME_PROPERTY, '')):
+            raise KepwareConfigError("Channel is outside the configured line scope.")
         if "PROJECT_ID" in payload or "FORCE_UPDATE" in payload:
             raise KepwareConfigError("Create payload contains a forbidden concurrency property.")
         try:
@@ -235,6 +250,7 @@ class KepwareConfigApi:
             )
 
     def _put_object(self, path: str, payload: dict[str, Any]) -> None:
+        self._check_scope(path)
         if "PROJECT_ID" not in payload:
             raise KepwareConfigError("Kepware update requires a fresh PROJECT_ID.")
         if "FORCE_UPDATE" in payload:
@@ -337,6 +353,7 @@ class KepwareConfigApi:
                 {"channel": name},
             )
             for properties in channels
+            if self.scope.allows_channel(self._name(properties, "Channel"))
         ]
 
     @staticmethod
@@ -351,7 +368,8 @@ class KepwareConfigApi:
 
     def get_channels_uncached(self) -> list[dict[str, Any]]:
         data = self._collection(self._get("/project/channels", use_cache=False), "Channel")
-        return [self._node("Channel", name := self._name(p, "Channel"), name, p, {"channel": name}) for p in data]
+        return [self._node("Channel", name := self._name(p, "Channel"), name, p, {"channel": name}) for p in data
+                if self.scope.allows_channel(self._name(p, "Channel"))]
 
     def get_devices(self, channel: str, *, use_cache: bool = True) -> list[dict[str, Any]]:
         api_path = f"/project/channels/{self._segment(channel, 'Channel')}/devices"
@@ -404,6 +422,8 @@ class KepwareConfigApi:
         return self._get(f"{path}?content=property_states", use_cache=False)
 
     def create_channel(self, name: str, driver: str, persistence: bool = False) -> dict[str, Any]:
+        if not self.scope.allows_channel(name):
+            raise KepwareConfigError("Channel is outside the configured line scope.")
         payload = {NAME_PROPERTY: name, "servermain.MULTIPLE_TYPES_DEVICE_DRIVER": driver,
                    "memory_based.CHANNEL_ITEM_PERSISTENCE": persistence}
         return self._create_verified("/project/channels", name, "Channel", payload, self.get_channel)

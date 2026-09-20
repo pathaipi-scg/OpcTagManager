@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from typing import Callable
 
 from services.alarm_audio import AlarmAudioRepository
+from services.line_scope import LineScope
 
 
 SUPPORTED_ALARM_MODES = frozenset({"HIGH", "LOW"})
@@ -36,11 +37,13 @@ class AlarmService:
         audio_repository: AlarmAudioRepository,
         reload_notifier,
         write_enabled: bool,
+        scope: LineScope = LineScope(),
     ) -> None:
         self.connection_factory = connection_factory
         self.audio_repository = audio_repository
         self.reload_notifier = reload_notifier
         self.write_enabled = write_enabled
+        self.scope = scope
 
     @staticmethod
     def _value(row, index, name):
@@ -71,12 +74,17 @@ class AlarmService:
         return result
 
     def _select(self, where: str = "", parameters=()) -> list[dict]:
+        join_scope = ""
+        if self.scope.enabled:
+            where += (" AND " if where else "WHERE ") + "a.LineName = ?"
+            parameters = (*parameters, self.scope.line_name)
+            join_scope = " AND t.LineName = a.LineName AND (t.Path = a.TagPath OR REPLACE(t.Path, '/', '.') = a.TagPath)"
         connection = self.connection_factory()
         try:
             cursor = connection.cursor()
             cursor.execute(
                 f"SELECT {self.SELECT_COLUMNS} FROM Alarm_Lists a "
-                f"LEFT JOIN TagMaster t ON a.TagId = t.TagId {where} ORDER BY a.TagPath, a.AlarmId",
+                f"LEFT JOIN TagMaster t ON a.TagId = t.TagId {join_scope} {where} ORDER BY a.TagPath, a.AlarmId",
                 *parameters,
             )
             mappings = [self._mapping(row) for row in cursor.fetchall()]
@@ -170,12 +178,16 @@ class AlarmService:
             raise AlarmServiceError("Alarm configuration write mode is disabled.")
 
     def _tag(self, cursor, tag_id: int):
-        cursor.execute("SELECT TagId, Path, NodeId, IsActive FROM TagMaster WHERE TagId = ?", tag_id)
+        cursor.execute("SELECT TagId, Path, NodeId, IsActive FROM TagMaster WHERE TagId = ?" +
+                       (" AND LineName = ?" if self.scope.enabled else ""),
+                       tag_id, *((self.scope.line_name,) if self.scope.enabled else ()))
         row = cursor.fetchone()
         if row is None:
             raise AlarmServiceError("Canonical TagMaster identity was not found.")
         if not bool(self._value(row, 3, "IsActive")):
             raise AlarmServiceError("Canonical TagMaster identity is inactive.")
+        if not self.scope.allows_tag(str(self._value(row, 1, "Path")), str(self._value(row, 2, "NodeId"))):
+            raise AlarmServiceError("Canonical tag is outside the configured line scope.")
         return int(self._value(row, 0, "TagId")), str(self._value(row, 1, "Path"))
 
     def _reload_response(self, mapping: dict) -> dict:
@@ -194,17 +206,20 @@ class AlarmService:
         try:
             cursor = connection.cursor()
             canonical_tag_id, path = self._tag(cursor, tag_id)
-            cursor.execute("SELECT AlarmId FROM Alarm_Lists WHERE TagId = ?", canonical_tag_id)
+            cursor.execute("SELECT AlarmId FROM Alarm_Lists WHERE TagId = ?" +
+                           (" AND LineName = ?" if self.scope.enabled else ""), canonical_tag_id,
+                           *((self.scope.line_name,) if self.scope.enabled else ()))
             if cursor.fetchone() is not None:
                 raise AlarmServiceError("This Tag already has an Alarm mapping.")
             cursor.execute(
-                """INSERT INTO Alarm_Lists
+                f"""INSERT INTO Alarm_Lists
                    (TagId, TagPath, AlarmMode, ThresholdHigh, ThresholdLow, Mp3File,
-                    Priority, [Repeat], RepeatEnable, EnableAlarm, CreatedTime, UpdatedTime)
+                    Priority, [Repeat], RepeatEnable, EnableAlarm, CreatedTime, UpdatedTime{", LineName" if self.scope.enabled else ""})
                    OUTPUT INSERTED.AlarmId
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, GETDATE(), GETDATE())""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, GETDATE(), GETDATE(){", ?" if self.scope.enabled else ""})""",
                 canonical_tag_id, path, values.alarm_mode, values.threshold_high, values.threshold_low,
                 values.mp3_file, values.priority, values.repeat, 1 if values.enable_alarm else 0,
+                *((self.scope.line_name,) if self.scope.enabled else ()),
             )
             row = cursor.fetchone()
             if row is None:
@@ -227,21 +242,27 @@ class AlarmService:
         connection = self.connection_factory()
         try:
             cursor = connection.cursor()
-            cursor.execute("SELECT TagId, Mp3File FROM Alarm_Lists WHERE AlarmId = ?", alarm_id)
+            cursor.execute("SELECT TagId, Mp3File" + (", TagPath" if self.scope.enabled else "") +
+                           " FROM Alarm_Lists WHERE AlarmId = ?" +
+                           (" AND LineName = ?" if self.scope.enabled else ""), alarm_id,
+                           *((self.scope.line_name,) if self.scope.enabled else ()))
             row = cursor.fetchone()
             if row is None:
                 raise AlarmServiceError("Alarm mapping was not found.")
             tag_id, path = self._tag(cursor, int(row[0]))
+            if self.scope.enabled and row[2] not in (path, path.replace('/', '.')):
+                raise AlarmServiceError("Copied mapping must be manually remapped before editing.")
             existing_mp3 = str(row[1] or "")
             if values.mp3_file != existing_mp3:
                 if values.mp3_file:
                     self.audio_repository.resolve(values.mp3_file)
             cursor.execute(
-                """UPDATE Alarm_Lists SET TagPath = ?, AlarmMode = ?, ThresholdHigh = ?,
+                f"""UPDATE Alarm_Lists SET TagPath = ?, AlarmMode = ?, ThresholdHigh = ?,
                    ThresholdLow = ?, Mp3File = ?, Priority = ?, [Repeat] = ?,
-                   EnableAlarm = ?, UpdatedTime = GETDATE() WHERE AlarmId = ?""",
+                   EnableAlarm = ?, UpdatedTime = GETDATE() WHERE AlarmId = ?{" AND LineName = ?" if self.scope.enabled else ""}""",
                 path, values.alarm_mode, values.threshold_high, values.threshold_low, values.mp3_file,
                 values.priority, values.repeat, 1 if values.enable_alarm else 0, alarm_id,
+                *((self.scope.line_name,) if self.scope.enabled else ()),
             )
             connection.commit()
         except Exception:
@@ -259,10 +280,14 @@ class AlarmService:
         connection = self.connection_factory()
         try:
             cursor = connection.cursor()
-            cursor.execute("SELECT AlarmId FROM Alarm_Lists WHERE AlarmId = ?", alarm_id)
+            cursor.execute("SELECT AlarmId FROM Alarm_Lists WHERE AlarmId = ?" +
+                           (" AND LineName = ?" if self.scope.enabled else ""), alarm_id,
+                           *((self.scope.line_name,) if self.scope.enabled else ()))
             if cursor.fetchone() is None:
                 raise AlarmServiceError("Alarm mapping was not found.")
-            cursor.execute("DELETE FROM Alarm_Lists WHERE AlarmId = ?", alarm_id)
+            cursor.execute("DELETE FROM Alarm_Lists WHERE AlarmId = ?" +
+                           (" AND LineName = ?" if self.scope.enabled else ""), alarm_id,
+                           *((self.scope.line_name,) if self.scope.enabled else ()))
             connection.commit()
         except Exception:
             try:

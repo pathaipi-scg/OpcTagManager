@@ -3,6 +3,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from contextlib import suppress
 import json
+from services.startup_trace import trace_step
 import logging
 import re
 from time import perf_counter
@@ -20,6 +21,7 @@ from services.tag_value import TagValueReader
 logger = logging.getLogger("opctagmanager")
 
 from config.config import (
+    LINE_SCOPE,
     ALARM_RELOAD_ENABLED,
     ALARM_WRITE_ENABLED,
     APP_HOST,
@@ -144,18 +146,23 @@ async def _periodic_runtime_reconcile() -> None:
 async def app_lifespan(_app: FastAPI):
     global last_reconcile_result
     refresh_task = None
+    logger.warning("LINE_NAME=%s CHANNELS=%s MATCHED_CHANNELS=%s INFLUX_DB=%s",
+                   LINE_SCOPE.line_name or '(legacy)', ','.join(LINE_SCOPE.channel_patterns) or '(all)',
+                   ','.join(sorted(tag_reconcile_service._discoverer.matched_channels)) or '(not browsed)', INFLUX_DB)
     if runtime_supervisor.enabled and OPC_RUNTIME_RECONCILE_ON_STARTUP:
         try:
             # The worker's first snapshot sees the reconciled registry, so no rebuild command is needed.
-            last_reconcile_result = (
-                await tag_reconcile_service.reconcile(notify_subscriber=False)
-            ).to_dict()
+            with trace_step("STARTUP RECONCILE"):
+                last_reconcile_result = (
+                    await tag_reconcile_service.reconcile(notify_subscriber=False)
+                ).to_dict()
         except (OpcDiscoveryError, SnapshotValidationError, TagRegistryError) as exc:
             logger.error("Startup OPC inventory reconcile failed; using the last safe TagMaster snapshot: %s", exc)
             last_reconcile_result = {"success": False, "error": str(exc), "subscriber_synchronized": False}
         except Exception:
             logger.exception("Unexpected startup OPC inventory reconcile failure")
-    runtime_supervisor.start()
+    with trace_step("HISTORIAN WORKER STARTUP", enabled=runtime_supervisor.enabled):
+        runtime_supervisor.start()
     if (runtime_supervisor.enabled and OPC_RUNTIME_RECONCILE_INTERVAL_SEC > 0):
         refresh_task = asyncio.create_task(_periodic_runtime_reconcile())
     try:
@@ -182,7 +189,7 @@ kepware_config_api = KepwareConfigApi(
         timeout=KEPWARE_CONFIG_API_TIMEOUT,
         cache_ttl_sec=KEPWARE_CONFIG_CACHE_TTL_SEC,
         write_enabled=KEPWARE_CONFIG_WRITE_ENABLED,
-    )
+    ), scope=LINE_SCOPE,
 )
 tag_knowledge_store = TagKnowledgeStore(
     root=KM_TAG_ROOT,
@@ -367,12 +374,13 @@ network_inventory = NetworkInventory(InventoryStore(get_conn), kepware_config_ap
                                      resolve_hostnames=OT_RESOLVE_HOSTNAMES, ranges=OT_SCAN_RANGES)
 app.include_router(inventory_router(network_inventory))
 
-tag_registry = TagRegistry(get_conn)
+tag_registry = TagRegistry(get_conn, scope=LINE_SCOPE)
 reload_control_path = "/".join((RELOAD_ALARM_CHANNEL, RELOAD_ALARM_DEVICE,
                                 *RELOAD_ALARM_GROUP_PATH, "RELOAD_ALARM"))
 tag_reconcile_service = TagReconcileService(
     discoverer=OpcTagDiscoverer(
         OPC_URL,
+        scope=LINE_SCOPE,
         excluded_paths=() if RELOAD_ALARM_HISTORIAN_ENABLED else (reload_control_path,),
     ),
     registry=tag_registry,
@@ -429,7 +437,8 @@ def inspect_reload_opc(path: str, configured_node_id: str) -> dict:
 
 
 kepware_system_control = KepwareSystemControl(
-    kepware_config_api, reload_contract,
+    # Dedicated control client is never exposed through browser/tag endpoints.
+    (KepwareConfigApi(kepware_config_api.settings) if LINE_SCOPE.enabled else kepware_config_api), reload_contract,
     bootstrap_enabled=RELOAD_ALARM_BOOTSTRAP_ENABLED,
     repair_enabled=RELOAD_ALARM_REPAIR_ENABLED,
     self_heal_enabled=RELOAD_ALARM_SELF_HEAL_ENABLED,
@@ -446,6 +455,7 @@ alarm_service = AlarmService(
     audio_repository=alarm_audio_repository,
     reload_notifier=alarm_reload_notifier,
     write_enabled=ALARM_WRITE_ENABLED,
+    scope=LINE_SCOPE,
 )
 alarm_preflight = AlarmPreflight(
     alarm_service=alarm_service,
@@ -458,6 +468,7 @@ alarm_preflight = AlarmPreflight(
     system_control=kepware_system_control,
 )
 historian_cutover_preflight = HistorianCutoverPreflight(
+    scope=LINE_SCOPE,
     connection_factory=get_conn,
     supervisor_status=runtime_supervisor.status,
     contract_config={
@@ -482,18 +493,19 @@ def search_runtime_tags(query: str, limit: int = 25, include_inactive: bool = Fa
     try:
         cursor = conn.cursor()
         cursor.execute(
-            """SELECT TOP (?) TagId, Path, DataType, IsActive
+            f"""SELECT TOP (?) TagId, Path, DataType, IsActive
                FROM TagMaster
-               WHERE Path LIKE ? AND (? = 1 OR IsActive = 1)
+               WHERE Path LIKE ? AND (? = 1 OR IsActive = 1){' AND LineName = ?' if LINE_SCOPE.enabled else ''}
                ORDER BY CASE WHEN Path = ? THEN 0 ELSE 1 END, Path, TagId""",
-            limit, f"%{needle}%", 1 if include_inactive else 0, needle,
+            limit, f"%{needle}%", 1 if include_inactive else 0,
+            *((LINE_SCOPE.line_name,) if LINE_SCOPE.enabled else ()), needle,
         )
         rows = cursor.fetchall()
     finally:
         conn.close()
     return [{"kepware_path": str(row[1]), "tag_name": str(row[1]).split("/")[-1],
              "levels": str(row[1]).split("/")[:-1], "data_type": row[2], "is_active": bool(row[3])}
-            for row in rows]
+            for row in rows if LINE_SCOPE.allows_path(str(row[1]))]
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -540,13 +552,24 @@ def run_full_reconcile(payload: FullReconcileRequest):
 @app.get("/api/runtime/status")
 def runtime_status():
     status = runtime_supervisor.status()
+    status.update(line_name=LINE_SCOPE.line_name or None, channel_patterns=list(LINE_SCOPE.channel_patterns),
+                  matched_channels=sorted(tag_reconcile_service._discoverer.matched_channels),
+                  influx_database=INFLUX_DB, historian_subscribed_count=status.get('subscribed_tag_count'),
+                  registry_tag_count=None, active_tag_count=None)
     try:
         conn = get_conn()
         try:
             cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM TagMaster WHERE IsActive = 1")
+            cursor.execute("SELECT COUNT(*) FROM TagMaster WHERE IsActive = 1" +
+                           (" AND LineName = ?" if LINE_SCOPE.enabled else ""),
+                           *((LINE_SCOPE.line_name,) if LINE_SCOPE.enabled else ()))
             row = cursor.fetchone()
             status["tagmaster_active_count"] = int(row[0]) if row else None
+            status['active_tag_count'] = status['tagmaster_active_count']
+            cursor.execute("SELECT COUNT(*) FROM TagMaster" + (" WHERE LineName = ?" if LINE_SCOPE.enabled else ""),
+                           *((LINE_SCOPE.line_name,) if LINE_SCOPE.enabled else ()))
+            row = cursor.fetchone()
+            status['registry_tag_count'] = int(row[0]) if row else None
         finally:
             conn.close()
     except Exception:
@@ -619,6 +642,17 @@ class TagValueRequest(BaseModel):
 
 @app.post("/api/opc-tags/current-value")
 async def read_current_tag_value(payload: TagValueRequest):
+    if LINE_SCOPE.enabled:
+        conn = get_conn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT Path FROM TagMaster WHERE NodeId=? AND LineName=? AND IsActive=1",
+                           payload.node_id, LINE_SCOPE.line_name)
+            rows = cursor.fetchall()
+            if not any(LINE_SCOPE.allows_tag(str(row[0]), payload.node_id) for row in rows):
+                return JSONResponse({'success': False, 'error': 'Tag is outside the active registry scope.'}, status_code=403)
+        finally:
+            conn.close()
     started = perf_counter()
     request_started = datetime.now().astimezone().isoformat()
     logger.info("Current Value API start node=%s at=%s", payload.node_id, request_started)
@@ -643,13 +677,15 @@ def get_tag_alarm(tag_id: int):
 @app.get("/api/opc-tags/resolve/by-path")
 def resolve_registered_tag(path: str = Query(min_length=1, max_length=2000)):
     """Resolve one exact Kepware path without registering or reconciling it."""
+    if not LINE_SCOPE.allows_path(path):
+        return JSONResponse({'success': False, 'error': 'Path is outside the configured line scope.'}, status_code=403)
     conn = get_conn()
     try:
         cursor = conn.cursor()
         cursor.execute(
             """SELECT TagId, Path, NodeId, DataType
-               FROM TagMaster WHERE Path = ? AND IsActive = 1""",
-            path,
+               FROM TagMaster WHERE Path = ? AND IsActive = 1""" + (" AND LineName = ?" if LINE_SCOPE.enabled else ""),
+            path, *((LINE_SCOPE.line_name,) if LINE_SCOPE.enabled else ()),
         )
         row = cursor.fetchone()
     finally:
@@ -991,11 +1027,14 @@ def _alarm_history_rows(limit: int = 5, history_id: int | None = None) -> list[d
         where = "WHERE h.HistoryId = ?" if history_id is not None else ""
         top = "" if history_id is not None else "TOP (?) "
         parameters = (history_id,) if history_id is not None else (limit,)
+        if LINE_SCOPE.enabled:
+            where += (" AND " if where else "WHERE ") + "h.LineName = ?"
+            parameters += (LINE_SCOPE.line_name,)
         cursor.execute(
             f"""SELECT {top}h.HistoryId, h.AlarmId, h.TagId, h.TagPath,
                        h.CurrentValue, h.CreatedTime, a.Priority
                 FROM Alarm_History h
-                LEFT JOIN Alarm_Lists a ON a.AlarmId = h.AlarmId
+                LEFT JOIN Alarm_Lists a ON a.AlarmId = h.AlarmId{' AND a.LineName = h.LineName' if LINE_SCOPE.enabled else ''}
                 {where}
                 ORDER BY h.HistoryId DESC""",
             *parameters,

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from services.startup_trace import trace_step, logger as trace_logger
 import asyncio
+import logging
 from dataclasses import asdict, dataclass
 from threading import Lock
 from time import perf_counter
@@ -10,6 +12,7 @@ from asyncua import Client, ua
 from asyncua.ua import NodeClass
 
 from services.tag_registry import TagRegistry, TagSnapshot
+from services.line_scope import LineScope
 
 
 SKIP_ROOTS = frozenset({"LP_UA", "_Statistics", "_System", "_Scheduler", "_LocalHistorian"})
@@ -75,11 +78,14 @@ class OpcTagDiscoverer:
     """Strict OPC traversal that returns a complete in-memory snapshot or fails."""
 
     def __init__(self, opc_url: str, client_factory: Callable[..., Client] = Client,
-                 excluded_paths: Iterable[str] = (), request_timeout: float = 30.0) -> None:
+                 excluded_paths: Iterable[str] = (), request_timeout: float = 30.0,
+                 scope: LineScope = LineScope()) -> None:
         self._opc_url = opc_url
         self._client_factory = client_factory
         self._excluded_paths = frozenset(excluded_paths)
         self._request_timeout = request_timeout
+        self.scope = scope
+        self.matched_channels = set()
 
     async def _browse_node_legacy(self, node, path: str, tags: list[TagSnapshot]) -> None:
         node_class = await node.read_node_class()
@@ -95,6 +101,10 @@ class OpcTagDiscoverer:
             if not is_allowed_name(child_name):
                 continue
             child_path = f"{path}/{child_name}" if path else child_name
+            if not self.scope.allows_path(child_path):
+                continue
+            if not path:
+                self.matched_channels.add(child_name)
             await self._browse_node_legacy(child, child_path, tags)
 
     async def _browse_node(self, client, node, path: str, variables: list[tuple[object, str]]) -> None:
@@ -105,6 +115,10 @@ class OpcTagDiscoverer:
             if not is_allowed_name(child_name):
                 continue
             child_path = f"{path}/{child_name}" if path else child_name
+            if not self.scope.allows_path(child_path):
+                continue
+            if not path:
+                self.matched_channels.add(child_name)
             child = client.get_node(description.NodeId)
             if (description.NodeClass == NodeClass.Variable and is_allowed_path(child_path)
                     and child_path not in self._excluded_paths):
@@ -141,23 +155,33 @@ class OpcTagDiscoverer:
         return tags
 
     async def discover(self) -> tuple[TagSnapshot, ...]:
+        self.matched_channels.clear()
         tags: list[TagSnapshot] = []
         try:
             # A full Kepware hierarchy is much larger than an individual runtime read.
             # asyncua's short default request timeout can expire midway through a valid
             # browse even while the endpoint and existing subscriptions remain healthy.
+            connect_started = perf_counter()
+            trace_logger.info("OPC CONNECT START")
             async with self._client_factory(url=self._opc_url, timeout=self._request_timeout) as client:
+                trace_logger.info("OPC CONNECT END elapsed=%.3fs", perf_counter() - connect_started)
                 if hasattr(client.nodes.objects, "get_children_descriptions") and hasattr(client, "read_attributes"):
                     variables: list[tuple[object, str]] = []
-                    await self._browse_node(client, client.nodes.objects, "", variables)
-                    tags = await self._snapshots(client, variables)
+                    with trace_step("OPC BROWSE"):
+                        await self._browse_node(client, client.nodes.objects, "", variables)
+                    with trace_step("OPC METADATA"):
+                        tags = await self._snapshots(client, variables)
                 else:  # Small test doubles and older compatible clients.
-                    await self._browse_node_legacy(client.nodes.objects, "", tags)
+                    with trace_step("OPC LEGACY BROWSE"):
+                        await self._browse_node_legacy(client.nodes.objects, "", tags)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             raise OpcDiscoveryError("OPC discovery failed; the registry was not changed.") from exc
-        return validate_snapshot(tags)
+        snapshot = validate_snapshot(tags)
+        logging.getLogger('opctagmanager').info('LINE_NAME=%s MATCHED_CHANNELS=%s REGISTRY_DISCOVERED=%s',
+            self.scope.line_name or '(legacy)', ','.join(sorted(self.matched_channels)), len(snapshot))
+        return snapshot
 
 
 class TagReconcileService:
@@ -172,9 +196,12 @@ class TagReconcileService:
             raise ReconcileInProgressError("A Full Reconcile is already running.")
         try:
             started = perf_counter()
-            run_id = self._registry.start_run()
-            snapshot = await self._discoverer.discover()
-            applied = self._registry.apply_snapshot(run_id, snapshot)
+            with trace_step("RECONCILIATION RUN CREATE"):
+                run_id = self._registry.start_run()
+            with trace_step("OPC DISCOVERY"):
+                snapshot = await self._discoverer.discover()
+            with trace_step("REGISTRY APPLY"):
+                applied = self._registry.apply_snapshot(run_id, snapshot)
             rebuild_requested = False
             registry_changed = bool(
                 applied.added or applied.changed or applied.reactivated or applied.deactivated

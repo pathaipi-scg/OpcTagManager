@@ -10,6 +10,7 @@ from asyncua.ua import NodeClass
 
 from services.tag_reconcile import validate_snapshot
 from services.tag_registry import TagRegistry, TagSnapshot
+from services.line_scope import LineScope
 
 
 class FastSyncError(RuntimeError):
@@ -110,6 +111,8 @@ class TagFastSyncService:
         self._excluded_paths = frozenset(excluded_paths)
 
     async def _sync(self, path: str, *, notify_registry_changed: bool) -> FastSyncResult:
+        if not getattr(self._registry, 'scope', LineScope()).allows_path(path):
+            raise FastSyncError("The requested tag is outside the configured line scope.")
         if path != path.strip() or path in self._excluded_paths:
             raise FastSyncError("The requested OPC Tag Path is excluded from registry synchronization.")
         started = perf_counter()

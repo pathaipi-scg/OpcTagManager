@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from services.startup_trace import trace_step, logger as trace_logger
+from time import perf_counter
 from dataclasses import dataclass
 from typing import Callable, Iterable, Protocol
+from services.line_scope import LineScope
 
 
 class SqlCursor(Protocol):
@@ -49,8 +52,9 @@ class TagRegistryError(RuntimeError):
 class TagRegistry:
     """Transactional owner of TagMaster, TagLevel, and BrowserRun writes."""
 
-    def __init__(self, connection_factory: Callable[[], SqlConnection]) -> None:
+    def __init__(self, connection_factory: Callable[[], SqlConnection], scope: LineScope = LineScope()) -> None:
         self._connection_factory = connection_factory
+        self.scope = scope
 
     def start_run(self) -> int:
         conn = self._connection_factory()
@@ -130,7 +134,17 @@ class TagRegistry:
         return tag_id, state
 
     @staticmethod
-    def rebuild_tag_levels(cursor: SqlCursor, tag_id: int, path: str) -> None:
+    def rebuild_tag_levels(cursor: SqlCursor, tag_id: int, path: str, line_name: str = "") -> None:
+        if line_name:
+            with trace_step("TAGLEVEL DELETE", tag_id=tag_id):
+                cursor.execute("""DELETE FROM TagLevel WHERE TagId=? AND EXISTS
+                (SELECT 1 FROM TagMaster WHERE TagId=? AND LineName=?)""", tag_id, tag_id, line_name)
+            with trace_step("TAGLEVEL REBUILD", tag_id=tag_id):
+                for level_no, level_name in enumerate(path.split('/')):
+                    cursor.execute("""INSERT INTO TagLevel (TagId, LevelNo, LevelName, LineName)
+                    SELECT TagId, ?, ?, LineName FROM TagMaster WHERE TagId=? AND LineName=?""",
+                        level_no, level_name, tag_id, line_name)
+            return
         cursor.execute("DELETE FROM TagLevel WHERE TagId = ?", tag_id)
         for level_no, level_name in enumerate(path.split("/")):
             cursor.execute(
@@ -143,6 +157,8 @@ class TagRegistry:
 
     def apply_snapshot(self, run_id: int, snapshot: Iterable[TagSnapshot]) -> RegistryApplyResult:
         tags = tuple(sorted(snapshot, key=lambda item: item.path))
+        if self.scope.enabled:
+            return self._apply_scoped(tags, run_id=run_id)
         conn = self._connection_factory()
         try:
             cursor = conn.cursor()
@@ -263,6 +279,8 @@ class TagRegistry:
 
     def sync_tag(self, tag: TagSnapshot) -> FastTagApplyResult:
         """Atomically record one exact OPC Tag without deactivating unrelated registry rows."""
+        if self.scope.enabled:
+            return self._apply_scoped((tag,))
         conn = self._connection_factory()
         try:
             cursor = conn.cursor()
@@ -293,5 +311,136 @@ class TagRegistry:
             if isinstance(exc, TagRegistryError):
                 raise
             raise TagRegistryError("Fast Sync registry transaction was rolled back.") from exc
+        finally:
+            conn.close()
+
+    def _apply_scoped(self, tags, run_id=None):
+        """Serialize writes per owner across processes; never trust copied TagIds."""
+        scoped_started = perf_counter()
+        trace_logger.info("SCOPED APPLY START line=%s tags=%s", self.scope.line_name, len(tags))
+        if not tags or len({tag.path.casefold() for tag in tags}) != len(tags):
+            raise TagRegistryError("An empty or duplicate scoped snapshot cannot be applied.")
+        if any(not self.scope.allows_tag(tag.path, tag.node_id) for tag in tags):
+            raise TagRegistryError("Snapshot contains an out-of-scope path or NodeId.")
+        full = run_id is not None
+        with trace_step("SCOPED SQL CONNECT"):
+            conn = self._connection_factory()
+        try:
+            cursor = conn.cursor()
+            with trace_step("APPLICATION LOCK"):
+                cursor.execute("""SET ANSI_NULLS ON; SET QUOTED_IDENTIFIER ON;
+                SET ANSI_PADDING ON; SET ANSI_WARNINGS ON; SET ARITHABORT ON;
+                SET CONCAT_NULL_YIELDS_NULL ON; SET NUMERIC_ROUNDABORT OFF;
+                IF @@TRANCOUNT=0 BEGIN TRANSACTION;
+                DECLARE @result int;
+                EXEC @result = sys.sp_getapplock @Resource=?, @LockMode='Exclusive',
+                    @LockOwner='Transaction', @LockTimeout=30000;
+                IF @result < 0 THROW 51000, 'Line registry lock unavailable', 1;""",
+                    'OpcTagManager:registry:' + self.scope.line_name)
+            if not full:
+                cursor.execute("INSERT INTO BrowserRun (StartTime) OUTPUT INSERTED.RunId VALUES (GETDATE())")
+                run_id = int(cursor.fetchone()[0])
+            with trace_step("SCOPED TAGMASTER LOAD"):
+                cursor.execute("SELECT TagId, Path, NodeId, DataType, IsActive FROM TagMaster WITH (UPDLOCK, HOLDLOCK) WHERE LineName = ?", self.scope.line_name)
+                rows = cursor.fetchall()
+            existing = {str(row[1]).casefold(): row for row in rows}
+            if len(existing) != len(rows):
+                raise TagRegistryError("Duplicate identities within this line require manual review.")
+            line = self.scope.line_name
+            with trace_step("SCOPED TAGLEVEL LOAD"):
+                cursor.execute("""SELECT l.TagId, l.LevelNo, l.LevelName FROM TagLevel l
+                    JOIN TagMaster t ON t.TagId=l.TagId AND t.LineName=l.LineName
+                    WHERE l.LineName=? AND t.LineName=? ORDER BY l.TagId, l.LevelNo""", line, line)
+                levels = {}
+                for level in cursor.fetchall():
+                    levels.setdefault(int(level[0]), []).append((level[1], level[2]))
+
+            def bulk(marker, sql, parameters):
+                with trace_step(marker, rows=len(parameters)):
+                    if hasattr(cursor, "fast_executemany"):
+                        cursor.fast_executemany = True
+                    for offset in range(0, len(parameters), 1000):
+                        cursor.executemany(sql, parameters[offset:offset + 1000])
+                        trace_logger.info("%s progress=%s/%s", marker,
+                                          min(offset + 1000, len(parameters)), len(parameters))
+
+            counts = dict(added=0, changed=0, unchanged=0, reactivated=0)
+            updates, inserts, seen = [], [], []
+            identities = {key: int(row[0]) for key, row in existing.items()}
+            states = {}
+            for tag in tags:
+                key = tag.path.casefold()
+                old = existing.get(key)
+                if old is None:
+                    state = 'added'
+                    inserts.append((tag.node_id, tag.path, tag.data_type, run_id, line))
+                else:
+                    state = ('reactivated' if not old[4] else
+                             'unchanged' if old[2] == tag.node_id and old[3] == tag.data_type else 'changed')
+                    if state == 'unchanged':
+                        seen.append((run_id, int(old[0]), line))
+                    else:
+                        updates.append((tag.node_id, tag.data_type, run_id, int(old[0]), line))
+                states[key] = state
+                counts[state] += 1
+            bulk("TAGMASTER UPDATE", """UPDATE TagMaster SET NodeId=?, DataType=?, IsActive=1,
+                UpdatedTime=GETDATE(), LastBrowseRunId=? WHERE TagId=? AND LineName=?""", updates)
+            bulk("TAGMASTER SEEN", """UPDATE TagMaster SET UpdatedTime=GETDATE(), LastBrowseRunId=?
+                WHERE TagId=? AND LineName=?""", seen)
+            bulk("TAGMASTER INSERT", """INSERT INTO TagMaster
+                (NodeId, Path, DataType, IsActive, CreatedTime, UpdatedTime, LastBrowseRunId, LineName)
+                VALUES (?, ?, ?, 1, GETDATE(), GETDATE(), ?, ?)""", inserts)
+            if inserts:
+                with trace_step("SCOPED INSERTED IDS LOAD"):
+                    cursor.execute("SELECT TagId, Path FROM TagMaster WHERE LineName=? AND LastBrowseRunId=?", line, run_id)
+                    resolved = {}
+                    for row in cursor.fetchall():
+                        key = str(row[1]).casefold()
+                        if key in resolved:
+                            raise TagRegistryError("Duplicate identities in inserted ID resolution.")
+                        resolved[key] = int(row[0])
+                    for tag in tags:
+                        key = tag.path.casefold()
+                        if key not in resolved or (key in identities and identities[key] != resolved[key]):
+                            raise TagRegistryError("Scoped bulk reconcile did not resolve stable identities.")
+                    identities.update(resolved)
+            rebuild_ids, replacement_levels = [], []
+            for tag in tags:
+                tag_id = identities[tag.path.casefold()]
+                expected = list(enumerate(tag.path.split('/')))
+                if levels.get(tag_id, []) != expected:
+                    rebuild_ids.append(tag_id)
+                    replacement_levels.extend((number, name, tag_id, line) for number, name in expected)
+            with trace_step("TAGLEVEL DELETE", tags=len(rebuild_ids)):
+                for offset in range(0, len(rebuild_ids), 1000):
+                    ids = rebuild_ids[offset:offset + 1000]
+                    placeholders = ','.join('?' for _ in ids)
+                    cursor.execute(f"""DELETE FROM TagLevel WHERE LineName=? AND TagId IN ({placeholders})
+                        AND EXISTS (SELECT 1 FROM TagMaster t WHERE t.TagId=TagLevel.TagId AND t.LineName=?)""",
+                        line, *ids, line)
+                    trace_logger.info("TAGLEVEL DELETE progress=%s/%s", min(offset + 1000, len(rebuild_ids)), len(rebuild_ids))
+            bulk("TAGLEVEL REBUILD", """INSERT INTO TagLevel (TagId, LevelNo, LevelName, LineName)
+                SELECT TagId, ?, ?, LineName FROM TagMaster WHERE TagId=? AND LineName=?""",
+                replacement_levels)
+            with trace_step("RECONCILIATION FINALIZE"):
+                deactivated = 0
+                if full:
+                    discovered_paths = {t.path.casefold() for t in tags}
+                    deactivated = sum(bool(row[4]) and str(row[1]).casefold() not in discovered_paths for row in rows)
+                    cursor.execute("""UPDATE TagMaster SET IsActive=0, UpdatedTime=GETDATE()
+                    WHERE LineName=? AND IsActive=1 AND (LastBrowseRunId<>? OR LastBrowseRunId IS NULL)""",
+                        self.scope.line_name, run_id)
+                cursor.execute("UPDATE BrowserRun SET EndTime=GETDATE(), TotalTags=? WHERE RunId=?", len(tags), run_id)
+            with trace_step("RECONCILIATION COMMIT"):
+                conn.commit()
+            trace_logger.info("SCOPED APPLY END elapsed=%.3fs", perf_counter() - scoped_started)
+            if not full:
+                return FastTagApplyResult(identities[tags[0].path.casefold()], states[tags[0].path.casefold()], run_id)
+            return RegistryApplyResult(deactivated=deactivated, **counts)
+        except Exception as exc:
+            conn.rollback()
+            if isinstance(exc, TagRegistryError):
+                raise
+            raise TagRegistryError("Line-scoped registry transaction was rolled back.") from exc
         finally:
             conn.close()
