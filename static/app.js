@@ -571,6 +571,7 @@ function showAlarmForm(alarm) {
     document.getElementById("alarm-form").classList.remove("hidden");
     document.getElementById("alarm-id").value = alarm?.alarm_id || "";
     document.getElementById("alarm-enable").checked = alarm?.enable_alarm ?? true;
+    document.getElementById("alarm-exclude-pareto").checked = alarm?.exclude_pareto ?? false;
     const modeSelect = document.getElementById("alarm-mode");
     modeSelect.querySelectorAll("option[data-unsupported='true']").forEach((option) => option.remove());
     if (alarm && alarm.runtime_supported === false) {
@@ -683,6 +684,7 @@ document.getElementById("alarm-form").addEventListener("submit", async (event) =
         priority: Number(document.getElementById("alarm-priority").value || "1"),
         repeat: Number(document.getElementById("alarm-repeat").value || "3"),
         enable_alarm: document.getElementById("alarm-enable").checked,
+        exclude_pareto: document.getElementById("alarm-exclude-pareto").checked,
     };
     const alarmId = document.getElementById("alarm-id").value;
     if (!alarmId && !selectedRuntimeTag.tagId) {

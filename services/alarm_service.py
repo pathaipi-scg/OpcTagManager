@@ -23,13 +23,14 @@ class AlarmValues:
     priority: int = 1
     repeat: int = 3
     enable_alarm: bool = True
+    exclude_pareto: bool = False
 
 
 class AlarmService:
     SELECT_COLUMNS = """a.AlarmId, a.TagId, a.TagPath, a.AlarmMode,
         a.ThresholdHigh, a.ThresholdLow, a.Mp3File, a.Priority,
         a.RepeatEnable, a.EnableAlarm, a.CreatedTime, a.UpdatedTime, a.[Repeat],
-        t.Path, t.NodeId, t.IsActive"""
+        t.Path, t.NodeId, t.IsActive, a.ExcludePareto"""
 
     def __init__(
         self,
@@ -54,16 +55,17 @@ class AlarmService:
         names = [
             "AlarmId", "TagId", "TagPath", "AlarmMode", "ThresholdHigh", "ThresholdLow",
             "Mp3File", "Priority", "RepeatEnable", "EnableAlarm", "CreatedTime", "UpdatedTime",
-            "Repeat", "CanonicalPath", "NodeId", "TagIsActive",
+            "Repeat", "CanonicalPath", "NodeId", "TagIsActive", "ExcludePareto",
         ]
         values = [cls._value(row, index, name) for index, name in enumerate(names)]
         result = dict(zip(
             ["alarm_id", "tag_id", "tag_path", "alarm_mode", "threshold_high", "threshold_low",
              "mp3_file", "priority", "repeat_enable", "enable_alarm", "created_time", "updated_time",
-             "repeat", "canonical_path", "node_id", "tag_is_active"],
+             "repeat", "canonical_path", "node_id", "tag_is_active", "exclude_pareto"],
             values,
         ))
         result["repeat_enable"] = bool(result["repeat_enable"])
+        result["exclude_pareto"] = bool(result["exclude_pareto"])
         result["enable_alarm"] = bool(result["enable_alarm"])
         result["tag_is_active"] = bool(result["tag_is_active"])
         result["tag_missing"] = result["canonical_path"] is None
@@ -170,7 +172,7 @@ class AlarmService:
             self.audio_repository.resolve(filename)
         return AlarmValues(
             mode, values.threshold_high, values.threshold_low, filename,
-            values.priority, values.repeat, bool(values.enable_alarm),
+            values.priority, values.repeat, bool(values.enable_alarm), bool(values.exclude_pareto),
         )
 
     def _require_write(self):
@@ -214,11 +216,12 @@ class AlarmService:
             cursor.execute(
                 f"""INSERT INTO Alarm_Lists
                    (TagId, TagPath, AlarmMode, ThresholdHigh, ThresholdLow, Mp3File,
-                    Priority, [Repeat], RepeatEnable, EnableAlarm, CreatedTime, UpdatedTime{", LineName" if self.scope.enabled else ""})
+                    Priority, [Repeat], RepeatEnable, EnableAlarm, ExcludePareto, CreatedTime, UpdatedTime{", LineName" if self.scope.enabled else ""})
                    OUTPUT INSERTED.AlarmId
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, GETDATE(), GETDATE(){", ?" if self.scope.enabled else ""})""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, GETDATE(), GETDATE(){", ?" if self.scope.enabled else ""})""",
                 canonical_tag_id, path, values.alarm_mode, values.threshold_high, values.threshold_low,
                 values.mp3_file, values.priority, values.repeat, 1 if values.enable_alarm else 0,
+                int(values.exclude_pareto),
                 *((self.scope.line_name,) if self.scope.enabled else ()),
             )
             row = cursor.fetchone()
@@ -259,9 +262,9 @@ class AlarmService:
             cursor.execute(
                 f"""UPDATE Alarm_Lists SET TagPath = ?, AlarmMode = ?, ThresholdHigh = ?,
                    ThresholdLow = ?, Mp3File = ?, Priority = ?, [Repeat] = ?,
-                   EnableAlarm = ?, UpdatedTime = GETDATE() WHERE AlarmId = ?{" AND LineName = ?" if self.scope.enabled else ""}""",
+                   EnableAlarm = ?, ExcludePareto = ?, UpdatedTime = GETDATE() WHERE AlarmId = ?{" AND LineName = ?" if self.scope.enabled else ""}""",
                 path, values.alarm_mode, values.threshold_high, values.threshold_low, values.mp3_file,
-                values.priority, values.repeat, 1 if values.enable_alarm else 0, alarm_id,
+                values.priority, values.repeat, 1 if values.enable_alarm else 0, int(values.exclude_pareto), alarm_id,
                 *((self.scope.line_name,) if self.scope.enabled else ()),
             )
             connection.commit()

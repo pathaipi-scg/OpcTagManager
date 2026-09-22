@@ -61,6 +61,7 @@ CREATE TABLE [dbo].[Alarm_Lists](
 	[Priority] [int] NOT NULL,
 	[RepeatEnable] [bit] NOT NULL,
 	[EnableAlarm] [bit] NOT NULL,
+	[ExcludePareto] [bit] NOT NULL CONSTRAINT DF_Alarm_Lists_ExcludePareto DEFAULT (0),
 	[CreatedTime] [datetime] NOT NULL,
 	[UpdatedTime] [datetime] NOT NULL,
 	[Repeat] [int] NULL,

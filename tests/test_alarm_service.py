@@ -75,20 +75,20 @@ class Cursor:
         elif normalized.startswith("INSERT INTO ALARM_LISTS"):
             alarm_id = self.connection.next_alarm_id
             self.connection.next_alarm_id += 1
-            tag_id, path, mode, high, low, mp3, priority, repeat, enabled = params
+            tag_id, path, mode, high, low, mp3, priority, repeat, enabled, excluded = params
             alarms[alarm_id] = {
                 "AlarmId": alarm_id, "TagId": tag_id, "TagPath": path, "AlarmMode": mode,
                 "ThresholdHigh": high, "ThresholdLow": low, "Mp3File": mp3, "Priority": priority,
                 "RepeatEnable": True, "EnableAlarm": bool(enabled), "CreatedTime": "created",
-                "UpdatedTime": "updated", "Repeat": repeat,
+                "UpdatedTime": "updated", "Repeat": repeat, "ExcludePareto": bool(excluded),
             }
             self.rows = [(alarm_id,)]
         elif normalized.startswith("UPDATE ALARM_LISTS SET TAGPATH"):
-            path, mode, high, low, mp3, priority, repeat, enabled, alarm_id = params
+            path, mode, high, low, mp3, priority, repeat, enabled, excluded, alarm_id = params
             alarms[alarm_id].update(
                 TagPath=path, AlarmMode=mode, ThresholdHigh=high, ThresholdLow=low,
                 Mp3File=mp3, Priority=priority, Repeat=repeat, EnableAlarm=bool(enabled),
-                UpdatedTime="updated-again",
+                UpdatedTime="updated-again", ExcludePareto=bool(excluded),
             )
         elif normalized.startswith("DELETE FROM ALARM_LISTS"):
             alarms.pop(params[0])
@@ -103,6 +103,7 @@ class Cursor:
             alarm["ThresholdHigh"], alarm["ThresholdLow"], alarm["Mp3File"], alarm["Priority"],
             alarm["RepeatEnable"], alarm["EnableAlarm"], alarm["CreatedTime"], alarm["UpdatedTime"],
             alarm["Repeat"], tag["Path"], tag["NodeId"], tag["IsActive"],
+            alarm.get("ExcludePareto", False),
         )
 
     def fetchone(self):

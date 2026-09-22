@@ -228,6 +228,7 @@ class AlarmConfigurationRequest(BaseModel):
     priority: int = 1
     repeat: int = 3
     enable_alarm: bool = True
+    exclude_pareto: bool = False
 
 
 class CreateAlarmRequest(AlarmConfigurationRequest):
@@ -597,6 +598,7 @@ def _alarm_values(payload: AlarmConfigurationRequest) -> AlarmValues:
         priority=payload.priority,
         repeat=payload.repeat,
         enable_alarm=payload.enable_alarm,
+        exclude_pareto=payload.exclude_pareto,
     )
 
 

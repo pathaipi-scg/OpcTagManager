@@ -41,7 +41,7 @@ class Database:
             CREATE TABLE TagLevel(TagId, LevelNo, LevelName, LineName);
             CREATE TABLE Alarm_Lists(AlarmId INTEGER PRIMARY KEY AUTOINCREMENT, TagId, TagPath, AlarmMode,
                 ThresholdHigh, ThresholdLow, Mp3File, Priority, RepeatEnable, EnableAlarm,
-                CreatedTime, UpdatedTime, [Repeat], LineName);
+                CreatedTime, UpdatedTime, [Repeat], LineName, ExcludePareto INTEGER NOT NULL DEFAULT 0);
         ''')
         self.queries = []
 

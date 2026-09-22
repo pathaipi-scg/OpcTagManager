@@ -13,6 +13,13 @@ This directory contains the canonical, secret-free SQL package for deploying the
 
 ## Database creation behavior
 
+Before deploying the Exclude from Pareto application update on an existing database,
+run `migrate_exclude_pareto.sql` in that database (after the LineName migration).
+It is idempotent, preserves history, and defaults every existing alarm to included.
+Fresh installations receive the same default through `bootstrap.sql`.
+AlarmHelp's SQL reader needs SELECT on dbo.Alarm_Lists as well as dbo.Alarm_History.
+Operators opt out individual alarms using the Exclude from Pareto checkbox.
+
 An authorized administrator creates `OpcTagMgr` first using normal site defaults, then runs `bootstrap.sql`. This schema-only model avoids machine-specific database file paths and cannot alter unrelated databases. The bootstrap fails before DDL if the database is missing or if any expected application table already exists. Run `verify_schema.sql` against an existing or partially provisioned database; never repair drift blindly.
 
 The exact application tables are:
