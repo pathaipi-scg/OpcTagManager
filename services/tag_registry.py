@@ -337,6 +337,21 @@ class TagRegistry:
                     @LockOwner='Transaction', @LockTimeout=30000;
                 IF @result < 0 THROW 51000, 'Line registry lock unavailable', 1;""",
                     'OpcTagManager:registry:' + self.scope.line_name)
+            # Never turn an unassigned legacy identity into a second TagId.
+            # Hold the read locks through commit so ownership cannot change
+            # between this check and the scoped writes. No ownership is inferred.
+            cursor.execute("""SELECT TagId, Path, NodeId FROM TagMaster WITH (UPDLOCK, HOLDLOCK)
+                WHERE LineName IS NULL""")
+            incoming_paths = {tag.path.casefold() for tag in tags}
+            incoming_nodes = {tag.node_id.casefold() for tag in tags}
+            for legacy_id, legacy_path, legacy_node in cursor.fetchall():
+                if ((legacy_path is not None and str(legacy_path).casefold() in incoming_paths)
+                        or (legacy_node is not None and str(legacy_node).casefold() in incoming_nodes)):
+                    raise TagRegistryError(
+                        f"NULL-owned legacy TagMaster identity conflict: TagId={legacy_id}, "
+                        f"Path={legacy_path!r}, requested line={self.scope.line_name}. "
+                        "No tags were changed. Explicit ownership review is required; "
+                        "Browse/Fast Sync cannot claim this row or replace its TagId.")
             if not full:
                 cursor.execute("INSERT INTO BrowserRun (StartTime) OUTPUT INSERTED.RunId VALUES (GETDATE())")
                 run_id = int(cursor.fetchone()[0])
