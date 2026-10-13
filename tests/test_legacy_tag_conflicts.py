@@ -4,6 +4,7 @@ from dataclasses import replace
 import pytest
 
 from services.tag_registry import TagRegistry, TagRegistryError
+from services.line_scope import LineScope
 from test_line_isolation import Database, scope, tag
 
 
@@ -16,9 +17,10 @@ def contents(db):
 @pytest.mark.parametrize('full', [False, True])
 @pytest.mark.parametrize('match', ['path', 'node', 'both'])
 @pytest.mark.parametrize('active', [0, 1])
-def test_null_owned_conflict_preserves_all_references(line, full, match, active):
+@pytest.mark.parametrize('explicit', [False, True])
+def test_null_owned_conflict_preserves_all_references(line, full, match, active, explicit):
     db = Database()
-    registry = TagRegistry(db.connection, scope(line))
+    registry = TagRegistry(db.connection, scope(line) if explicit else LineScope(line))
     incoming = tag(line)
     # Deliberately differ in case; either stable identity must block a duplicate.
     path = incoming.path.lower() if match != 'node' else f'{line}/Other/Legacy'

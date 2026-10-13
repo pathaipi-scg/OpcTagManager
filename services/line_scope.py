@@ -24,8 +24,8 @@ class LineScope:
     channel_patterns: tuple[str, ...] = ()
 
     def __post_init__(self):
-        if bool(self.line_name) != bool(self.channel_patterns):
-            raise ValueError("LINE_NAME and KEPWARE_CHANNEL_PATTERNS must be configured together")
+        if self.channel_patterns and not self.line_name:
+            raise ValueError("KEPWARE_CHANNEL_PATTERNS requires LINE_NAME")
         if self.line_name and not re.fullmatch(r"[A-Za-z0-9_-]{1,50}", self.line_name):
             raise ValueError("LINE_NAME must contain 1-50 letters, digits, underscores or hyphens")
         if any(not p or any(c in p for c in '/.\\[]?') for p in self.channel_patterns):
@@ -40,7 +40,15 @@ class LineScope:
             return True
         if channel.casefold() in {'server', 'system'} or channel.startswith('_'):
             return False
-        return any(fnmatchcase(channel.casefold(), pattern.casefold()) for pattern in self.channel_patterns)
+        if self.channel_patterns:
+            return any(fnmatchcase(channel.casefold(), pattern.casefold()) for pattern in self.channel_patterns)
+        prefix = self.line_name.casefold()
+        candidate = channel.casefold()
+        if not candidate.startswith(prefix):
+            return False
+        suffix = candidate[len(prefix):]
+        # SB11S7 is valid, but SB110 belongs to a different numeric line.
+        return not (prefix[-1].isdigit() and suffix and suffix[0].isdigit())
 
     def allows_path(self, path: str) -> bool:
         return self.allows_channel(path.split('/', 1)[0])

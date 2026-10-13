@@ -192,8 +192,7 @@ def test_historian_registry_filter_and_exact_influx_routing(line, other):
 def test_legacy_scope_and_partial_configuration():
     assert LineScope().allows_channel('Anything')
     assert LineScope().allows_tag('Anything', 'i=1')
-    with pytest.raises(ValueError):
-        LineScope('SB11')
+    assert LineScope('SB11').allows_channel('SB11S7')
     with pytest.raises(ValueError):
         LineScope('', ('SB11',))
 

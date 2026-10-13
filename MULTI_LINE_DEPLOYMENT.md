@@ -10,11 +10,15 @@ LINE_NAME takes precedence; blank/unset LINE_NAME falls back to deprecated LINE_
 only at the configuration boundary. Runtime SQL never falls back to LineId columns.
 Old scoped configurations still need the SQL migration even when using the alias.
 
-The normalized name and `KEPWARE_CHANNEL_PATTERNS` must either both be configured
-or both be absent/blank. Partial configuration fails before serving requests. One immutable
+With a normalized line name and absent/blank `KEPWARE_CHANNEL_PATTERNS`, channels
+match that name as a case-insensitive prefix. If the line ends in a digit, an
+immediately following digit is rejected: SB11 matches SB11S7 and SB11_1, but not
+SB110. Alphabetic overlaps such as NR/NRA still require deliberate naming or
+explicit patterns. Patterns without a line name fail before serving requests. One immutable
 LineScope is injected into discovery, registry, alarm service and Kepware API;
 the worker inherits the selected profile and constructs the same scope.
 
+Explicit patterns override prefix matching and retain their existing behavior.
 Patterns match whole channel names, case-insensitively. Exact names and `*` are
 supported; no substring matching, `?`, character classes or path separators.
 Thus `SB11_*` matches `SB11_PLC`, not `SB11S7` or `SB12`. The explicit `SB11S7`
