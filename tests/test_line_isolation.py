@@ -178,13 +178,13 @@ def test_historian_registry_filter_and_exact_influx_routing(line, other):
     db.db.execute('UPDATE TagMaster SET NodeId=? WHERE LineName=?', (tag(other).node_id,line))
     assert _load_active_tags_from_connection(db, scope(line)) == []
     settings = HistorianSettings('offline','AUTO','offline','test','test','test',True,
-                                 'offline',8086,'opc_'+line,'','',scope=scope(line))
+                                 'offline',8086,'opc_','','',scope=scope(line))
     client = Mock()
     client.get_list_database.return_value = [{'name': 'opc_'+line}]
     writer = InfluxWriter(settings, client_factory=Mock(return_value=client), reporter=Mock())
-    assert not writer.write(tag(other).path, 1)
+    assert not writer.write(tag(other).path, 1, other)
     writer.client_factory.assert_not_called()
-    assert writer.write(tag(line).path, 2)
+    assert writer.write(tag(line).path, 2, line)
     client.switch_database.assert_called_once_with('opc_'+line)
     client.write_points.assert_called_once_with([{'measurement':tag(line).path, 'fields':{'value':2}}])
 
@@ -207,11 +207,9 @@ def test_normalize_one_canonical_identity(environment, expected):
 
 
 @pytest.mark.parametrize('line', ['SB11','SB12','LP2','CB'])
-def test_influx_default_and_explicit_override(line):
-    assert influx_database(None,line) == 'opc_'+line
-    assert influx_database('',line) == 'opc_'+line
-    assert influx_database('site_historian',line) == 'site_historian'
-    assert influx_database('opc_','') == 'opc_'
+def test_influx_database_prefix_is_combined_with_effective_line(line):
+    assert influx_database('opc_',line) == 'opc_'+line
+    assert influx_database('site_historian_',line) == 'site_historian_'+line
     with pytest.raises(RuntimeError):
         influx_database(None,'')
 
@@ -222,14 +220,28 @@ def test_actual_configuration_normalizes_and_derives_defaults(key,line):
     environment = {k:v for k,v in dotenv_values(root/'config/.env.example').items() if v is not None}
     environment.pop('INFLUX_DB')
     environment.pop('PRODUCTION_LINE')
-    environment.update({key:line,'KEPWARE_CHANNEL_PATTERNS':line})
+    environment.update({key:line,'KEPWARE_CHANNEL_PATTERNS':line,'INFLUX_DB':'opc_'})
     with patch.dict(os.environ,environment,clear=True), patch('dotenv.load_dotenv'):
         config = runpy.run_path(str(root/'config/config.py'))
     assert config['LINE_NAME'] == line
     assert config['LINE_SCOPE'].line_name == line
-    assert config['INFLUX_DB'] == 'opc_'+line
+    assert config['INFLUX_DB'] == 'opc_'
     assert config['PRODUCTION_LINE'] == line
     assert 'LINE_ID' not in config
+
+
+def test_line_name_scope_does_not_require_channel_patterns():
+    root = Path(__file__).resolve().parents[1]
+    environment = {k:v for k,v in dotenv_values(root/'config/.env.example').items() if v is not None}
+    environment.pop('PRODUCTION_LINE')
+    environment.pop('KEPWARE_CHANNEL_PATTERNS', None)
+    environment.update(LINE_NAME='NR', INFLUX_DB='opc_')
+    with patch.dict(os.environ,environment,clear=True), patch('dotenv.load_dotenv'):
+        config = runpy.run_path(str(root/'config/config.py'))
+
+    assert config['LINE_SCOPE'].line_name == 'NR'
+    assert config['LINE_SCOPE'].channel_patterns == ()
+    assert config['LINE_SCOPE'].allows_path('NR_MOIST/MOIST/LEVEL')
 
 
 def test_overlapping_channel_profiles_still_get_distinct_shared_ids():

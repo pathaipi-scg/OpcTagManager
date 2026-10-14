@@ -659,6 +659,8 @@ class OpcTagManagerAppTests(unittest.TestCase):
             "development_historian_runtime": "disabled",
             "production_historian_owner": "legacy_opc_service",
             "legacy_historian_process_state": "unknown",
+            "last_influx_database": "opc_NR",
+            "last_influx_line_name": "NR",
         }
         with patch.object(OpcTagManager.runtime_supervisor, "status", return_value=supervisor_status):
             status, body = self.request("GET", "/api/runtime/status")
@@ -669,12 +671,14 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertEqual(payload["development_historian_runtime"], "disabled")
         self.assertEqual(payload["production_historian_owner"], "legacy_opc_service")
         self.assertEqual(payload["legacy_historian_process_state"], "unknown")
+        self.assertEqual(payload["influx_database"], "opc_NR")
+        self.assertEqual(payload["influx_database_prefix"], "opc_")
 
     def test_runtime_activity_returns_bounded_supervisor_diagnostics(self):
         runtime = {"worker_state": "running", "opc_state": "connected"}
         activity = {
             "subscription": [{"event": "subscriptions_ready"}],
-            "influx": [{"event": "influx_write", "success": True}],
+            "influx": [{"event": "influx_write", "success": True, "database": "opc_NR"}],
             "alarm": [{"event": "alarm_activity", "state": "ACTIVE"}],
             "summary": {"active_alarms": 1},
         }
@@ -686,6 +690,7 @@ class OpcTagManagerAppTests(unittest.TestCase):
         self.assertTrue(payload["success"])
         self.assertEqual(payload["runtime"], runtime)
         self.assertEqual(payload["summary"]["active_alarms"], 1)
+        self.assertEqual(payload["influx"][0]["database"], "opc_NR")
 
     def test_cutover_preflight_endpoint_is_read_only_and_never_claims_live_ready(self):
         expected = {

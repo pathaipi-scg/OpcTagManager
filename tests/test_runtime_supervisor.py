@@ -189,6 +189,21 @@ def test_rebuild_pending_clears_only_for_current_generation_ack():
         supervisor.shutdown()
 
 
+def test_influx_status_retains_actual_per_write_database_and_line():
+    supervisor = HistorianSupervisor(False)
+    supervisor._apply_event({
+        "event": "influx_write",
+        "success": True,
+        "database": "opc_NR",
+        "line_name": "NR",
+        "time": "2026-10-14T00:00:00Z",
+    })
+
+    status = supervisor.status()
+    assert status["last_influx_database"] == "opc_NR"
+    assert status["last_influx_line_name"] == "NR"
+
+
 def test_partial_rebuild_ack_does_not_clear_pending_generation():
     factory = ProcessFactory()
     supervisor = HistorianSupervisor(True, factory, restart_delay=0.01)

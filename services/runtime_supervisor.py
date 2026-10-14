@@ -64,6 +64,8 @@ class HistorianSupervisor:
             "subscription_complete": False,
             "opc_state": "unknown",
             "influx_state": "unknown",
+            "last_influx_database": None,
+            "last_influx_line_name": None,
             "last_write_time": None,
             "alarm_activity_state": "unknown",
             "configured_alarm_tags": 0,
@@ -188,6 +190,8 @@ class HistorianSupervisor:
             self._influx_activity.append(deepcopy(message))
             if message.get("success"):
                 self._status["influx_state"] = "last_write_ok"
+                self._status["last_influx_database"] = message.get("database")
+                self._status["last_influx_line_name"] = message.get("line_name")
                 self._status["last_write_time"] = message.get("time")
             else:
                 self._status["influx_state"] = "error"

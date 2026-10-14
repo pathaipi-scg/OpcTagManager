@@ -77,12 +77,16 @@ and applies only explicit `(AlarmId, OldTagId, NewTagId)` confirmations. It rech
 confirmations under locks. No automatic startup remap, history rewrite or deletion
 occurs. Ambiguous dotted identities require manual resolution.
 
-Historian SQL selects only active owned rows, then validates channel and NodeId
-again before subscriptions. The Influx writer also rejects out-of-scope paths.
-In scoped mode INFLUX_DB is the exact database (`opc_SB11` / `opc_SB12`), with no
-additional suffix. Blank/unset INFLUX_DB derives `opc_<LINE_NAME>`; an explicit
-INFLUX_DB overrides that default. Legacy prefix/suffix routing is unchanged.
-Measurement=path and fields={value: normalized value} remain
+Historian SQL selects active rows including their authoritative `TagMaster.LineName`,
+then validates channel and NodeId again before subscriptions. Each subscription
+retains that owner; Influx routing uses the configured `INFLUX_DB` prefix plus
+that row's normalized owner (for example `opc_` + `NR` -> `opc_NR`). Missing or
+invalid ownership and duplicate NodeIds fail closed; there is no path-derived
+or bare-prefix fallback. This also permits an unscoped multi-line historian to
+route each tag independently. A configured `LINE_NAME` continues to scope SQL
+and channels by its default channel-prefix behavior; `KEPWARE_CHANNEL_PATTERNS`
+is not required. The OPC Runtime's Influx Write Activity reports the destination
+database for each write. Measurement=path and fields={value: normalized value} remain
 unchanged. Alarm diagnostics require owned mappings with matching canonical paths.
 
 AlarmHelp binds LINE_NAME in initial/paginated/detail history and every Pareto window.

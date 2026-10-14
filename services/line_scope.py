@@ -10,12 +10,19 @@ def normalized_line_name(environment) -> str:
             (environment.get('LINE_ID') or '').strip()).upper()
 
 
-def influx_database(value: str | None, line_name: str) -> str:
-    if line_name and not (value or '').strip():
-        return 'opc_' + line_name
-    if value is None:
-        raise RuntimeError('Missing configuration entry: INFLUX_DB')
-    return value
+def normalized_line_owner(line_name: str | None) -> str:
+    if not isinstance(line_name, str) or not line_name.strip():
+        raise RuntimeError('Tag LineName is missing; refusing InfluxDB routing')
+    normalized_line = line_name.strip().upper()
+    if not re.fullmatch(r'[A-Z0-9_-]{1,50}', normalized_line):
+        raise RuntimeError('Tag LineName is invalid; refusing InfluxDB routing')
+    return normalized_line
+
+
+def influx_database(prefix: str, line_name: str | None) -> str:
+    if not isinstance(prefix, str) or not prefix.strip():
+        raise RuntimeError('Missing configuration entry: INFLUX_DB prefix')
+    return f'{prefix.strip()}{normalized_line_owner(line_name)}'
 
 
 @dataclass(frozen=True)

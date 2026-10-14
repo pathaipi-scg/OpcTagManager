@@ -4,17 +4,18 @@ import queue
 
 from asyncua import ua
 from asyncua.ua import NodeClass
+import pytest
 
+from services.line_scope import LineScope, influx_database
 from workers.historian_worker import (
     ACTIVE_TAG_QUERY,
     ALARM_DIAGNOSTIC_QUERY,
     AlarmActivityDiagnostics,
     HistorianSettings,
     HistorianWorker,
+    HistorianHandler,
     InfluxWriter,
     StatusReporter,
-    get_database_name,
-    get_line_name,
     load_active_tags,
     load_alarm_diagnostic_mappings,
     normalize_value,
@@ -48,8 +49,9 @@ class FakeSqlCursor:
         self.rows = rows
         self.query = None
 
-    def execute(self, query):
+    def execute(self, query, *parameters):
         self.query = query
+        self.parameters = parameters
 
     def fetchall(self):
         return self.rows
@@ -177,16 +179,116 @@ class ScriptedCommands:
 
 
 def test_active_tag_query_and_load_contract():
-    connection = FakeSqlConnection([(1, "LP2_MODBUS/Device/Tag", "node-1", "Bool")])
+    connection = FakeSqlConnection([(1, "LP2_MODBUS/Device/Tag", "node-1", "Bool", "LP2")])
     tags = load_active_tags(lambda: connection)
-    assert "SELECT TagId, Path, NodeId, DataType" in ACTIVE_TAG_QUERY
+    assert "SELECT TagId, Path, NodeId, DataType, LineName" in ACTIVE_TAG_QUERY
     assert "WHERE IsActive = 1" in ACTIVE_TAG_QUERY
     assert "AND Path NOT LIKE 'Server%'" in ACTIVE_TAG_QUERY
     assert "Alarm_Lists" not in ACTIVE_TAG_QUERY
     assert "EnableAlarm" not in ACTIVE_TAG_QUERY
     assert connection.cursor_value.query == ACTIVE_TAG_QUERY
-    assert tags == [{"TagId": 1, "Path": "LP2_MODBUS/Device/Tag", "NodeId": "node-1", "DataType": "Bool"}]
+    assert tags == [{
+        "TagId": 1, "Path": "LP2_MODBUS/Device/Tag", "NodeId": "node-1",
+        "DataType": "Bool", "LineName": "LP2",
+    }]
     assert connection.closed
+
+
+def test_scoped_active_tag_query_keeps_line_name_only_scope():
+    connection = FakeSqlConnection([
+        (1, "NR_MOIST/MOIST/LEVEL", "ns=2;s=NR_MOIST.MOIST.LEVEL", "Float", "NR")
+    ])
+    tags = load_active_tags(lambda: connection, LineScope("NR"))
+
+    assert len(tags) == 1 and tags[0]["LineName"] == "NR"
+    assert connection.cursor_value.query == ACTIVE_TAG_QUERY + " AND LineName = ?"
+    assert connection.cursor_value.parameters == ("NR",)
+
+
+@pytest.mark.parametrize(
+    "line,path,database",
+    [
+        ("NR", "NR_MOIST/MOIST/LEVEL", "opc_NR"),
+        ("SB11", "SB11S7/Device/Tag", "opc_SB11"),
+        ("SB12", "SB12_1/Device/Tag", "opc_SB12"),
+    ],
+)
+def test_each_effective_tag_line_routes_to_its_prefixed_database(line, path, database):
+    clients = []
+    reporter = Reporter()
+
+    def factory(**kwargs):
+        client = FakeInfluxClient(**kwargs)
+        clients.append(client)
+        return client
+
+    writer = InfluxWriter(settings(influx_db="opc_"), factory, reporter)
+    assert writer.write(path, 2.5, line)
+    assert clients[0].created == [database]
+    assert clients[0].switched == [database]
+    event = next(values for name, values in reporter.events if name == "influx_write")
+    assert event["database"] == database
+    assert event["line_name"] == line
+    assert clients[0].points == [{"measurement": path, "fields": {"value": 2.5}}]
+
+
+def test_unresolved_or_invalid_line_fails_closed_without_creating_a_database():
+    clients = []
+    reporter = Reporter()
+
+    def factory(**kwargs):
+        client = FakeInfluxClient(**kwargs)
+        clients.append(client)
+        return client
+
+    writer = InfluxWriter(settings(influx_db="opc_"), factory, reporter)
+    for line in (None, "", "NR/OTHER"):
+        assert not writer.write("NR_MOIST/MOIST/LEVEL", 1, line)
+
+    assert clients == []
+    blocked = [values for name, values in reporter.events if name == "influx_write"]
+    assert len(blocked) == 3
+    assert all(item["success"] is False and item["database"] is None for item in blocked)
+    with pytest.raises(RuntimeError, match="LineName"):
+        writer.database_for("NR_MOIST/MOIST/LEVEL", None)
+
+
+def test_one_unscoped_worker_routes_multi_line_callbacks_by_registry_owner():
+    rows = [
+        (1, "NR_MOIST/MOIST/LEVEL", "node-nr", "Float", "NR"),
+        (2, "SB11S7/Device/Tag", "node-sb11", "Float", "SB11"),
+        (3, "SB12_1/Device/Tag", "node-sb12", "Bool", "SB12"),
+    ]
+    tags = load_active_tags(lambda: FakeSqlConnection(rows))
+    clients = []
+    reporter = Reporter()
+
+    def factory(**kwargs):
+        client = FakeInfluxClient(**kwargs)
+        clients.append(client)
+        return client
+
+    writer = InfluxWriter(settings(influx_db="opc_"), factory, reporter)
+    handler = HistorianHandler({tag["NodeId"]: tag for tag in tags}, writer, reporter)
+    for tag in tags:
+        handler.datachange_notification(FakeNode(tag["NodeId"]), 1, None)
+
+    assert [client.switched[0] for client in clients] == ["opc_NR", "opc_SB11", "opc_SB12"]
+    write_events = [values for name, values in reporter.events if name == "influx_write"]
+    assert [event["database"] for event in write_events] == ["opc_NR", "opc_SB11", "opc_SB12"]
+
+
+def test_active_tag_load_rejects_missing_owner_and_ambiguous_node_id():
+    missing_owner = FakeSqlConnection([(1, "NR_MOIST/Tag", "node", "Float", None)])
+    with pytest.raises(RuntimeError, match="LineName"):
+        load_active_tags(lambda: missing_owner)
+
+    duplicate_nodes = FakeSqlConnection([
+        (1, "NR_MOIST/TagA", "same-node", "Float", "NR"),
+        (2, "NR_MOIST/TagB", "same-node", "Float", "NR"),
+    ])
+    with pytest.raises(RuntimeError, match="Duplicate OPC NodeId"):
+        load_active_tags(lambda: duplicate_nodes)
 
 
 def test_influx_connection_failure_uses_cooldown_without_blocking_every_callback():
@@ -201,8 +303,8 @@ def test_influx_connection_failure_uses_cooldown_without_blocking_every_callback
 
     reporter = Reporter()
     writer = InfluxWriter(settings(), UnavailableInflux, reporter)
-    assert writer.write("LP2/Device/Tag", 1) is False
-    assert writer.write("LP2/Device/Tag", 2) is False
+    assert writer.write("LP2/Device/Tag", 1, "LP2") is False
+    assert writer.write("LP2/Device/Tag", 2, "LP2") is False
     assert len(calls) == 1
     assert calls[0]["timeout"] == 1
     failures = [values for event, values in reporter.events if event == "influx_write"]
@@ -242,12 +344,12 @@ def test_alarm_activity_is_baselined_then_reports_trigger_and_clear_deterministi
     assert [item["active_alarm_count"] for item in activity] == [0, 1, 0]
 
 
-def test_exact_line_and_database_derivation_parity():
-    assert get_line_name("SB11_1/Device/Tag") == "SB11"
-    assert get_line_name("SB11S7/Device/Tag") == "SB11S7"
-    assert get_line_name("LP2_MODBUS/Device/Tag") == "LP2"
-    assert get_line_name("SCGLS_LP/Device/Tag") == "SCGLS"
-    assert get_database_name("history_", "LP2_MODBUS/Device/Tag") == "history_LP2"
+def test_database_name_uses_prefix_and_effective_registry_line():
+    assert influx_database("opc_", "NR") == "opc_NR"
+    assert influx_database("opc_", "SB11") == "opc_SB11"
+    assert influx_database("opc_", "SB12") == "opc_SB12"
+    with pytest.raises(RuntimeError, match="LineName"):
+        influx_database("opc_", None)
 
 
 def test_value_normalization_exact_parity():
@@ -271,8 +373,8 @@ def test_influx_point_database_create_and_client_cache_contract():
     reporter = Reporter()
     writer = InfluxWriter(settings(), factory, reporter)
     path = "LP2_MODBUS/Device/Tag"
-    assert writer.write(path, True)
-    assert writer.write("LP2_OTHER/Device/Second", 2.5)
+    assert writer.write(path, True, "LP2")
+    assert writer.write("LP2_OTHER/Device/Second", 2.5, "LP2")
     assert len(clients) == 1
     assert clients[0].created == ["history_LP2"]
     assert clients[0].switched == ["history_LP2"]
@@ -281,16 +383,16 @@ def test_influx_point_database_create_and_client_cache_contract():
         {"measurement": "LP2_OTHER/Device/Second", "fields": {"value": 2.5}},
     ]
     assert all(set(point) == {"measurement", "fields"} for point in clients[0].points)
-    assert writer.write("SB11S7/Device/Text", "ok")
+    assert writer.write("SB11S7/Device/Text", "ok", "SB11")
     assert len(clients) == 2
-    assert not writer.write(path, None)
-    assert not writer.write(path, object())
+    assert not writer.write(path, None, "LP2")
+    assert not writer.write(path, object(), "LP2")
 
 
 def test_worker_loads_maps_subscribes_and_individual_failure_is_nonfatal():
     connection = FakeSqlConnection([
-        (1, "Line/A", "node-a", "Bool"),
-        (2, "Line/B", "node-b", "Float"),
+        (1, "Line/A", "node-a", "Bool", "Line"),
+        (2, "Line/B", "node-b", "Float", "Line"),
     ])
     opc = FakeOpcClient(fail_node="node-b")
     reporter = Reporter()
@@ -302,10 +404,16 @@ def test_worker_loads_maps_subscribes_and_individual_failure_is_nonfatal():
     )
     assert asyncio.run(worker.run_session()) == "rebuild"
     assert opc.subscription.nodes == ["node-a"]
-    assert opc.subscription.handler.node_path_map == {"node-a": "Line/A", "node-b": "Line/B"}
+    assert opc.subscription.handler.node_tag_map == {
+        "node-a": {"TagId": 1, "Path": "Line/A", "NodeId": "node-a", "DataType": "Bool", "LineName": "LINE"},
+        "node-b": {"TagId": 2, "Path": "Line/B", "NodeId": "node-b", "DataType": "Float", "LineName": "LINE"},
+    }
     opc.subscription.handler.datachange_notification(FakeNode("node-a"), True, None)
-    client = worker.writer.clients["history_Line"]
+    client = worker.writer.clients["history_LINE"]
     assert client.points == [{"measurement": "Line/A", "fields": {"value": 1}}]
+    write = next(values for event, values in reporter.events if event == "influx_write")
+    assert write["database"] == "history_LINE"
+    assert write["line_name"] == "LINE"
     ready = next(values for event, values in reporter.events if event == "subscriptions_ready")
     assert ready["requested_subscription_count"] == 2
     assert ready["subscribed_tag_count"] == 1
@@ -317,8 +425,8 @@ def test_worker_loads_maps_subscribes_and_individual_failure_is_nonfatal():
 
 def test_rebuild_reloads_added_inactive_and_changed_node_snapshot():
     snapshots = [
-        [(1, "Line/A", "old-node", "Bool"), (2, "Line/InactiveLater", "gone", "Bool")],
-        [(1, "Line/A", "new-node", "Bool"), (3, "Line/Added", "added", "Float")],
+        [(1, "Line/A", "old-node", "Bool", "Line"), (2, "Line/InactiveLater", "gone", "Bool", "Line")],
+        [(1, "Line/A", "new-node", "Bool", "Line"), (3, "Line/Added", "added", "Float", "Line")],
     ]
     connections = [FakeSqlConnection(rows) for rows in snapshots]
     clients = []
@@ -348,8 +456,8 @@ def test_rebuild_reloads_added_inactive_and_changed_node_snapshot():
 
 def test_connection_loss_reconnects_and_reloads_tagmaster():
     connections = [
-        FakeSqlConnection([(1, "Line/A", "first", "Bool")]),
-        FakeSqlConnection([(1, "Line/A", "second", "Bool")]),
+        FakeSqlConnection([(1, "Line/A", "first", "Bool", "Line")]),
+        FakeSqlConnection([(1, "Line/A", "second", "Bool", "Line")]),
     ]
     clients = []
 
@@ -371,7 +479,7 @@ def test_connection_loss_reconnects_and_reloads_tagmaster():
 
 
 def test_large_tag_set_uses_bounded_batches_and_reports_complete_counts():
-    rows = [(index, f"Line/Tag{index}", f"node-{index}", "Float") for index in range(250)]
+    rows = [(index, f"Line/Tag{index}", f"node-{index}", "Float", "Line") for index in range(250)]
     opc = FakeOpcClient()
     reporter = Reporter()
     worker = HistorianWorker(
@@ -390,7 +498,7 @@ def test_large_tag_set_uses_bounded_batches_and_reports_complete_counts():
 
 
 def test_connection_loss_mid_build_is_not_misreported_as_partial_success():
-    rows = [(index, f"Line/Tag{index}", f"node-{index}", "Float") for index in range(3)]
+    rows = [(index, f"Line/Tag{index}", f"node-{index}", "Float", "Line") for index in range(3)]
     opc = FakeOpcClient(connection_loss_batch=2)
     reporter = Reporter()
     worker = HistorianWorker(
@@ -411,7 +519,7 @@ def test_connection_loss_mid_build_is_not_misreported_as_partial_success():
 
 
 def test_connection_loss_mid_build_reconnects_and_reloads_snapshot():
-    rows = [(index, f"Line/Tag{index}", f"node-{index}", "Float") for index in range(3)]
+    rows = [(index, f"Line/Tag{index}", f"node-{index}", "Float", "Line") for index in range(3)]
     connections = [FakeSqlConnection(rows), FakeSqlConnection(rows)]
     clients = []
 
@@ -436,7 +544,7 @@ def test_connection_loss_mid_build_reconnects_and_reloads_snapshot():
 
 
 def test_stop_command_interrupts_large_build_between_bounded_batches():
-    rows = [(index, f"Line/Tag{index}", f"node-{index}", "Float") for index in range(250)]
+    rows = [(index, f"Line/Tag{index}", f"node-{index}", "Float", "Line") for index in range(250)]
     opc = FakeOpcClient()
     reporter = Reporter()
     worker = HistorianWorker(

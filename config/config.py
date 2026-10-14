@@ -120,7 +120,7 @@ if OPC_FAST_SYNC_ATTEMPTS < 1 or OPC_FAST_SYNC_ATTEMPTS > 100:
     raise RuntimeError("Configuration OPC_FAST_SYNC_ATTEMPTS must be between 1 and 100")
 if OPC_FAST_SYNC_RETRY_DELAY_SEC < 0 or OPC_FAST_SYNC_RETRY_DELAY_SEC > 60:
     raise RuntimeError("Configuration OPC_FAST_SYNC_RETRY_DELAY_SEC must be between 0 and 60")
-from services.line_scope import LineScope, normalized_line_name, influx_database
+from services.line_scope import LineScope, normalized_line_name
 LINE_NAME = normalized_line_name(os.environ)
 # Retained only for old integrations; it is not a second ownership identity.
 PRODUCTION_LINE = LINE_NAME or get_required("PRODUCTION_LINE")
@@ -195,7 +195,9 @@ if KM_RESOURCE_MAX_UPLOAD_MB < 1:
 # InfluxDB
 INFLUX_HOST = get_configured("INFLUX_HOST")
 INFLUX_PORT = get_int("INFLUX_PORT")
-INFLUX_DB = influx_database(os.getenv("INFLUX_DB"), LINE_NAME)
+INFLUX_DB = get_configured("INFLUX_DB").strip()
+if not INFLUX_DB:
+    raise RuntimeError("Configuration INFLUX_DB must be a nonempty database-name prefix")
 INFLUX_USER = get_configured("INFLUX_USER")
 INFLUX_PASS = get_configured("INFLUX_PASS")
 

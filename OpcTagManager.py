@@ -146,7 +146,7 @@ async def _periodic_runtime_reconcile() -> None:
 async def app_lifespan(_app: FastAPI):
     global last_reconcile_result
     refresh_task = None
-    logger.warning("LINE_NAME=%s CHANNELS=%s MATCHED_CHANNELS=%s INFLUX_DB=%s",
+    logger.warning("LINE_NAME=%s CHANNELS=%s MATCHED_CHANNELS=%s INFLUX_DB_PREFIX=%s",
                    LINE_SCOPE.line_name or '(legacy)', ','.join(LINE_SCOPE.channel_patterns) or '(all)',
                    ','.join(sorted(tag_reconcile_service._discoverer.matched_channels)) or '(not browsed)', INFLUX_DB)
     if runtime_supervisor.enabled and OPC_RUNTIME_RECONCILE_ON_STARTUP:
@@ -555,7 +555,9 @@ def runtime_status():
     status = runtime_supervisor.status()
     status.update(line_name=LINE_SCOPE.line_name or None, channel_patterns=list(LINE_SCOPE.channel_patterns),
                   matched_channels=sorted(tag_reconcile_service._discoverer.matched_channels),
-                  influx_database=INFLUX_DB, historian_subscribed_count=status.get('subscribed_tag_count'),
+                  influx_database=status.get('last_influx_database'),
+                  influx_database_prefix=INFLUX_DB,
+                  historian_subscribed_count=status.get('subscribed_tag_count'),
                   registry_tag_count=None, active_tag_count=None)
     try:
         conn = get_conn()

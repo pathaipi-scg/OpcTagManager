@@ -55,12 +55,12 @@ def configuration(**overrides):
 
 
 def test_no_write_capture_has_exact_point_parity_and_no_client_dependency():
-    captured = capture_no_write("history_", "LP2_MODBUS/Device/Tag", True)
+    captured = capture_no_write("history_", "LP2_MODBUS/Device/Tag", True, "LP2")
     assert captured.mode == "NO-WRITE"
     assert captured.database == "history_LP2"
     assert captured.point == {"measurement": "LP2_MODBUS/Device/Tag", "fields": {"value": 1}}
     assert set(captured.point) == {"measurement", "fields"}
-    assert capture_no_write("history_", "Line/None", None).discarded
+    assert capture_no_write("history_", "Line/None", None, "LINE").discarded
     assert run_contract_self_check("history_")["valid"] is True
 
 

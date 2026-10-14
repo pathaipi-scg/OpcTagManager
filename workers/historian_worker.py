@@ -15,7 +15,7 @@ from asyncua import Client, ua
 from influxdb import InfluxDBClient
 
 from services.sql_connection import connect_sql
-from services.line_scope import LineScope
+from services.line_scope import LineScope, influx_database, normalized_line_owner
 
 
 try:
@@ -28,7 +28,7 @@ except Exception:  # Alarm diagnostics must never prevent historian startup.
     group_alarms_by_node = None
 
 
-ACTIVE_TAG_QUERY = """SELECT TagId, Path, NodeId, DataType
+ACTIVE_TAG_QUERY = """SELECT TagId, Path, NodeId, DataType, LineName
 FROM TagMaster
 WHERE IsActive = 1
 AND Path NOT LIKE 'Server%'"""
@@ -112,14 +112,6 @@ class StatusReporter:
             self._stream.flush()
 
 
-def get_line_name(path: str) -> str:
-    return path.split("/")[0].split("_")[0]
-
-
-def get_database_name(base_name: str, path: str) -> str:
-    return f"{base_name}{get_line_name(path)}"
-
-
 def normalize_value(value):
     if isinstance(value, bool):
         return int(value)
@@ -149,17 +141,37 @@ def _load_active_tags_from_connection(connection, scope: LineScope = LineScope()
     cursor = connection.cursor()
     cursor.execute(ACTIVE_TAG_QUERY + (" AND LineName = ?" if scope.enabled else ""),
                    *((scope.line_name,) if scope.enabled else ()))
-    return [
-        {"TagId": row[0], "Path": row[1], "NodeId": row[2], "DataType": row[3]}
-        for row in cursor.fetchall()
-        if scope.allows_tag(str(row[1]), str(row[2]))
-    ]
+    tags = []
+    seen_node_ids = set()
+    for row in cursor.fetchall():
+        tag_id, path, node_id, data_type, line_name = row
+        if not isinstance(line_name, str) or not line_name.strip():
+            raise RuntimeError(
+                f"TagId {tag_id} has no effective LineName; historian subscription refused."
+            )
+        line_name = normalized_line_owner(line_name)
+        if scope.enabled and line_name != scope.line_name:
+            raise RuntimeError(
+                f"TagId {tag_id} has LineName outside the configured LINE_NAME scope."
+            )
+        if not scope.allows_tag(str(path), str(node_id)):
+            continue
+        if node_id in seen_node_ids:
+            raise RuntimeError(
+                f"Duplicate OPC NodeId in active TagMaster rows; historian routing is ambiguous."
+            )
+        seen_node_ids.add(node_id)
+        tags.append({
+            "TagId": tag_id, "Path": path, "NodeId": node_id,
+            "DataType": data_type, "LineName": line_name,
+        })
+    return tags
 
 
-def load_active_tags(connection_factory: Callable[[], object]) -> list[dict]:
+def load_active_tags(connection_factory: Callable[[], object], scope: LineScope = LineScope()) -> list[dict]:
     connection = connection_factory()
     try:
-        return _load_active_tags_from_connection(connection)
+        return _load_active_tags_from_connection(connection, scope)
     finally:
         connection.close()
 
@@ -198,13 +210,16 @@ class InfluxWriter:
         self.retry_after: dict[str, float] = {}
         self.retry_cooldown = 10.0
 
-    def database_for(self, path: str):
+    def database_for(self, path: str, line_name: str | None) -> str:
         self.settings.scope.require_path(path)
-        return (self.settings.influx_db if self.settings.scope.enabled
-                else get_database_name(self.settings.influx_db, path))
+        line_name = normalized_line_owner(line_name)
+        database = influx_database(self.settings.influx_db, line_name)
+        if self.settings.scope.enabled and line_name != self.settings.scope.line_name:
+            raise ValueError("Tag LineName does not match the configured historian scope.")
+        return database
 
-    def get_client(self, path: str):
-        database = self.database_for(path)
+    def get_client(self, path: str, line_name: str):
+        database = self.database_for(path, line_name)
         if database in self.clients:
             return self.clients[database]
         client = self.client_factory(
@@ -220,22 +235,32 @@ class InfluxWriter:
         self.clients[database] = client
         return client
 
-    def write(self, path: str, value) -> bool:
+    def write(self, path: str, value, line_name: str | None) -> bool:
         if not self.settings.scope.allows_path(path):
             return False
         normalized = normalize_value(value)
         if normalized is None:
             return False
-        database = self.database_for(path)
+        try:
+            database = self.database_for(path, line_name)
+        except (RuntimeError, ValueError):
+            self.reporter.send(
+                "influx_write", success=False, database=None, line_name=line_name,
+                path=path, value=normalized, result="WRITE BLOCKED",
+                error="Tag LineName could not be resolved consistently; Influx write refused.",
+            )
+            return False
+        normalized_line = normalized_line_owner(line_name)
         if time.monotonic() < self.retry_after.get(database, 0):
             return False
         try:
-            self.get_client(path).write_points([
+            self.get_client(path, line_name).write_points([
                 {"measurement": path, "fields": {"value": normalized}}
             ])
             self.retry_after.pop(database, None)
             self.reporter.send(
-                "influx_write", success=True, database=database, path=path,
+                "influx_write", success=True, database=database, line_name=normalized_line,
+                path=path,
                 value=normalized, result="WRITE OK",
             )
             return True
@@ -243,7 +268,7 @@ class InfluxWriter:
             self.retry_after[database] = time.monotonic() + self.retry_cooldown
             self.reporter.send(
                 "influx_write", success=False,
-                database=self.database_for(path), path=path,
+                database=database, line_name=normalized_line, path=path,
                 value=normalized, result="WRITE FAILED",
                 error=safe_error("Influx write failed", exc),
             )
@@ -330,17 +355,17 @@ class AlarmActivityDiagnostics:
 
 
 class HistorianHandler:
-    def __init__(self, node_path_map: dict[str, str], writer: InfluxWriter, reporter=None,
+    def __init__(self, node_tag_map: dict[str, dict], writer: InfluxWriter, reporter=None,
                  alarm_diagnostics: AlarmActivityDiagnostics | None = None) -> None:
-        self.node_path_map = node_path_map
+        self.node_tag_map = node_tag_map
         self.writer = writer
         self.reporter = reporter or StatusReporter()
         self.alarm_diagnostics = alarm_diagnostics
 
     def datachange_notification(self, node, value, _data) -> None:
-        path = self.node_path_map.get(node.nodeid.to_string())
-        if path:
-            self.writer.write(path, value)
+        tag = self.node_tag_map.get(node.nodeid.to_string())
+        if tag:
+            self.writer.write(tag["Path"], value, tag["LineName"])
         if self.alarm_diagnostics is not None:
             self.alarm_diagnostics.observe(node.nodeid.to_string(), value)
 
@@ -495,12 +520,12 @@ class HistorianWorker:
             self._reload_alarm_diagnostics(connection)
         finally:
             connection.close()
-        node_path_map = {tag["NodeId"]: tag["Path"] for tag in tags}
+        node_tag_map = {tag["NodeId"]: tag for tag in tags}
         self.reporter.send("tag_snapshot", active_tag_count=len(tags))
         async with self.opc_client_factory(url=self.settings.opc_url) as opc:
             self.reporter.send("opc_state", state="connected")
             handler = HistorianHandler(
-                node_path_map, self.writer, self.reporter,
+                node_tag_map, self.writer, self.reporter,
                 alarm_diagnostics=self.alarm_diagnostics,
             )
             subscription = await opc.create_subscription(1000, handler)

@@ -67,7 +67,7 @@ class ProfileTests(unittest.TestCase):
                 values = dict(defaults) if app == 'OpcTagManager' else {}
                 values.update(LINE_NAME=line, MP3_FOLDER=('Y:\\' if line=='SB11' else 'Z:\\') if app=='OpcTagManager' else 'C:\\Alarm')
                 if app == 'OpcTagManager':
-                    values.update(APP_PORT=str(port), INFLUX_DB='opc_'+line,
+                    values.update(APP_PORT=str(port), INFLUX_DB='opc_',
                                   KEPWARE_CHANNEL_PATTERNS=f'{line},{line}_*,{line}S7')
                 elif app == 'AlarmHelp':
                     values.update(ALARM_HELP_PORT=str(port+1), OPC_TAG_MANAGER_BASE_URL=f'http://127.0.0.1:{port}')
@@ -90,7 +90,7 @@ class ProfileTests(unittest.TestCase):
                     if app == 'OpcTagManager':
                         self.assertEqual(values['APP_PORT'], '1863' if line == 'sb11' else '1865')
                         self.assertEqual(values['MP3_FOLDER'], 'Y:\\' if line == 'sb11' else 'Z:\\')
-                        self.assertEqual(values['INFLUX_DB'], 'opc_' + line.upper())
+                        self.assertEqual(values['INFLUX_DB'], 'opc_')
                         self.assertEqual(values['KEPWARE_CHANNEL_PATTERNS'], f'{line.upper()},{line.upper()}_*,{line.upper()}S7')
                     elif app == 'AlarmHelp':
                         self.assertEqual(values['ALARM_HELP_PORT'], '1864' if line == 'sb11' else '1866')
@@ -185,7 +185,7 @@ class ProfileTests(unittest.TestCase):
                 self.assertEqual(config['LINE_NAME'], line)
                 self.assertEqual(config['APP_PORT'], port)
                 self.assertEqual(config['KEPWARE_CHANNEL_PATTERNS'], (line, line + '_*', line + 'S7'))
-                self.assertEqual(config['INFLUX_DB'], 'opc_' + line)
+                self.assertEqual(config['INFLUX_DB'], 'opc_')
                 self.assertEqual(config['SQL_DB'], 'OpcTagMgr')
 
     def test_fixture_profiles_preserve_copied_connection_settings(self):
