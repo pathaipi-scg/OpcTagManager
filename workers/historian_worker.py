@@ -40,6 +40,7 @@ INNER JOIN TagMaster t ON a.TagId = t.TagId
 WHERE t.IsActive = 1
   AND UPPER(a.AlarmMode) IN ('HIGH', 'LOW')"""
 STATUS_PREFIX = "OPCTM_STATUS "
+TARGET_DIAGNOSTIC_NODE_ID = "ns=2;s=NR_AB.MIX.PUG.PUGBOX_LV"
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,7 +61,42 @@ class HistorianSettings:
     reconnect_delay: float = 10.0
     healthcheck_interval: float = 60.0
     subscription_batch_size: int = 100
+    subscription_call_timeout: float = 30.0
+    subscription_retry_attempts: int = 2
+    subscription_retry_backoff: float = 1.0
     scope: LineScope = LineScope()
+
+
+class SubscriptionBuildError(RuntimeError):
+    pass
+
+
+class SubscriptionBuildTimeout(SubscriptionBuildError):
+    pass
+
+
+class BoundedOpcSession:
+    def __init__(self, client, timeout: float, reporter) -> None:
+        self.client = client
+        self.timeout = timeout
+        self.reporter = reporter
+
+    async def __aenter__(self):
+        return await self.client.__aenter__()
+
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        try:
+            return await asyncio.wait_for(
+                self.client.__aexit__(exc_type, exc_value, traceback),
+                timeout=self.timeout,
+            )
+        except asyncio.TimeoutError as exc:
+            self.client.disconnect_socket()
+            self.reporter.send(
+                "opc_session_close_timeout", timeout_seconds=self.timeout,
+                build_state="socket_closed_reconnecting",
+            )
+            raise SubscriptionBuildError("OPC session close timed out; socket was closed") from exc
 
 
 def utc_now() -> str:
@@ -361,13 +397,22 @@ class HistorianHandler:
         self.writer = writer
         self.reporter = reporter or StatusReporter()
         self.alarm_diagnostics = alarm_diagnostics
+        self.last_datachange: dict[str, dict] = {}
 
     def datachange_notification(self, node, value, _data) -> None:
-        tag = self.node_tag_map.get(node.nodeid.to_string())
+        node_id = node.nodeid.to_string()
+        tag = self.node_tag_map.get(node_id)
+        if node_id == TARGET_DIAGNOSTIC_NODE_ID:
+            diagnostic = {"time": utc_now(), "value": normalize_value(value)}
+            self.last_datachange[node_id] = diagnostic
+            self.reporter.send(
+                "target_datachange", node_id=node_id, path=tag.get("Path") if tag else None,
+                line_name=tag.get("LineName") if tag else None, **diagnostic,
+            )
         if tag:
             self.writer.write(tag["Path"], value, tag["LineName"])
         if self.alarm_diagnostics is not None:
-            self.alarm_diagnostics.observe(node.nodeid.to_string(), value)
+            self.alarm_diagnostics.observe(node_id, value)
 
     def status_change_notification(self, status) -> None:
         code = getattr(status, "Status", status)
@@ -396,6 +441,18 @@ class HistorianWorker:
         self.writer = InfluxWriter(settings, influx_client_factory, reporter)
         self.alarm_diagnostics = AlarmActivityDiagnostics(reporter)
         self.pending_generation: int | None = None
+        self.last_completed_batch = 0
+        self._subscription_retry_count = 0
+
+    def _target_tag_diagnostic(self, tags: list[dict], subscribed_nodes: set[str]) -> dict:
+        target = next((tag for tag in tags if tag["NodeId"] == TARGET_DIAGNOSTIC_NODE_ID), None)
+        return {
+            "target_node_id": TARGET_DIAGNOSTIC_NODE_ID,
+            "target_tag_id": target.get("TagId") if target else None,
+            "target_path": target.get("Path") if target else None,
+            "target_subscribed": TARGET_DIAGNOSTIC_NODE_ID in subscribed_nodes,
+            "target_present": target is not None,
+        }
 
     def _reload_alarm_diagnostics(self, connection=None) -> None:
         owns_connection = connection is None
@@ -422,24 +479,12 @@ class HistorianWorker:
             if isinstance(failure, Exception) else f"Tag subscription failed: {getattr(failure, 'name', 'StatusCode')}",
         )
 
-    async def _subscribe_individually(self, subscription, nodes_and_tags) -> tuple[int, int]:
-        subscribed = 0
-        failed = 0
-        for node, tag in nodes_and_tags:
-            try:
-                await subscription.subscribe_data_change(node)
-                subscribed += 1
-            except Exception as exc:
-                if is_connection_failure(exc):
-                    raise
-                failed += 1
-                self._report_subscription_failure(tag, exc)
-        return subscribed, failed
-
     async def _build_subscriptions(self, subscription, opc, tags: list[dict]) -> tuple[int, int, str | None]:
         started = time.monotonic()
         subscribed = 0
         failed = 0
+        subscribed_nodes: set[str] = set()
+        self.last_completed_batch = 0
         batch_size = self.settings.subscription_batch_size
         self.reporter.send(
             "subscriptions_build_started",
@@ -447,6 +492,16 @@ class HistorianWorker:
             batch_size=batch_size,
         )
         for offset in range(0, len(tags), batch_size):
+            batch_number = offset // batch_size + 1
+            batch_started = time.monotonic()
+            batch_start_time = utc_now()
+            self.reporter.send(
+                "subscriptions_batch_started", batch_number=batch_number,
+                batch_start_time=batch_start_time, build_state="building",
+                requested_subscription_count=len(tags), subscribed_tag_count=subscribed,
+                failed_subscription_count=failed, last_completed_batch=self.last_completed_batch,
+                **self._target_tag_diagnostic(tags, subscribed_nodes),
+            )
             batch = tags[offset:offset + batch_size]
             nodes_and_tags = []
             for tag in batch:
@@ -457,8 +512,24 @@ class HistorianWorker:
                     self._report_subscription_failure(tag, exc)
             if nodes_and_tags:
                 try:
-                    results = await subscription.subscribe_data_change([item[0] for item in nodes_and_tags])
+                    results = await asyncio.wait_for(
+                        subscription.subscribe_data_change([item[0] for item in nodes_and_tags]),
+                        timeout=self.settings.subscription_call_timeout,
+                    )
                 except Exception as exc:
+                    if isinstance(exc, asyncio.TimeoutError):
+                        self.reporter.send(
+                            "subscriptions_batch_timeout", batch_number=batch_number,
+                            batch_start_time=batch_start_time,
+                            elapsed_seconds=round(time.monotonic() - batch_started, 3),
+                            build_state="timeout_reconnecting",
+                            requested_subscription_count=len(tags), subscribed_tag_count=subscribed,
+                            failed_subscription_count=failed,
+                            **self._target_tag_diagnostic(tags, subscribed_nodes),
+                        )
+                        # The server may have applied a timed-out request; only reconnecting
+                        # tears down the session and prevents duplicate monitored items.
+                        raise SubscriptionBuildTimeout("Subscription batch timed out") from exc
                     if is_connection_failure(exc):
                         self.reporter.send(
                             "subscriptions_connection_lost",
@@ -468,9 +539,19 @@ class HistorianWorker:
                             category=subscription_failure_category(exc),
                         )
                         raise
-                    batch_subscribed, batch_failed = await self._subscribe_individually(subscription, nodes_and_tags)
-                    subscribed += batch_subscribed
-                    failed += batch_failed
+                    self.reporter.send(
+                        "subscriptions_batch_failed", batch_number=batch_number,
+                        batch_start_time=batch_start_time,
+                        elapsed_seconds=round(time.monotonic() - batch_started, 3),
+                        build_state="reconnecting",
+                        requested_subscription_count=len(tags), subscribed_tag_count=subscribed,
+                        failed_subscription_count=failed,
+                        category=subscription_failure_category(exc),
+                        **self._target_tag_diagnostic(tags, subscribed_nodes),
+                    )
+                    # A failed service response may follow partial server-side creation.
+                    # Never retry nodes in the same subscription; close and rebuild the session.
+                    raise SubscriptionBuildError("Subscription batch outcome is uncertain") from exc
                 else:
                     if not isinstance(results, list):
                         results = [results]
@@ -480,12 +561,20 @@ class HistorianWorker:
                             self._report_subscription_failure(tag, result)
                         else:
                             subscribed += 1
+                            subscribed_nodes.add(tag["NodeId"])
+            self.last_completed_batch = batch_number
             self.reporter.send(
                 "subscriptions_progress",
+                batch_number=batch_number,
+                batch_start_time=batch_start_time,
+                batch_elapsed_seconds=round(time.monotonic() - batch_started, 3),
+                last_completed_batch=self.last_completed_batch,
+                build_state="building",
                 requested_subscription_count=len(tags),
                 attempted_subscription_count=min(offset + len(batch), len(tags)),
                 subscribed_tag_count=subscribed,
                 failed_subscription_count=failed,
+                **self._target_tag_diagnostic(tags, subscribed_nodes),
             )
             command = self._command()
             command_name = command.get("command") if isinstance(command, dict) else command
@@ -503,7 +592,10 @@ class HistorianWorker:
             subscribed_tag_count=subscribed,
             failed_subscription_count=failed,
             complete=failed == 0,
+            build_state="ready",
+            last_completed_batch=self.last_completed_batch,
             build_duration_seconds=round(time.monotonic() - started, 3),
+            **self._target_tag_diagnostic(tags, subscribed_nodes),
         )
         return subscribed, failed, None
 
@@ -522,7 +614,11 @@ class HistorianWorker:
             connection.close()
         node_tag_map = {tag["NodeId"]: tag for tag in tags}
         self.reporter.send("tag_snapshot", active_tag_count=len(tags))
-        async with self.opc_client_factory(url=self.settings.opc_url) as opc:
+        async with BoundedOpcSession(
+            self.opc_client_factory(url=self.settings.opc_url),
+            self.settings.subscription_call_timeout,
+            self.reporter,
+        ) as opc:
             self.reporter.send("opc_state", state="connected")
             handler = HistorianHandler(
                 node_tag_map, self.writer, self.reporter,
@@ -533,6 +629,7 @@ class HistorianWorker:
             if interrupted:
                 self.reporter.send("session_stopping", reason=interrupted)
                 return interrupted
+            self._subscription_retry_count = 0
             if self.pending_generation is not None:
                 self.reporter.send(
                     "rebuild_ack",
@@ -574,7 +671,34 @@ class HistorianWorker:
                 raise
             except Exception as exc:
                 self.reporter.send("opc_state", state="disconnected", error=safe_error("OPC session failed", exc))
-                deadline = time.monotonic() + self.settings.reconnect_delay
+                if isinstance(exc, SubscriptionBuildError):
+                    if self._subscription_retry_count >= self.settings.subscription_retry_attempts:
+                        self.reporter.send(
+                            "subscriptions_build_failed", build_state="retry_exhausted",
+                            retry_attempts=self._subscription_retry_count,
+                            retry_limit=self.settings.subscription_retry_attempts,
+                        )
+                        # Keep the worker alive and begin a fresh bounded retry cycle;
+                        # transient OPC recovery must not require an application restart.
+                        self._subscription_retry_count = 0
+                        delay = max(self.settings.reconnect_delay, 0.1)
+                    else:
+                        self._subscription_retry_count += 1
+                        delay = min(
+                            self.settings.subscription_retry_backoff
+                            * (2 ** (self._subscription_retry_count - 1)),
+                            60.0,
+                        )
+                    self.reporter.send(
+                        "subscriptions_recovery",
+                        build_state=("retry_exhausted_retrying" if self._subscription_retry_count == 0 else "reconnecting"),
+                        retry_attempt=self._subscription_retry_count,
+                        retry_limit=self.settings.subscription_retry_attempts,
+                        retry_delay_seconds=delay,
+                    )
+                else:
+                    delay = self.settings.reconnect_delay
+                deadline = time.monotonic() + delay
                 while time.monotonic() < deadline:
                     command = self._command()
                     command_name = command.get("command") if isinstance(command, dict) else command
@@ -610,6 +734,9 @@ def settings_from_config() -> HistorianSettings:
         INFLUX_USER,
         OPC_URL,
         OPC_SUBSCRIPTION_BATCH_SIZE,
+        OPC_SUBSCRIPTION_CALL_TIMEOUT_SEC,
+        OPC_SUBSCRIPTION_RETRY_ATTEMPTS,
+        OPC_SUBSCRIPTION_RETRY_BACKOFF_SEC,
         SQL_DB,
         SQL_ENCRYPT,
         SQL_DRIVER,
@@ -634,6 +761,9 @@ def settings_from_config() -> HistorianSettings:
         influx_password=INFLUX_PASS,
         sql_encrypt=SQL_ENCRYPT,
         subscription_batch_size=OPC_SUBSCRIPTION_BATCH_SIZE,
+        subscription_call_timeout=OPC_SUBSCRIPTION_CALL_TIMEOUT_SEC,
+        subscription_retry_attempts=OPC_SUBSCRIPTION_RETRY_ATTEMPTS,
+        subscription_retry_backoff=OPC_SUBSCRIPTION_RETRY_BACKOFF_SEC,
     )
 
 

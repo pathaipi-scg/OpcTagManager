@@ -90,7 +90,12 @@ class TagCursor:
     def __init__(self, rows): self.rows=rows; self.calls=[]
     def execute(self, query, *parameters): self.calls.append((query,parameters)); return self
     def fetchall(self):
-        limit, pattern, include_inactive, exact=self.calls[-1][1]; needle=pattern.strip("%").casefold()
+        parameters = self.calls[-1][1]
+        if len(parameters) == 5:
+            limit, pattern, include_inactive, _line_name, exact = parameters
+        else:
+            limit, pattern, include_inactive, exact = parameters
+        needle=pattern.strip("%").casefold()
         values=[row for row in self.rows if needle in row[1].casefold() and (include_inactive or row[3])]
         return sorted(values,key=lambda row:(row[1]!=exact,row[1],row[0]))[:limit]
 class TagConnection:
@@ -100,10 +105,16 @@ class TagConnection:
 
 
 def test_runtime_tag_search_exact_partial_name_bounded_inactive_and_read_only():
-    rows=[(1,"LP2/MIX/GROUP/MotorSpeed",5,1),(2,"LP2/MIX/GROUP/MotorFault",5,1),(3,"LP2/MIX/OLD/MotorOld",5,0)]
+    scope = OpcTagManager.LINE_SCOPE
+    channel = scope.line_name or "LP2"
+    if scope.channel_patterns:
+        channel = scope.channel_patterns[0].replace("*", "TEST")
+    rows=[(1,f"{channel}/MIX/GROUP/MotorSpeed",5,1),
+          (2,f"{channel}/MIX/GROUP/MotorFault",5,1),
+          (3,f"{channel}/MIX/OLD/MotorOld",5,0)]
     connection=TagConnection(rows)
     with patch.object(OpcTagManager,"get_conn",return_value=connection):
-        exact=OpcTagManager.search_runtime_tags("LP2/MIX/GROUP/MotorSpeed",10)
+        exact=OpcTagManager.search_runtime_tags(f"{channel}/MIX/GROUP/MotorSpeed",10)
         partial=OpcTagManager.search_runtime_tags("GROUP",10)
         bounded=OpcTagManager.search_runtime_tags("Motor",1)
         inactive=OpcTagManager.search_runtime_tags("Motor",10,True)

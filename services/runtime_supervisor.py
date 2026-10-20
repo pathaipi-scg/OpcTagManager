@@ -153,6 +153,9 @@ class HistorianSupervisor:
             "worker_started", "tag_snapshot", "opc_state", "subscriptions_build_started",
             "subscriptions_progress", "subscriptions_ready", "subscription_error",
             "subscriptions_connection_lost", "rebuild_started", "rebuild_ack",
+            "subscriptions_batch_started", "subscriptions_batch_timeout",
+            "subscriptions_batch_failed", "subscriptions_build_failed",
+            "subscriptions_recovery", "target_datachange", "opc_session_close_timeout",
         }:
             self._subscription_activity.append(deepcopy(message))
         if event == "worker_started":
@@ -198,6 +201,13 @@ class HistorianSupervisor:
                 self._status["last_error"] = message.get("error")
         elif event == "subscription_error":
             self._status["last_error"] = message.get("error")
+        elif event == "subscriptions_build_failed":
+            self._status["last_error"] = (
+                "OPC subscription recovery retry limit exhausted; retry cycle will continue."
+            )
+            self._status["worker_state"] = "reconnecting"
+        elif event == "subscriptions_recovery":
+            self._status["worker_state"] = "reconnecting"
         elif event == "alarm_activity_state":
             self._status["alarm_activity_state"] = message.get("state", "unknown")
             self._active_alarm_activity.clear()

@@ -5,7 +5,7 @@ import io
 from pathlib import Path
 import tempfile
 import unittest
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import OpcTagManager
@@ -602,15 +602,23 @@ class OpcTagManagerAppTests(unittest.TestCase):
         historian.assert_not_called()
 
     def test_exact_path_lookup_distinguishes_unregistered_and_reuses_registered_tag_id(self):
+        scope = OpcTagManager.LINE_SCOPE
+        channel = scope.line_name or "Line"
+        if scope.channel_patterns:
+            channel = scope.channel_patterns[0].replace("*", "TEST")
+        unregistered_path = f"{channel}/Device/Unregistered"
+        registered_path = f"{channel}/Device/Registered"
+
         class LookupCursor:
             def __init__(self, row):
                 self.row = row
                 self.query = None
                 self.path = None
 
-            def execute(self, query, path):
+            def execute(self, query, *parameters):
                 self.query = " ".join(query.split())
-                self.path = path
+                self.parameters = parameters
+                self.path = parameters[0]
 
             def fetchone(self):
                 return self.row
@@ -629,24 +637,32 @@ class OpcTagManagerAppTests(unittest.TestCase):
         with patch.object(OpcTagManager, "get_conn", return_value=missing), patch.object(
             OpcTagManager.tag_reconcile_service, "reconcile", new=AsyncMock()
         ) as reconcile, patch.object(OpcTagManager.tag_fast_sync_service, "sync_existing_tag", new=AsyncMock()) as sync:
-            status, body = self.request("GET", "/api/opc-tags/resolve/by-path?path=Line%2FDevice%2FUnregistered")
+            status, body = self.request(
+                "GET",
+                "/api/opc-tags/resolve/by-path?" + urlencode({"path": unregistered_path}),
+            )
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body), {"success": True, "registered": False, "tag": None, "alarm": None})
-        self.assertEqual(missing.lookup_cursor.path, "Line/Device/Unregistered")
+        self.assertEqual(missing.lookup_cursor.path, unregistered_path)
         reconcile.assert_not_awaited()
         sync.assert_not_awaited()
 
-        registered = LookupConnection((42, "Line/Device/Registered", "ns=2;s=Line.Device.Registered", "Boolean"))
-        alarm = {"alarm_id": 7, "tag_id": 42, "tag_path": "Line/Device/Registered"}
+        registered = LookupConnection(
+            (42, registered_path, f"ns=2;s={channel}.Device.Registered", "Boolean")
+        )
+        alarm = {"alarm_id": 7, "tag_id": 42, "tag_path": registered_path}
         with patch.object(OpcTagManager, "get_conn", return_value=registered), patch.object(
             OpcTagManager.alarm_service, "get_for_tag", return_value=alarm
         ) as get_alarm, patch.object(OpcTagManager.tag_fast_sync_service, "sync_existing_tag", new=AsyncMock()) as sync:
-            status, body = self.request("GET", "/api/opc-tags/resolve/by-path?path=Line%2FDevice%2FRegistered")
+            status, body = self.request(
+                "GET",
+                "/api/opc-tags/resolve/by-path?" + urlencode({"path": registered_path}),
+            )
         payload = json.loads(body)
         self.assertEqual(status, 200)
         self.assertTrue(payload["registered"])
         self.assertEqual(payload["tag"]["tag_id"], 42)
-        self.assertEqual(payload["tag"]["node_id"], "ns=2;s=Line.Device.Registered")
+        self.assertEqual(payload["tag"]["node_id"], f"ns=2;s={channel}.Device.Registered")
         self.assertEqual(payload["alarm"], alarm)
         get_alarm.assert_called_once_with(42)
         sync.assert_not_awaited()

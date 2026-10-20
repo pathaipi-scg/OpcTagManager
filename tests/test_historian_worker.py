@@ -20,6 +20,7 @@ from workers.historian_worker import (
     load_alarm_diagnostic_mappings,
     normalize_value,
     subscription_failure_category,
+    TARGET_DIAGNOSTIC_NODE_ID,
 )
 
 
@@ -139,18 +140,24 @@ class FakeSubscription:
         return results if is_batch else results[0]
 
 
+class StalledSubscription(FakeSubscription):
+    async def subscribe_data_change(self, nodes):
+        await asyncio.Event().wait()
+
+
 class FakeOpcClient:
     def __init__(self, fail_node=None, health_error=None, connection_loss_batch=None):
         self.fail_node = fail_node
         self.health_error = health_error
         self.connection_loss_batch = connection_loss_batch
         self.subscription = None
+        self.closed = False
 
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, *_args):
-        pass
+        self.closed = True
 
     async def create_subscription(self, interval, handler):
         assert interval == 1000
@@ -494,6 +501,120 @@ def test_large_tag_set_uses_bounded_batches_and_reports_complete_counts():
     assert ready["requested_subscription_count"] == 250
     assert ready["subscribed_tag_count"] == 250
     assert ready["failed_subscription_count"] == 0
+    assert ready["last_completed_batch"] == 3
+    assert ready["build_state"] == "ready"
+
+
+def test_stalled_batch_times_out_without_claiming_subscription_and_reports_diagnostics():
+    class StalledOpc(FakeOpcClient):
+        async def create_subscription(self, interval, handler):
+            self.subscription = StalledSubscription(handler)
+            return self.subscription
+
+    rows = [(1, "NR_AB/MIX/PUG/PUGBOX_LV", TARGET_DIAGNOSTIC_NODE_ID, "Float", "NR")]
+    opc = StalledOpc()
+    reporter = Reporter()
+    worker = HistorianWorker(
+        settings(subscription_call_timeout=0.01), ScriptedCommands([]), reporter,
+        connection_factory=lambda: FakeSqlConnection(rows),
+        opc_client_factory=lambda **_kwargs: opc,
+        influx_client_factory=FakeInfluxClient,
+    )
+    with pytest.raises(Exception, match="timed out"):
+        asyncio.run(worker.run_session())
+    timeout = next(values for event, values in reporter.events if event == "subscriptions_batch_timeout")
+    assert timeout["batch_number"] == 1
+    assert timeout["build_state"] == "timeout_reconnecting"
+    assert timeout["subscribed_tag_count"] == 0
+    assert timeout["target_present"] is True
+    assert timeout["target_subscribed"] is False
+    assert not any(event == "subscriptions_ready" for event, _ in reporter.events)
+
+
+def test_timed_out_session_close_forcibly_closes_socket_before_recovery():
+    class UnresponsiveOpc(FakeOpcClient):
+        async def create_subscription(self, interval, handler):
+            self.subscription = StalledSubscription(handler)
+            return self.subscription
+
+        async def __aexit__(self, *_args):
+            await asyncio.Event().wait()
+
+        def disconnect_socket(self):
+            self.closed = True
+
+    opc = UnresponsiveOpc()
+    reporter = Reporter()
+    worker = HistorianWorker(
+        settings(subscription_call_timeout=0.001), ScriptedCommands([]), reporter,
+        connection_factory=lambda: FakeSqlConnection([
+            (1, "Line/Tag", "node-1", "Float", "Line")
+        ]),
+        opc_client_factory=lambda **_kwargs: opc,
+        influx_client_factory=FakeInfluxClient,
+    )
+    with pytest.raises(RuntimeError, match="session close timed out"):
+        asyncio.run(worker.run_session())
+    assert opc.closed is True
+    assert any(event == "opc_session_close_timeout" for event, _ in reporter.events)
+
+
+def test_subscription_timeout_reconnects_with_bounded_attempts():
+    class IntermittentlyStalledOpc(FakeOpcClient):
+        async def create_subscription(self, interval, handler):
+            if len(clients) <= 2:
+                self.subscription = StalledSubscription(handler)
+            else:
+                self.subscription = FakeSubscription(handler)
+            return self.subscription
+
+    clients = []
+
+    def opc_factory(**_kwargs):
+        assert all(client.closed for client in clients)
+        client = IntermittentlyStalledOpc()
+        clients.append(client)
+        return client
+
+    reporter = Reporter()
+    worker = HistorianWorker(
+        settings(subscription_call_timeout=0.001, subscription_retry_attempts=1,
+                 subscription_retry_backoff=0, reconnect_delay=0),
+        ScriptedCommands([None, None, "stop"]), reporter,
+        connection_factory=lambda: FakeSqlConnection([
+            (1, "Line/Tag", "node-1", "Float", "Line")
+        ]),
+        opc_client_factory=opc_factory,
+        influx_client_factory=FakeInfluxClient,
+    )
+    asyncio.run(worker.run())
+    assert len(clients) == 3
+    assert all(client.closed for client in clients[:2])
+    exhausted = next(values for event, values in reporter.events if event == "subscriptions_build_failed")
+    assert exhausted["retry_attempts"] == 1
+    assert exhausted["retry_limit"] == 1
+    assert any(event == "subscriptions_ready" for event, _ in reporter.events)
+
+
+def test_target_node_subscription_and_callback_diagnostics_are_per_tag():
+    row = (1, "NR_AB/MIX/PUG/PUGBOX_LV", TARGET_DIAGNOSTIC_NODE_ID, "Float", "NR")
+    opc = FakeOpcClient()
+    reporter = Reporter()
+    worker = HistorianWorker(
+        settings(), ScriptedCommands([None, "stop"]), reporter,
+        connection_factory=lambda: FakeSqlConnection([row]),
+        opc_client_factory=lambda **_kwargs: opc,
+        influx_client_factory=FakeInfluxClient,
+    )
+    assert asyncio.run(worker.run_session()) == "stop"
+    ready = next(values for event, values in reporter.events if event == "subscriptions_ready")
+    assert ready["target_subscribed"] is True
+    opc.subscription.handler.datachange_notification(FakeNode(TARGET_DIAGNOSTIC_NODE_ID), 79, None)
+    callback = next(values for event, values in reporter.events if event == "target_datachange")
+    assert callback["node_id"] == TARGET_DIAGNOSTIC_NODE_ID
+    assert callback["path"] == "NR_AB/MIX/PUG/PUGBOX_LV"
+    assert callback["value"] == 79
+    assert callback["line_name"] == "NR"
     assert ready["complete"] is True
 
 

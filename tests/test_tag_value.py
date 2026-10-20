@@ -126,14 +126,26 @@ class TagValueTests(unittest.IsolatedAsyncioTestCase):
 
 class TagValueRouteTests(unittest.TestCase):
     def test_exact_node(self):
-        with patch.object(OpcTagManager.TagValueReader, 'read', new_callable=AsyncMock) as read:
+        scope = OpcTagManager.LINE_SCOPE
+        channel = scope.line_name or "Line"
+        if scope.channel_patterns:
+            channel = scope.channel_patterns[0].replace("*", "TEST")
+        path = f"{channel}/Device/Tag"
+        node_id = f"ns=2;s={channel}.Device.Tag"
+        connection = MagicMock()
+        connection.cursor.return_value.fetchall.return_value = [(path,)]
+        with patch.object(OpcTagManager, "get_conn", return_value=connection), patch.object(
+            OpcTagManager.TagValueReader, 'read', new_callable=AsyncMock
+        ) as read:
             read.return_value = {'success': True, 'value': '42'}
-            status, result = test_app.OpcTagManagerAppTests.request('POST', '/api/opc-tags/current-value', {'node_id': 'ns=2;s=A'})
+            status, result = test_app.OpcTagManagerAppTests.request(
+                'POST', '/api/opc-tags/current-value', {'node_id': node_id}
+            )
             self.assertEqual(status, 200)
             result = json.loads(result)
             self.assertIn('api_request_started', result)
             self.assertIn('endpoint_duration_ms', result)
-            read.assert_awaited_once_with('ns=2;s=A')
+            read.assert_awaited_once_with(node_id)
 
     def test_rejects_multiple_nodes_and_write_payload(self):
         for body in ({'node_id': ['ns=2;s=A', 'ns=2;s=B']}, {'node_id': 'ns=2;s=A', 'value': 1}, {'node_id': ''}):
