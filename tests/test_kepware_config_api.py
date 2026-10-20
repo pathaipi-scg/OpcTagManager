@@ -130,6 +130,23 @@ class KepwareConfigApiTests(unittest.TestCase):
         self.assertEqual(tag["tag_details"]["address"], "R1")
         self.assertEqual(tag["tag_details"]["scan_rate"], 100)
 
+    def test_uncached_device_read_exposes_data_collection_without_writes(self):
+        client, session = self.make_client()
+        device_collection = self.base + "/project/channels/Line%201/devices"
+        session.responses[device_collection] = FakeResponse([
+            {
+                "common.ALLTYPES_NAME": "Device/A",
+                "servermain.DEVICE_DATA_COLLECTION": False,
+            }
+        ])
+
+        devices = client.get_devices_uncached("Line 1")
+
+        self.assertIs(devices[0]["properties"]["servermain.DEVICE_DATA_COLLECTION"], False)
+        self.assertEqual(session.calls[-1][0], "GET")
+        self.assertEqual(session.post_calls, [])
+        self.assertEqual(session.put_calls, [])
+
     def test_get_tag_validates_real_tag_and_uses_structured_encoded_path(self):
         client, session = self.make_client()
         path = "/project/channels/Line%201/devices/Device%2FA/tag_groups/Group%20One/tags/Tag%2FOne"

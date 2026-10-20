@@ -58,6 +58,10 @@ class HistorianSupervisor:
             ),
             "legacy_historian_process_state": "unknown",
             "active_tag_count": None,
+            "eligible_subscription_tag_count": None,
+            "excluded_disabled_device_tag_count": None,
+            "unknown_device_state_tag_count": None,
+            "device_collection_state": "unknown",
             "requested_subscription_count": None,
             "subscribed_tag_count": None,
             "failed_subscription_count": None,
@@ -123,6 +127,10 @@ class HistorianSupervisor:
             opc_state="unknown",
             influx_state="unknown",
             active_tag_count=None,
+            eligible_subscription_tag_count=None,
+            excluded_disabled_device_tag_count=None,
+            unknown_device_state_tag_count=None,
+            device_collection_state="unknown",
             requested_subscription_count=None,
             subscribed_tag_count=None,
             failed_subscription_count=None,
@@ -156,18 +164,26 @@ class HistorianSupervisor:
             "subscriptions_batch_started", "subscriptions_batch_timeout",
             "subscriptions_batch_failed", "subscriptions_build_failed",
             "subscriptions_recovery", "target_datachange", "opc_session_close_timeout",
+            "device_collection_summary", "device_collection_excluded",
+            "device_collection_unknown", "device_collection_api_error",
         }:
             self._subscription_activity.append(deepcopy(message))
         if event == "worker_started":
             self._status["worker_state"] = "running"
         elif event == "tag_snapshot":
             self._status["active_tag_count"] = message.get("active_tag_count")
+            self._status["eligible_subscription_tag_count"] = message.get("eligible_subscription_tag_count")
+            self._status["excluded_disabled_device_tag_count"] = message.get("excluded_disabled_device_tag_count")
+            self._status["unknown_device_state_tag_count"] = message.get("unknown_device_state_tag_count")
         elif event == "opc_state":
             self._status["opc_state"] = message.get("state", "unknown")
             if self._status["opc_state"] != "connected":
                 self._status["requested_subscription_count"] = None
                 self._status["subscribed_tag_count"] = None
                 self._status["failed_subscription_count"] = None
+                self._status["eligible_subscription_tag_count"] = None
+                self._status["excluded_disabled_device_tag_count"] = None
+                self._status["unknown_device_state_tag_count"] = None
                 self._status["subscription_complete"] = False
             if message.get("error"):
                 self._status["last_error"] = message["error"]
@@ -176,7 +192,16 @@ class HistorianSupervisor:
             self._status["requested_subscription_count"] = message.get("requested_subscription_count")
             self._status["subscribed_tag_count"] = message.get("subscribed_tag_count")
             self._status["failed_subscription_count"] = message.get("failed_subscription_count")
+            self._status["eligible_subscription_tag_count"] = message.get("eligible_subscription_tag_count")
+            self._status["excluded_disabled_device_tag_count"] = message.get("excluded_disabled_device_tag_count")
+            self._status["unknown_device_state_tag_count"] = message.get("unknown_device_state_tag_count")
             self._status["subscription_complete"] = bool(message.get("complete")) if event == "subscriptions_ready" else False
+        elif event == "device_collection_summary":
+            self._status["active_tag_count"] = message.get("registry_active_tag_count")
+            self._status["eligible_subscription_tag_count"] = message.get("eligible_subscription_tag_count")
+            self._status["excluded_disabled_device_tag_count"] = message.get("excluded_disabled_device_tag_count")
+            self._status["unknown_device_state_tag_count"] = message.get("unknown_device_state_tag_count")
+            self._status["device_collection_state"] = message.get("state", "unknown")
         elif event == "rebuild_ack":
             generation = message.get("generation")
             if isinstance(generation, int):

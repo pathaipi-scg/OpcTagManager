@@ -222,6 +222,33 @@ def test_partial_rebuild_ack_does_not_clear_pending_generation():
         supervisor.shutdown()
 
 
+def test_device_collection_diagnostics_are_exposed_in_runtime_status_and_activity():
+    supervisor = HistorianSupervisor(False)
+    supervisor._apply_event({
+        "event": "device_collection_summary",
+        "state": "partial",
+        "registry_active_tag_count": 120,
+        "eligible_subscription_tag_count": 95,
+        "excluded_disabled_device_tag_count": 20,
+        "unknown_device_state_tag_count": 5,
+    })
+    supervisor._apply_event({
+        "event": "device_collection_excluded",
+        "channel": "NR_AB",
+        "device": "MIX_ALL",
+        "state": "disabled",
+        "excluded_tag_count": 20,
+    })
+
+    status = supervisor.status()
+    assert status["device_collection_state"] == "partial"
+    assert status["active_tag_count"] == 120
+    assert status["eligible_subscription_tag_count"] == 95
+    assert status["excluded_disabled_device_tag_count"] == 20
+    assert status["unknown_device_state_tag_count"] == 5
+    assert supervisor.activity()["subscription"][-1]["device"] == "MIX_ALL"
+
+
 def test_pending_generation_survives_crash_and_is_resent_after_restart():
     factory = ProcessFactory()
     supervisor = HistorianSupervisor(True, factory, restart_delay=0.01)

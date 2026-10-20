@@ -16,6 +16,7 @@ from influxdb import InfluxDBClient
 
 from services.sql_connection import connect_sql
 from services.line_scope import LineScope, influx_database, normalized_line_owner
+from services.kepware_config_api import KepwareConfigApi, KepwareConfigSettings
 
 
 try:
@@ -32,6 +33,7 @@ ACTIVE_TAG_QUERY = """SELECT TagId, Path, NodeId, DataType, LineName
 FROM TagMaster
 WHERE IsActive = 1
 AND Path NOT LIKE 'Server%'"""
+ACTIVE_TAG_COUNT_QUERY = """SELECT COUNT(*) FROM TagMaster WHERE IsActive = 1"""
 ALARM_DIAGNOSTIC_QUERY = """SELECT a.AlarmId, a.TagId, t.Path, t.NodeId,
        a.AlarmMode, a.ThresholdHigh, a.ThresholdLow, a.Priority,
        a.Mp3File, a.EnableAlarm
@@ -41,6 +43,7 @@ WHERE t.IsActive = 1
   AND UPPER(a.AlarmMode) IN ('HIGH', 'LOW')"""
 STATUS_PREFIX = "OPCTM_STATUS "
 TARGET_DIAGNOSTIC_NODE_ID = "ns=2;s=NR_AB.MIX.PUG.PUGBOX_LV"
+DEVICE_DATA_COLLECTION_PROPERTY = "servermain.DEVICE_DATA_COLLECTION"
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +76,117 @@ class SubscriptionBuildError(RuntimeError):
 
 class SubscriptionBuildTimeout(SubscriptionBuildError):
     pass
+
+
+def make_kepware_config_client(scope: LineScope) -> KepwareConfigApi:
+    from config.config import (
+        KEPWARE_CONFIG_API_HOST,
+        KEPWARE_CONFIG_API_PASSWORD,
+        KEPWARE_CONFIG_API_PORT,
+        KEPWARE_CONFIG_API_SCHEME,
+        KEPWARE_CONFIG_API_TIMEOUT,
+        KEPWARE_CONFIG_API_USER,
+        KEPWARE_CONFIG_API_VERIFY_SSL,
+    )
+
+    return KepwareConfigApi(
+        KepwareConfigSettings(
+            scheme=KEPWARE_CONFIG_API_SCHEME,
+            host=KEPWARE_CONFIG_API_HOST,
+            port=KEPWARE_CONFIG_API_PORT,
+            username=KEPWARE_CONFIG_API_USER,
+            password=KEPWARE_CONFIG_API_PASSWORD,
+            verify_ssl=KEPWARE_CONFIG_API_VERIFY_SSL,
+            timeout=KEPWARE_CONFIG_API_TIMEOUT,
+            cache_ttl_sec=0,
+            write_enabled=False,
+        ),
+        scope=scope,
+    )
+
+
+def device_collection_enabled(value) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().casefold()
+        if normalized in {"true", "1", "enabled"}:
+            return True
+        if normalized in {"false", "0", "disabled"}:
+            return False
+    return None
+
+
+def tag_device_key(path: str) -> tuple[str, str] | None:
+    parts = path.split("/", 2)
+    if len(parts) != 3 or not parts[0] or not parts[1] or not parts[2]:
+        return None
+    return parts[0].casefold(), parts[1].casefold()
+
+
+def read_device_collection_states(tags: list[dict], client) -> tuple[dict, dict]:
+    """Read fresh device settings, returning unknown for any unresolved identity."""
+    tag_channels: dict[str, str] = {}
+    for tag in tags:
+        key = tag_device_key(str(tag.get("Path", "")))
+        if key:
+            tag_channels.setdefault(key[0], str(tag["Path"]).split("/", 2)[0])
+
+    states: dict[tuple[str, str], tuple[bool | None, str]] = {}
+    errors: dict[str, str] = {}
+    try:
+        channels = client.get_channels_uncached()
+    except Exception as exc:
+        return states, {"*": safe_error("Kepware channel state read failed", exc)}
+
+    channel_by_key = {}
+    duplicate_channels = set()
+    for channel in channels:
+        name = channel.get("name") if isinstance(channel, dict) else None
+        if not isinstance(name, str) or not name:
+            errors["*"] = "Kepware returned a channel without a valid name."
+            continue
+        key = name.casefold()
+        if key in channel_by_key:
+            duplicate_channels.add(key)
+        channel_by_key[key] = name
+
+    for channel_key, channel_name in tag_channels.items():
+        if channel_key in duplicate_channels:
+            errors[channel_name] = "Duplicate Kepware channel identity."
+            continue
+        api_channel = channel_by_key.get(channel_key)
+        if api_channel is None:
+            errors[channel_name] = "Channel was not returned by the scoped Kepware API."
+            continue
+        try:
+            devices = client.get_devices_uncached(api_channel)
+        except Exception as exc:
+            errors[api_channel] = safe_error("Kepware device state read failed", exc)
+            continue
+        seen_devices = set()
+        for device in devices:
+            if not isinstance(device, dict) or not isinstance(device.get("name"), str):
+                errors[api_channel] = "Kepware returned a device without a valid name."
+                continue
+            device_key = (channel_key, device["name"].casefold())
+            if device_key in seen_devices:
+                states[device_key] = (None, "duplicate_device_identity")
+                errors[api_channel] = "Duplicate Kepware device identity."
+                continue
+            seen_devices.add(device_key)
+            properties = device.get("properties")
+            raw_state = (
+                properties.get(DEVICE_DATA_COLLECTION_PROPERTY)
+                if isinstance(properties, dict) else None
+            )
+            state = device_collection_enabled(raw_state)
+            reason = "explicit_state" if state is not None else "missing_or_invalid_property"
+            states[device_key] = (state, reason)
+
+    return states, errors
 
 
 class BoundedOpcSession:
@@ -202,6 +316,18 @@ def _load_active_tags_from_connection(connection, scope: LineScope = LineScope()
             "DataType": data_type, "LineName": line_name,
         })
     return tags
+
+
+def _count_active_registry_tags_from_connection(connection, scope: LineScope) -> int:
+    cursor = connection.cursor()
+    cursor.execute(
+        ACTIVE_TAG_COUNT_QUERY + (" AND LineName = ?" if scope.enabled else ""),
+        *((scope.line_name,) if scope.enabled else ()),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        raise RuntimeError("Active TagMaster count query returned no result.")
+    return int(row[0])
 
 
 def load_active_tags(connection_factory: Callable[[], object], scope: LineScope = LineScope()) -> list[dict]:
@@ -402,15 +528,16 @@ class HistorianHandler:
     def datachange_notification(self, node, value, _data) -> None:
         node_id = node.nodeid.to_string()
         tag = self.node_tag_map.get(node_id)
+        if tag is None:
+            return
         if node_id == TARGET_DIAGNOSTIC_NODE_ID:
             diagnostic = {"time": utc_now(), "value": normalize_value(value)}
             self.last_datachange[node_id] = diagnostic
             self.reporter.send(
-                "target_datachange", node_id=node_id, path=tag.get("Path") if tag else None,
-                line_name=tag.get("LineName") if tag else None, **diagnostic,
+                "target_datachange", node_id=node_id, path=tag["Path"],
+                line_name=tag["LineName"], **diagnostic,
             )
-        if tag:
-            self.writer.write(tag["Path"], value, tag["LineName"])
+        self.writer.write(tag["Path"], value, tag["LineName"])
         if self.alarm_diagnostics is not None:
             self.alarm_diagnostics.observe(node_id, value)
 
@@ -432,27 +559,120 @@ class HistorianWorker:
         connection_factory=None,
         opc_client_factory=Client,
         influx_client_factory=InfluxDBClient,
+        kepware_client_factory=None,
     ) -> None:
         self.settings = settings
         self.command_queue = command_queue
         self.reporter = reporter
         self.connection_factory = connection_factory or (lambda: make_sql_connection(settings))
         self.opc_client_factory = opc_client_factory
+        self.kepware_client_factory = kepware_client_factory or (
+            lambda: make_kepware_config_client(settings.scope)
+        )
+        self._kepware_client = None
         self.writer = InfluxWriter(settings, influx_client_factory, reporter)
         self.alarm_diagnostics = AlarmActivityDiagnostics(reporter)
         self.pending_generation: int | None = None
         self.last_completed_batch = 0
         self._subscription_retry_count = 0
 
-    def _target_tag_diagnostic(self, tags: list[dict], subscribed_nodes: set[str]) -> dict:
-        target = next((tag for tag in tags if tag["NodeId"] == TARGET_DIAGNOSTIC_NODE_ID), None)
+    def _target_tag_diagnostic(
+        self, tags: list[dict], subscribed_nodes: set[str],
+        registry_tags: list[dict] | None = None,
+    ) -> dict:
+        source = registry_tags if registry_tags is not None else tags
+        target = next((tag for tag in source if tag["NodeId"] == TARGET_DIAGNOSTIC_NODE_ID), None)
         return {
             "target_node_id": TARGET_DIAGNOSTIC_NODE_ID,
             "target_tag_id": target.get("TagId") if target else None,
             "target_path": target.get("Path") if target else None,
             "target_subscribed": TARGET_DIAGNOSTIC_NODE_ID in subscribed_nodes,
             "target_present": target is not None,
+            "target_eligible": any(
+                tag["NodeId"] == TARGET_DIAGNOSTIC_NODE_ID for tag in tags
+            ),
         }
+
+    def _filter_device_collection(
+        self, tags: list[dict], registry_active_tag_count: int | None = None,
+    ) -> tuple[list[dict], dict]:
+        try:
+            if self._kepware_client is None:
+                self._kepware_client = self.kepware_client_factory()
+            states, errors = read_device_collection_states(tags, self._kepware_client)
+        except Exception as exc:
+            states = {}
+            errors = {"*": safe_error("Kepware device state client failed", exc)}
+
+        eligible = []
+        excluded_by_device: dict[tuple[str, str], dict] = {}
+        unknown_by_device: dict[tuple[str, str], dict] = {}
+        for tag in tags:
+            key = tag_device_key(str(tag.get("Path", "")))
+            state, reason = states.get(key, (None, "device_state_unavailable")) if key else (
+                None, "invalid_tag_path",
+            )
+            if state is False and key is not None:
+                detail = excluded_by_device.setdefault(
+                    key,
+                    {
+                        "channel": tag["Path"].split("/", 1)[0],
+                        "device": tag["Path"].split("/", 2)[1],
+                        "excluded_tag_count": 0,
+                    },
+                )
+                detail["excluded_tag_count"] += 1
+            else:
+                eligible.append(tag)
+                if state is None:
+                    unknown_key = key or ("", "")
+                    detail = unknown_by_device.setdefault(
+                        unknown_key,
+                        {
+                            "channel": tag["Path"].split("/", 1)[0] if "/" in tag["Path"] else None,
+                            "device": tag["Path"].split("/", 2)[1] if len(tag["Path"].split("/", 2)) > 1 else None,
+                            "reason": reason,
+                            "tag_count": 0,
+                        },
+                    )
+                    detail["tag_count"] += 1
+
+        for detail in excluded_by_device.values():
+            self.reporter.send(
+                "device_collection_excluded", state="disabled", **detail,
+            )
+        for detail in unknown_by_device.values():
+            self.reporter.send(
+                "device_collection_unknown", state="unknown", **detail,
+            )
+        for channel, error in errors.items():
+            self.reporter.send(
+                "device_collection_api_error", channel=None if channel == "*" else channel,
+                error=error,
+            )
+
+        counts = {
+            "registry_active_tag_count": (
+                registry_active_tag_count if registry_active_tag_count is not None else len(tags)
+            ),
+            "eligible_subscription_tag_count": len(eligible),
+            "excluded_disabled_device_tag_count": sum(
+                item["excluded_tag_count"] for item in excluded_by_device.values()
+            ),
+            "unknown_device_state_tag_count": sum(
+                item["tag_count"] for item in unknown_by_device.values()
+            ),
+        }
+        self.reporter.send(
+            "device_collection_summary",
+            state=(
+                "unavailable" if errors and not states
+                else "partial" if errors or counts["unknown_device_state_tag_count"]
+                else "ready"
+            ),
+            **counts,
+        )
+        return eligible, counts
 
     def _reload_alarm_diagnostics(self, connection=None) -> None:
         owns_connection = connection is None
@@ -479,7 +699,16 @@ class HistorianWorker:
             if isinstance(failure, Exception) else f"Tag subscription failed: {getattr(failure, 'name', 'StatusCode')}",
         )
 
-    async def _build_subscriptions(self, subscription, opc, tags: list[dict]) -> tuple[int, int, str | None]:
+    async def _build_subscriptions(
+        self, subscription, opc, tags: list[dict], counts: dict | None = None,
+        registry_tags: list[dict] | None = None,
+    ) -> tuple[int, int, str | None]:
+        counts = counts or {
+            "registry_active_tag_count": len(tags),
+            "eligible_subscription_tag_count": len(tags),
+            "excluded_disabled_device_tag_count": 0,
+            "unknown_device_state_tag_count": 0,
+        }
         started = time.monotonic()
         subscribed = 0
         failed = 0
@@ -490,6 +719,7 @@ class HistorianWorker:
             "subscriptions_build_started",
             requested_subscription_count=len(tags),
             batch_size=batch_size,
+            **counts,
         )
         for offset in range(0, len(tags), batch_size):
             batch_number = offset // batch_size + 1
@@ -500,7 +730,8 @@ class HistorianWorker:
                 batch_start_time=batch_start_time, build_state="building",
                 requested_subscription_count=len(tags), subscribed_tag_count=subscribed,
                 failed_subscription_count=failed, last_completed_batch=self.last_completed_batch,
-                **self._target_tag_diagnostic(tags, subscribed_nodes),
+                **counts,
+                **self._target_tag_diagnostic(tags, subscribed_nodes, registry_tags),
             )
             batch = tags[offset:offset + batch_size]
             nodes_and_tags = []
@@ -525,7 +756,8 @@ class HistorianWorker:
                             build_state="timeout_reconnecting",
                             requested_subscription_count=len(tags), subscribed_tag_count=subscribed,
                             failed_subscription_count=failed,
-                            **self._target_tag_diagnostic(tags, subscribed_nodes),
+                            **counts,
+                            **self._target_tag_diagnostic(tags, subscribed_nodes, registry_tags),
                         )
                         # The server may have applied a timed-out request; only reconnecting
                         # tears down the session and prevents duplicate monitored items.
@@ -536,6 +768,7 @@ class HistorianWorker:
                             requested_subscription_count=len(tags),
                             subscribed_tag_count=subscribed,
                             failed_subscription_count=failed,
+                            **counts,
                             category=subscription_failure_category(exc),
                         )
                         raise
@@ -547,7 +780,8 @@ class HistorianWorker:
                         requested_subscription_count=len(tags), subscribed_tag_count=subscribed,
                         failed_subscription_count=failed,
                         category=subscription_failure_category(exc),
-                        **self._target_tag_diagnostic(tags, subscribed_nodes),
+                        **counts,
+                        **self._target_tag_diagnostic(tags, subscribed_nodes, registry_tags),
                     )
                     # A failed service response may follow partial server-side creation.
                     # Never retry nodes in the same subscription; close and rebuild the session.
@@ -574,7 +808,8 @@ class HistorianWorker:
                 attempted_subscription_count=min(offset + len(batch), len(tags)),
                 subscribed_tag_count=subscribed,
                 failed_subscription_count=failed,
-                **self._target_tag_diagnostic(tags, subscribed_nodes),
+                **counts,
+                **self._target_tag_diagnostic(tags, subscribed_nodes, registry_tags),
             )
             command = self._command()
             command_name = command.get("command") if isinstance(command, dict) else command
@@ -587,15 +822,16 @@ class HistorianWorker:
                 return subscribed, failed, command_name
         self.reporter.send(
             "subscriptions_ready",
-            active_tag_count=len(tags),
+            active_tag_count=counts["registry_active_tag_count"],
             requested_subscription_count=len(tags),
             subscribed_tag_count=subscribed,
             failed_subscription_count=failed,
+            **counts,
             complete=failed == 0,
             build_state="ready",
             last_completed_batch=self.last_completed_batch,
             build_duration_seconds=round(time.monotonic() - started, 3),
-            **self._target_tag_diagnostic(tags, subscribed_nodes),
+            **self._target_tag_diagnostic(tags, subscribed_nodes, registry_tags),
         )
         return subscribed, failed, None
 
@@ -608,12 +844,21 @@ class HistorianWorker:
     async def run_session(self) -> str:
         connection = self.connection_factory()
         try:
+            registry_active_tag_count = _count_active_registry_tags_from_connection(
+                connection, self.settings.scope,
+            )
             tags = _load_active_tags_from_connection(connection, self.settings.scope)
             self._reload_alarm_diagnostics(connection)
         finally:
             connection.close()
-        node_tag_map = {tag["NodeId"]: tag for tag in tags}
-        self.reporter.send("tag_snapshot", active_tag_count=len(tags))
+        eligible_tags, counts = self._filter_device_collection(
+            tags, registry_active_tag_count=registry_active_tag_count,
+        )
+        node_tag_map = {tag["NodeId"]: tag for tag in eligible_tags}
+        self.reporter.send(
+            "tag_snapshot", active_tag_count=counts["registry_active_tag_count"],
+            requested_subscription_count=len(eligible_tags), **counts,
+        )
         async with BoundedOpcSession(
             self.opc_client_factory(url=self.settings.opc_url),
             self.settings.subscription_call_timeout,
@@ -625,7 +870,9 @@ class HistorianWorker:
                 alarm_diagnostics=self.alarm_diagnostics,
             )
             subscription = await opc.create_subscription(1000, handler)
-            subscribed, failed, interrupted = await self._build_subscriptions(subscription, opc, tags)
+            subscribed, failed, interrupted = await self._build_subscriptions(
+                subscription, opc, eligible_tags, counts, registry_tags=tags,
+            )
             if interrupted:
                 self.reporter.send("session_stopping", reason=interrupted)
                 return interrupted
@@ -635,9 +882,10 @@ class HistorianWorker:
                     "rebuild_ack",
                     generation=self.pending_generation,
                     complete=failed == 0,
-                    requested_subscription_count=len(tags),
+                    requested_subscription_count=len(eligible_tags),
                     subscribed_tag_count=subscribed,
                     failed_subscription_count=failed,
+                    **counts,
                 )
                 self.pending_generation = None
             last_healthcheck = time.monotonic()

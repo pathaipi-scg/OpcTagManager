@@ -1,6 +1,7 @@
 import asyncio
 import io
 import queue
+from unittest.mock import Mock
 
 from asyncua import ua
 from asyncua.ua import NodeClass
@@ -21,6 +22,8 @@ from workers.historian_worker import (
     normalize_value,
     subscription_failure_category,
     TARGET_DIAGNOSTIC_NODE_ID,
+    device_collection_enabled,
+    tag_device_key,
 )
 
 
@@ -56,6 +59,9 @@ class FakeSqlCursor:
 
     def fetchall(self):
         return self.rows
+
+    def fetchone(self):
+        return (len(self.rows),) if "COUNT(*)" in self.query else None
 
 
 class FakeSqlConnection:
@@ -98,6 +104,40 @@ class Reporter:
 
     def send(self, event, **values):
         self.events.append((event, values))
+
+
+class FakeKepwareConfig:
+    def __init__(self, devices_by_channel=None, channel_error=None, device_errors=None):
+        self.devices_by_channel = devices_by_channel or {}
+        self.channel_error = channel_error
+        self.device_errors = device_errors or {}
+        self.channels = [{"name": name} for name in self.devices_by_channel]
+
+    def get_channels_uncached(self):
+        if self.channel_error:
+            raise self.channel_error
+        return self.channels
+
+    def get_devices_uncached(self, channel):
+        error = self.device_errors.get(channel)
+        if error:
+            raise error
+        return self.devices_by_channel[channel]
+
+
+def kepware_device(name, enabled_marker=None):
+    properties = {"common.ALLTYPES_NAME": name}
+    if enabled_marker is not None:
+        properties["servermain.DEVICE_DATA_COLLECTION"] = enabled_marker
+    return {"name": name, "properties": properties}
+
+
+@pytest.fixture(autouse=True)
+def prevent_kepware_network_in_historian_tests(monkeypatch):
+    monkeypatch.setattr(
+        "workers.historian_worker.make_kepware_config_client",
+        lambda _scope: FakeKepwareConfig(),
+    )
 
 
 class FakeNodeId:
@@ -210,6 +250,139 @@ def test_scoped_active_tag_query_keeps_line_name_only_scope():
     assert len(tags) == 1 and tags[0]["LineName"] == "NR"
     assert connection.cursor_value.query == ACTIVE_TAG_QUERY + " AND LineName = ?"
     assert connection.cursor_value.parameters == ("NR",)
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        (True, True), (False, False), (1, True), (0, False),
+        ("Enabled", True), ("Disabled", False), ("unknown", None), (None, None),
+    ],
+)
+def test_device_collection_state_parser_requires_explicit_boolean(raw, expected):
+    assert device_collection_enabled(raw) is expected
+
+
+def test_device_collection_filter_matches_exact_channel_and_device_components():
+    tags = [
+        {"TagId": 1, "Path": "NR_AB/MIX/Tag1", "NodeId": "mix-1", "LineName": "NR"},
+        {"TagId": 2, "Path": "NR_AB/MIX_ALL/Tag2", "NodeId": "mix-all-2", "LineName": "NR"},
+        {"TagId": 3, "Path": "SB11/CELL/Tag3", "NodeId": "cell-3", "LineName": "SB11"},
+        {"TagId": 4, "Path": "SB11/UNKNOWN/Tag4", "NodeId": "unknown-4", "LineName": "SB11"},
+        {"TagId": 5, "Path": "NR_AB_EXT/MIX/Tag5", "NodeId": "other-channel-5", "LineName": "NR"},
+    ]
+    client = FakeKepwareConfig({
+        "NR_AB": [kepware_device("MIX", False), kepware_device("MIX_ALL", True)],
+        "SB11": [kepware_device("CELL", True), kepware_device("UNKNOWN")],
+        "NR_AB_EXT": [kepware_device("MIX", True)],
+    })
+    reporter = Reporter()
+    worker = HistorianWorker(
+        settings(), ScriptedCommands([]), reporter,
+        influx_client_factory=FakeInfluxClient,
+        kepware_client_factory=lambda: client,
+    )
+
+    eligible, counts = worker._filter_device_collection(tags)
+
+    assert [tag["TagId"] for tag in eligible] == [2, 3, 4, 5]
+    assert counts == {
+        "registry_active_tag_count": 5,
+        "eligible_subscription_tag_count": 4,
+        "excluded_disabled_device_tag_count": 1,
+        "unknown_device_state_tag_count": 1,
+    }
+    excluded = next(values for event, values in reporter.events if event == "device_collection_excluded")
+    assert (excluded["channel"], excluded["device"], excluded["excluded_tag_count"]) == ("NR_AB", "MIX", 1)
+
+
+def test_device_collection_api_unavailable_preserves_eligibility_and_reports_unknown():
+    tags = [
+        {"TagId": 1, "Path": "NR_AB/MIX/Tag1", "NodeId": "mix-1", "LineName": "NR"},
+        {"TagId": 2, "Path": "SB11/CELL/Tag2", "NodeId": "cell-2", "LineName": "SB11"},
+    ]
+    reporter = Reporter()
+    worker = HistorianWorker(
+        settings(), ScriptedCommands([]), reporter,
+        influx_client_factory=FakeInfluxClient,
+        kepware_client_factory=lambda: FakeKepwareConfig(channel_error=ConnectionError()),
+    )
+
+    eligible, counts = worker._filter_device_collection(tags)
+
+    assert eligible == tags
+    assert counts["eligible_subscription_tag_count"] == 2
+    assert counts["excluded_disabled_device_tag_count"] == 0
+    assert counts["unknown_device_state_tag_count"] == 2
+    assert any(event == "device_collection_api_error" for event, _ in reporter.events)
+
+
+def test_device_disabled_callback_cannot_write_or_trigger_alarm_observation():
+    rows = [
+        (1, "NR_AB/MIX/DisabledTag", "node-disabled", "Float", "NR"),
+        (2, "NR_AB/MIX_ALL/EnabledTag", "node-enabled", "Float", "NR"),
+    ]
+    api = FakeKepwareConfig({
+        "NR_AB": [kepware_device("MIX", False), kepware_device("MIX_ALL", True)],
+    })
+    opc = FakeOpcClient()
+    reporter = Reporter()
+    worker = HistorianWorker(
+        settings(), ScriptedCommands([None, "stop"]), reporter,
+        connection_factory=lambda: FakeSqlConnection(rows),
+        opc_client_factory=lambda **_kwargs: opc,
+        influx_client_factory=FakeInfluxClient,
+        kepware_client_factory=lambda: api,
+    )
+    observe = Mock()
+    worker.alarm_diagnostics.observe = observe
+
+    assert asyncio.run(worker.run_session()) == "stop"
+    assert opc.subscription.nodes == ["node-enabled"]
+    handler = opc.subscription.handler
+    handler.datachange_notification(FakeNode("node-disabled"), 10, None)
+    handler.datachange_notification(FakeNode("node-enabled"), 20, None)
+    assert list(worker.writer.clients) == ["history_NR"]
+    assert worker.writer.clients["history_NR"].points == [
+        {"measurement": "NR_AB/MIX_ALL/EnabledTag", "fields": {"value": 20}}
+    ]
+    observe.assert_called_once_with("node-enabled", 20)
+
+
+def test_device_reenabled_on_rebuild_becomes_subscribable():
+    class SequencedKepware(FakeKepwareConfig):
+        def __init__(self):
+            self.states = [False, True]
+            self.channels = [{"name": "NR_AB"}]
+
+        def get_channels_uncached(self):
+            return self.channels
+
+        def get_devices_uncached(self, channel):
+            return [kepware_device("MIX", self.states.pop(0))]
+
+    rows = [(1, "NR_AB/MIX/Tag", "node-1", "Float", "NR")]
+    connections = [FakeSqlConnection(rows), FakeSqlConnection(rows)]
+    clients = []
+
+    def opc_factory(**_kwargs):
+        client = FakeOpcClient()
+        clients.append(client)
+        return client
+
+    reporter = Reporter()
+    worker = HistorianWorker(
+        settings(), ScriptedCommands([None, "rebuild", None, "stop"]), reporter,
+        connection_factory=lambda: connections.pop(0),
+        opc_client_factory=opc_factory,
+        influx_client_factory=FakeInfluxClient,
+        kepware_client_factory=SequencedKepware,
+    )
+
+    asyncio.run(worker.run())
+
+    assert clients[0].subscription.nodes == []
+    assert clients[1].subscription.nodes == ["node-1"]
 
 
 @pytest.mark.parametrize(

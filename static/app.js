@@ -924,11 +924,18 @@ async function loadRuntimeStatus() {
         document.getElementById("worker-state").textContent = data.worker_state || "unknown";
         document.getElementById("worker-pid").textContent = data.worker_pid ?? "None";
         document.getElementById("runtime-opc-state").textContent = data.opc_state || "unknown";
+        document.getElementById("runtime-device-collection-state").textContent =
+            data.device_collection_state || "unknown";
         document.getElementById("runtime-tag-count").textContent =
             data.tagmaster_active_count == null ? "Unknown" : `${data.tagmaster_active_count} Active`;
         document.getElementById("runtime-subscriber-count").textContent =
             data.subscribed_tag_count == null ? "Unknown" : data.subscribed_tag_count;
-        document.getElementById("runtime-requested-count").textContent = data.requested_subscription_count ?? "Unknown";
+        document.getElementById("runtime-requested-count").textContent =
+            data.eligible_subscription_tag_count ?? data.requested_subscription_count ?? "Unknown";
+        document.getElementById("runtime-excluded-disabled-count").textContent =
+            data.excluded_disabled_device_tag_count ?? "Unknown";
+        document.getElementById("runtime-unknown-device-count").textContent =
+            data.unknown_device_state_tag_count ?? "Unknown";
         document.getElementById("runtime-failed-count").textContent = data.failed_subscription_count ?? "Unknown";
         document.getElementById("runtime-subscription-complete").textContent = data.subscription_complete ? "Yes" : "No";
         document.getElementById("runtime-influx-state").textContent = data.influx_state || "unknown";
@@ -1019,6 +1026,17 @@ function renderOpcRuntimeActivity(data) {
     replaceActivityList("subscription-activity-list", data.subscription, (entry) => [
         `${activityTime(entry.time)}  ${String(entry.event || "runtime").replaceAll("_", " ").toUpperCase()}`,
         entry.error || [
+            entry.channel ? `channel=${entry.channel}` : "",
+            entry.device ? `device=${entry.device}` : "",
+            entry.excluded_tag_count != null ? `excluded_tags=${entry.excluded_tag_count}` : "",
+            entry.tag_count != null ? `tags=${entry.tag_count}` : "",
+            entry.reason ? `reason=${entry.reason}` : "",
+            entry.registry_active_tag_count != null ? `registry_active=${entry.registry_active_tag_count}` : "",
+            entry.eligible_subscription_tag_count != null ? `eligible=${entry.eligible_subscription_tag_count}` : "",
+            entry.excluded_disabled_device_tag_count != null
+                ? `disabled_excluded=${entry.excluded_disabled_device_tag_count}` : "",
+            entry.unknown_device_state_tag_count != null
+                ? `device_state_unknown=${entry.unknown_device_state_tag_count}` : "",
             entry.requested_subscription_count != null ? `requested=${entry.requested_subscription_count}` : "",
             entry.subscribed_tag_count != null ? `subscribed=${entry.subscribed_tag_count}` : "",
             entry.failed_subscription_count != null ? `failed=${entry.failed_subscription_count}` : "",

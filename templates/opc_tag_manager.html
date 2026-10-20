@@ -58,9 +58,12 @@
                     <dt>Worker</dt><dd id="worker-state">{{ runtime_status.worker_state }}</dd>
                     <dt>Worker PID</dt><dd id="worker-pid">{{ runtime_status.worker_pid if runtime_status.worker_pid is not none else 'None' }}</dd>
                     <dt>OPC UA</dt><dd id="runtime-opc-state">{{ runtime_status.opc_state }}</dd>
-                    <dt>TagMaster</dt><dd id="runtime-tag-count">Unknown</dd>
+                    <dt>Kepware Device Data Collection</dt><dd id="runtime-device-collection-state">{{ runtime_status.device_collection_state }}</dd>
+                    <dt>Registry Active Tags</dt><dd id="runtime-tag-count">Unknown</dd>
                     <dt>Subscriber</dt><dd id="runtime-subscriber-count">{{ runtime_status.subscribed_tag_count if runtime_status.subscribed_tag_count is not none else 'Unknown' }}</dd>
-                    <dt>Requested subscriptions</dt><dd id="runtime-requested-count">{{ runtime_status.requested_subscription_count if runtime_status.requested_subscription_count is not none else 'Unknown' }}</dd>
+                    <dt>Eligible / Requested Tags</dt><dd id="runtime-requested-count">{{ runtime_status.eligible_subscription_tag_count if runtime_status.eligible_subscription_tag_count is not none else 'Unknown' }}</dd>
+                    <dt>Excluded Disabled-Device Tags</dt><dd id="runtime-excluded-disabled-count">{{ runtime_status.excluded_disabled_device_tag_count if runtime_status.excluded_disabled_device_tag_count is not none else 'Unknown' }}</dd>
+                    <dt>Unknown Device-State Tags</dt><dd id="runtime-unknown-device-count">{{ runtime_status.unknown_device_state_tag_count if runtime_status.unknown_device_state_tag_count is not none else 'Unknown' }}</dd>
                     <dt>Failed subscriptions</dt><dd id="runtime-failed-count">{{ runtime_status.failed_subscription_count if runtime_status.failed_subscription_count is not none else 'Unknown' }}</dd>
                     <dt>Subscription complete</dt><dd id="runtime-subscription-complete">{{ 'Yes' if runtime_status.subscription_complete else 'No' }}</dd>
                     <dt>InfluxDB</dt><dd id="runtime-influx-state">{{ runtime_status.influx_state }}</dd>
